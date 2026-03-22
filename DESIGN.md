@@ -1326,4 +1326,30 @@ ObservationLog (observations.redb)
 
 ---
 
+## D-026: Open Properties
+
+**Decision**: The ontology defines the minimum schema, not the maximum. Unknown properties are accepted without type validation. Unknown subtypes are accepted with type-level validation only.
+
+**Problem**: Silk originally rejected any property not declared in the ontology (`ValidationError::UnknownProperty`) and any subtype not listed in the node type definition (`ValidationError::UnknownSubtype`). This meant every new domain concept required an ontology change → new genesis entry → store recreation → data loss. The ontology was a ceiling, not a floor.
+
+**Solution**: Three changes in `validate_properties()` and `validate_node()`:
+
+1. **Unknown properties**: `continue` instead of `Err(UnknownProperty)`. Properties not in the ontology are stored as-is without type validation.
+2. **Unknown subtypes**: When a subtype isn't in the `subtypes` map, validate against type-level properties only (skip subtype-specific validation).
+3. **Subtypes on types without subtype declarations**: Accept them. Validate type-level properties only.
+
+**What stays enforced**:
+- Required properties must be present (a node type that requires `name` still requires it)
+- Known property types are validated (if `status` is `String`, passing an `Int` still fails)
+- Edge type constraints are validated (RUNS_ON must connect entity→entity)
+- Node types must be declared (unknown node types still rejected)
+
+**Rationale**: Silk is a transport and storage layer. Applications define their domain on top of Silk. An application should be able to evolve its data model (add fields, add subtypes, store metadata) without touching the ontology or recreating the store. The ontology provides guardrails (required fields, type safety for known fields, edge grammar). Everything beyond that is the application's responsibility.
+
+**Analogy**: HTTP headers — known headers (Content-Type, Authorization) are validated by the server. Unknown headers (X-Custom-Id, X-Trace-Id) are accepted and forwarded. The protocol defines the minimum contract. Applications extend it freely.
+
+**Impact**: Applications can now store arbitrary metadata, evolve their entity models, and introduce new subtypes without coordinating with the schema. This is critical for systems that discover new entity types at runtime (e.g., a DevOps platform discovering containers, processes, or network interfaces on managed servers).
+
+---
+
 *Research conducted: 2026-03-14. Based on Merkle-CRDTs (Sanjuán et al., 2020), MAPE-K (Kephart & Chess, 2003), DIKW (Zeleny 1987, Ackoff 1989), and analysis of OrbitDB, Automerge, cr-sqlite, TerminusDB, Ditto implementations. Subscription research: 2026-03-16, based on SQLite, RocksDB, Y.js, Automerge, OrbitDB, Neo4j CDC. Subtypes research: 2026-03-16, based on Google KG, Wikidata, BFO (ISO/IEC 21838-2), Neo4j, categorial grammar (Ajdukiewicz/Lambek), graph grammars (Rozenberg/Ehrig).*

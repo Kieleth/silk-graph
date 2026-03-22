@@ -80,7 +80,7 @@ store.merge_sync_payload(&payload)?;
 
 ## Features
 
-- **Ontology-enforced schema** — define node types, edge types, and their properties. Silk validates every write against the schema. Invalid operations are rejected, not silently accepted.
+- **Ontology-enforced schema** — define node types, edge types, and their properties. Silk validates required properties and type constraints at write time. Unknown properties and subtypes are accepted (D-026: open properties) — the ontology defines the minimum, not the maximum.
 - **Content-addressed entries** — every mutation is a BLAKE3-hashed entry in a Merkle-DAG. Entries are immutable. The DAG is the audit trail.
 - **Per-property last-writer-wins** — two concurrent writes to different properties on the same node both succeed. No data loss from non-conflicting edits.
 - **Delta-state sync** — Bloom filter optimization minimizes data transfer. Only entries the peer doesn't have are sent.
@@ -106,6 +106,55 @@ store.merge_sync_payload(&payload)?;
 - Document storage — use MongoDB or CouchDB
 - Blob storage — use S3
 
+## Schema Philosophy: Open Properties (D-026)
+
+Silk's ontology defines the **minimum**, not the maximum. You declare node types, edge types, required properties, and type constraints. Silk enforces those. But your application can store any additional properties without changing the ontology.
+
+```python
+ontology = json.dumps({
+    "node_types": {
+        "person": {
+            "properties": {
+                "name": {"value_type": "string", "required": True}
+            }
+        }
+    },
+    "edge_types": {}
+})
+
+store = GraphStore("n1", ontology)
+
+# Required property "name" is enforced
+store.add_node("alice", "person", "Alice", {"name": "Alice"})  # OK
+
+# Unknown properties are accepted and stored as-is
+store.add_node("bob", "person", "Bob", {
+    "name": "Bob",
+    "age": 30,              # not in ontology — accepted
+    "department": "eng",    # not in ontology — accepted
+    "active": True,         # not in ontology — accepted
+})
+node = store.get_node("bob")
+assert node["properties"]["age"] == 30        # stored and queryable
+assert node["properties"]["department"] == "eng"
+
+# Unknown subtypes are also accepted
+store.add_node("eve", "person", "Eve", {"name": "Eve"}, subtype="contractor")
+assert store.get_node("eve")["subtype"] == "contractor"
+```
+
+**What stays enforced:**
+- Node types must be declared in the ontology
+- Edge types must be declared (with source/target type constraints)
+- Required properties must be present
+- Known property types are validated (if `name` is `string`, it must be a string)
+
+**What's open:**
+- Extra properties on any node or edge (stored without type validation)
+- Unknown subtypes (type-level required properties still enforced)
+
+This means your application can evolve its data model without touching the ontology or recreating the store. Add fields, add subtypes, store metadata — Silk doesn't block you.
+
 ## Architecture
 
 ```
@@ -130,7 +179,7 @@ OpLog (append-only Merkle-DAG, content-addressed)
 
 ## Design Decisions
 
-Silk's architecture is driven by 25 explicit design decisions (D-001 through D-025), documented in full in [DESIGN.md](DESIGN.md). Key choices:
+Silk's architecture is driven by 26 explicit design decisions (D-001 through D-026), documented in full in [DESIGN.md](DESIGN.md). Key choices:
 
 | Decision | Choice | Why |
 |----------|--------|-----|
@@ -140,6 +189,7 @@ Silk's architecture is driven by 25 explicit design decisions (D-001 through D-0
 | Clock | Lamport | Sufficient for causality ordering without wall-clock sync |
 | Conflict resolution | Per-property LWW | Non-conflicting concurrent writes both win |
 | Sync | Delta-state + Bloom | Minimize transfer: only send what the peer lacks |
+| Schema | Open properties (D-026) | Ontology is the floor, not the ceiling — unknown properties accepted |
 
 ## Python API Reference
 
