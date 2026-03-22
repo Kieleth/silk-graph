@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "silk-graph"
+version = "0.1.0"
+description = "Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs"
+requires-python = ">=3.11"
+license = "MIT OR Apache-2.0"
+keywords = ["crdt", "graph", "distributed", "merkle", "conflict-free", "knowledge-graph"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Database :: Database Engines/Servers",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+readme = "README.md"
+
+[project.urls]
+Repository = "https://github.com/Kieleth/silk-graph"
+Documentation = "https://docs.rs/silk-graph"
+Issues = "https://github.com/Kieleth/silk-graph/issues"
+
+[tool.maturin]
+features = ["python"]
+python-source = "python"
+module-name = "silk._native"
+
+[tool.pytest.ini_options]
+testpaths = ["pytests"]

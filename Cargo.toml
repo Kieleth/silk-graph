@@ -1,0 +1,41 @@
+[package]
+name = "silk-graph"
+version = "0.1.0"
+edition = "2021"
+description = "Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs"
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/Kieleth/silk-graph"
+homepage = "https://github.com/Kieleth/silk-graph"
+keywords = ["crdt", "merkle", "graph", "distributed", "knowledge-graph"]
+categories = ["database", "data-structures", "network-programming"]
+rust-version = "1.75"
+
+[lib]
+name = "silk"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+blake3 = "1"
+rmp-serde = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+redb = "2"
+pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+
+[features]
+default = ["python"]
+python = ["dep:pyo3"]
+
+[[bench]]
+name = "bench_entry"
+harness = false
+
+[[bench]]
+name = "bench_oplog"
+harness = false

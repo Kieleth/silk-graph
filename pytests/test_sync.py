@@ -1,0 +1,323 @@
+"""Python tests for Silk sync protocol (S-3).
+
+Tests the sync API from Python:
+- generate_sync_offer / receive_sync_offer / merge_sync_payload round-trip
+- snapshot / from_snapshot bootstrap
+- Bidirectional sync with graph convergence
+- Conflict resolution after sync (LWW, add-wins)
+"""
+
+import json
+import pytest
+
+from silk import GraphStore
+
+
+ONTOLOGY = json.dumps(
+    {
+        "node_types": {
+            "entity": {
+                "description": "A managed thing",
+                "properties": {
+                    "status": {"value_type": "string"},
+                    "cpu": {"value_type": "float"},
+                },
+            },
+            "signal": {
+                "description": "An observed fact",
+                "properties": {
+                    "severity": {"value_type": "string", "required": True},
+                },
+            },
+        },
+        "edge_types": {
+            "RUNS_ON": {
+                "source_types": ["entity"],
+                "target_types": ["entity"],
+                "properties": {},
+            },
+            "OBSERVES": {
+                "source_types": ["signal"],
+                "target_types": ["entity"],
+                "properties": {},
+            },
+        },
+    }
+)
+
+
+# -- Fixtures --
+
+
+def make_store(instance_id: str) -> GraphStore:
+    return GraphStore(instance_id, ONTOLOGY)
+
+
+# -- Sync offer/payload round-trip --
+
+
+class TestSyncProtocol:
+    def test_sync_offer_is_bytes(self):
+        store = make_store("inst-a")
+        offer = store.generate_sync_offer()
+        assert isinstance(offer, bytes)
+        assert len(offer) > 0
+
+    def test_receive_sync_offer_is_bytes(self):
+        store_a = make_store("inst-a")
+        store_b = make_store("inst-b")
+        offer_a = store_a.generate_sync_offer()
+        payload = store_b.receive_sync_offer(offer_a)
+        assert isinstance(payload, bytes)
+
+    def test_sync_a_to_b(self):
+        """A has nodes B doesn't. After sync, B has them."""
+        store_a = make_store("inst-a")
+        store_b = make_store("inst-b")
+
+        store_a.add_node("s1", "entity", "Server 1", {"status": "alive"})
+        store_a.add_node("s2", "entity", "Server 2", {"status": "dead"})
+
+        # Sync: B offers → A computes payload → B merges
+        offer_b = store_b.generate_sync_offer()
+        payload = store_a.receive_sync_offer(offer_b)
+        merged = store_b.merge_sync_payload(payload)
+
+        assert merged >= 2  # at least s1 and s2
+        assert store_b.get_node("s1") is not None
+        assert store_b.get_node("s2") is not None
+        assert store_b.get_node("s1")["properties"]["status"] == "alive"
+
+    def test_sync_bidirectional_convergence(self):
+        """A and B each have unique nodes. After bidirectional sync, both converge."""
+        store_a = make_store("inst-a")
+        store_b = make_store("inst-b")
+
+        store_a.add_node("a1", "entity", "Node from A")
+        store_b.add_node("b1", "entity", "Node from B")
+
+        # Sync A → B
+        offer_b = store_b.generate_sync_offer()
+        payload_a_to_b = store_a.receive_sync_offer(offer_b)
+        store_b.merge_sync_payload(payload_a_to_b)
+
+        # Sync B → A
+        offer_a = store_a.generate_sync_offer()
+        payload_b_to_a = store_b.receive_sync_offer(offer_a)
+        store_a.merge_sync_payload(payload_b_to_a)
+
+        # Both should have both nodes
+        assert store_a.get_node("a1") is not None
+        assert store_a.get_node("b1") is not None
+        assert store_b.get_node("a1") is not None
+        assert store_b.get_node("b1") is not None
+
+    def test_sync_is_idempotent(self):
+        """Syncing twice produces the same result as syncing once."""
+        store_a = make_store("inst-a")
+        store_b = make_store("inst-b")
+
+        store_a.add_node("n1", "entity", "Node 1")
+
+        # First sync
+        offer_b = store_b.generate_sync_offer()
+        payload = store_a.receive_sync_offer(offer_b)
+        merged1 = store_b.merge_sync_payload(payload)
+        assert merged1 >= 1
+
+        len_after_first = store_b.len()
+
+        # Second sync — should be no-op
+        offer_b2 = store_b.generate_sync_offer()
+        payload2 = store_a.receive_sync_offer(offer_b2)
+        merged2 = store_b.merge_sync_payload(payload2)
+        assert merged2 == 0
+        assert store_b.len() == len_after_first
+
+    def test_sync_with_edges(self):
+        """Edges sync correctly along with their endpoint nodes."""
+        store_a = make_store("inst-a")
+        store_b = make_store("inst-b")
+
+        store_a.add_node("svc", "entity", "API Service")
+        store_a.add_node("srv", "entity", "Server")
+        store_a.add_edge("e1", "RUNS_ON", "svc", "srv")
+
+        # Sync A → B
+        offer_b = store_b.generate_sync_offer()
+        payload = store_a.receive_sync_offer(offer_b)
+        store_b.merge_sync_payload(payload)
+
+        # B should have the edge and both nodes
+        assert store_b.get_node("svc") is not None
+        assert store_b.get_node("srv") is not None
+        assert store_b.get_edge("e1") is not None
+        edges = store_b.all_edges()
+        assert len(edges) == 1
+        assert edges[0]["edge_type"] == "RUNS_ON"
+
+    def test_sync_graph_queries_work_after_merge(self):
+        """Graph queries (BFS, shortest path) work on merged data."""
+        store_a = make_store("inst-a")
+        store_b = make_store("inst-b")
+
+        store_a.add_node("a", "entity", "A")
+        store_a.add_node("b", "entity", "B")
+        store_a.add_node("c", "entity", "C")
+        store_a.add_edge("ab", "RUNS_ON", "a", "b")
+        store_a.add_edge("bc", "RUNS_ON", "b", "c")
+
+        # Sync to B
+        offer_b = store_b.generate_sync_offer()
+        payload = store_a.receive_sync_offer(offer_b)
+        store_b.merge_sync_payload(payload)
+
+        # BFS from A should reach B and C
+        reachable = store_b.bfs("a")
+        assert "b" in reachable
+        assert "c" in reachable
+
+        # Shortest path from A to C
+        path = store_b.shortest_path("a", "c")
+        assert path is not None
+        assert path == ["a", "b", "c"]
+
+
+# -- Snapshot --
+
+
+class TestSnapshot:
+    def test_snapshot_roundtrip(self):
+        """Snapshot and from_snapshot produce equivalent stores."""
+        store_a = make_store("inst-a")
+        store_a.add_node("s1", "entity", "Server 1", {"status": "alive"})
+        store_a.add_node("s2", "entity", "Server 2")
+        store_a.add_edge("e1", "RUNS_ON", "s1", "s2")
+
+        snap_bytes = store_a.snapshot()
+        assert isinstance(snap_bytes, bytes)
+        assert len(snap_bytes) > 0
+
+        store_b = GraphStore.from_snapshot("inst-b", snap_bytes)
+
+        # B should have all nodes and edges
+        assert store_b.get_node("s1") is not None
+        assert store_b.get_node("s2") is not None
+        assert store_b.get_edge("e1") is not None
+        assert store_b.get_node("s1")["properties"]["status"] == "alive"
+
+    def test_snapshot_then_delta_sync(self):
+        """After snapshot bootstrap, delta sync works for new entries."""
+        store_a = make_store("inst-a")
+        store_a.add_node("s1", "entity", "Server 1")
+
+        # Bootstrap B from snapshot
+        snap = store_a.snapshot()
+        store_b = GraphStore.from_snapshot("inst-b", snap)
+
+        # A adds more entries
+        store_a.add_node("s2", "entity", "Server 2")
+
+        # Delta sync: B offers → A computes → B merges
+        offer_b = store_b.generate_sync_offer()
+        payload = store_a.receive_sync_offer(offer_b)
+        merged = store_b.merge_sync_payload(payload)
+
+        assert merged >= 1
+        assert store_b.get_node("s2") is not None
+
+    def test_snapshot_preserves_ontology(self):
+        """Ontology is preserved across snapshot bootstrap."""
+        store_a = make_store("inst-a")
+        snap = store_a.snapshot()
+        store_b = GraphStore.from_snapshot("inst-b", snap)
+
+        # Should have the same ontology
+        assert store_b.node_type_names() == store_a.node_type_names()
+        assert store_b.edge_type_names() == store_a.edge_type_names()
+
+        # Should enforce the same ontology rules
+        with pytest.raises(ValueError):
+            store_b.add_node("x", "potato", "Bad type")
+
+    def test_snapshot_graph_algorithms(self):
+        """Graph algorithms work on stores bootstrapped from snapshot."""
+        store_a = make_store("inst-a")
+        store_a.add_node("a", "entity", "A")
+        store_a.add_node("b", "entity", "B")
+        store_a.add_edge("ab", "RUNS_ON", "a", "b")
+
+        store_b = GraphStore.from_snapshot("inst-b", store_a.snapshot())
+
+        path = store_b.shortest_path("a", "b")
+        assert path == ["a", "b"]
+
+        reachable = store_b.bfs("a")
+        assert "b" in reachable
+
+
+# -- Conflict resolution after sync --
+
+
+class TestSyncConflictResolution:
+    def test_lww_concurrent_property_update(self):
+        """LWW resolves concurrent property updates after sync."""
+        store_a = make_store("inst-a")
+        store_b = make_store("inst-b")
+
+        # Both start with the same node (via sync)
+        store_a.add_node("s1", "entity", "Server 1")
+        offer_b = store_b.generate_sync_offer()
+        payload = store_a.receive_sync_offer(offer_b)
+        store_b.merge_sync_payload(payload)
+
+        # Both update the same property independently
+        store_a.update_property("s1", "status", "alive")  # A's clock is ahead or tied
+        store_b.update_property("s1", "status", "dead")  # B's clock
+
+        # Sync A → B and B → A
+        offer_b2 = store_b.generate_sync_offer()
+        payload_a = store_a.receive_sync_offer(offer_b2)
+        store_b.merge_sync_payload(payload_a)
+
+        offer_a = store_a.generate_sync_offer()
+        payload_b = store_b.receive_sync_offer(offer_a)
+        store_a.merge_sync_payload(payload_b)
+
+        # Both should converge to the same value (LWW)
+        val_a = store_a.get_node("s1")["properties"]["status"]
+        val_b = store_b.get_node("s1")["properties"]["status"]
+        assert val_a == val_b  # same value, regardless of which "won"
+
+    def test_add_wins_after_sync(self):
+        """Add-wins: concurrent add + remove → node exists after sync."""
+        store_a = make_store("inst-a")
+        store_b = make_store("inst-b")
+
+        # A creates and then removes a node
+        store_a.add_node("s1", "entity", "Server 1")
+
+        # Sync to B first
+        offer_b = store_b.generate_sync_offer()
+        payload = store_a.receive_sync_offer(offer_b)
+        store_b.merge_sync_payload(payload)
+
+        # A removes the node
+        store_a.remove_node("s1")
+
+        # B re-adds the node (concurrent with A's remove)
+        store_b.add_node("s1", "entity", "Server 1 resurrected")
+
+        # Sync B → A: A learns what B has
+        offer_a = store_a.generate_sync_offer()
+        payload_for_a = store_b.receive_sync_offer(offer_a)
+        store_a.merge_sync_payload(payload_for_a)
+
+        # Sync A → B: B learns what A has
+        offer_b2 = store_b.generate_sync_offer()
+        payload_for_b = store_a.receive_sync_offer(offer_b2)
+        store_b.merge_sync_payload(payload_for_b)
+
+        # Both should have the node (add-wins)
+        assert store_a.get_node("s1") is not None
+        assert store_b.get_node("s1") is not None
