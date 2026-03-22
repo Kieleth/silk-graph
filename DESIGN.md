@@ -2,9 +2,9 @@
 
 A standalone Rust library (with Python bindings via PyO3) for distributed, peer-to-peer knowledge graphs. Zero external dependencies beyond the Rust toolchain. No PostgreSQL, no Redis, no Kafka, no external database of any kind. Each node in a cluster carries the complete graph, syncs peer-to-peer via Merkle-CRDT, and materializes views locally.
 
-Silk is an independent library — no dependency on Shelob or any other project. It can be used by any application that needs a distributed, conflict-free, graph-structured data store. Shelob is its first consumer, not its owner.
+Silk is an independent library. It can be used by any application that needs a distributed, conflict-free, graph-structured data store.
 
-**Repository**: `silk/` (standalone crate, separate from Shelob source tree)
+**Repository**: https://github.com/Kieleth/silk-graph
 **License**: TBD (open-source candidate)
 **Whitepaper**: Planned — documenting the Merkle-CRDT graph store design, 5-primitive domain model, and the Wisdom loop for autonomous systems.
 
@@ -41,7 +41,7 @@ For Silk: the Merkle-DAG is the transport for delta-state sync. Each sync exchan
 
 Core insight: an append-only, totally-ordered sequence of records is the fundamental data structure for distributed systems. If every node processes the same log in the same order, they converge to the same state.
 
-Shelob already uses this — the event store IS an append-only log. Making it distributed means replicating the log across nodes. With multiple writers (fleet instances), the log becomes a partial order (DAG), not a total order (single log). The Merkle-DAG captures this naturally.
+Making it distributed means replicating the log across nodes. With multiple writers (fleet instances), the log becomes a partial order (DAG), not a total order (single log). The Merkle-DAG captures this naturally.
 
 ### Anti-Entropy (Merkle Trees)
 
@@ -75,7 +75,7 @@ The ontology defines:
 This separation makes Silk usable in any domain: DevOps, biology, supply chain, social networks — each defines its own ontology. Silk enforces it.
 
 ```
-Silk (engine)                    Shelob (DevOps ontology)
+Silk (engine)                    Your App (domain ontology)
 ┌──────────────────────┐        ┌──────────────────────────┐
 │ Ontology enforcement │◄───────│ signal, entity, rule,    │
 │ Merkle-DAG           │        │ plan, action             │
@@ -114,7 +114,7 @@ Ontology
 
 The ontology itself is validated for internal consistency at creation time — all source/target types referenced in edge definitions must exist as node types. Invalid ontologies are rejected before any data can be written.
 
-**For Shelob's domain model** (5 primitives, edge grammar, DIKW/MAPE-K alignment), see [docs/architecture.md](architecture.md).
+**For example, a domain model** with primitives, edge grammar, and DIKW/MAPE-K alignment could define its own ontology and pass it at graph creation.
 
 ---
 
@@ -381,7 +381,7 @@ The graph is fully updated before the callback fires. Subscribers can safely que
 ### Persistence
 
 ```
-/var/lib/shelob/silk/
+/var/lib/silk/
 ├── oplog.redb          # Merkle-DAG entries (content-addressed blocks)
 ├── heads.redb          # Current DAG heads (minimal recovery state)
 ├── graph.redb          # Materialized graph (nodes, edges, indexes)
@@ -470,7 +470,7 @@ ontology = json.dumps({
 store = GraphStore("instance-a", ontology)
 
 # Graph mutations (each creates a Merkle-DAG entry, validated against ontology)
-store.add_node("server-1", "entity", "Production Server", {"ip": "5.78.81.60", "status": "alive"})
+store.add_node("server-1", "entity", "Production Server", {"ip": "192.168.1.100", "status": "alive"})
 store.add_node("api-svc", "entity", "API Service")
 store.add_edge("e1", "RUNS_ON", "api-svc", "server-1")
 
@@ -500,7 +500,7 @@ store.len()              # total entries including genesis
 
 ## Crate Structure
 
-Silk is a standalone Rust crate. No imports from Shelob. No shared types. Communication between Silk and any consumer happens through the public API only.
+Silk is a standalone Rust crate. No imports from any consumer project. No shared types. Communication between Silk and any consumer happens through the public API only.
 
 ```
 silk/
@@ -1056,32 +1056,24 @@ S-4 (Python API) ──────────────────┘
 - `byzantine.yml`: reject corrupt/invalid entries
 - `stress.yml`: 5-node, 50k ops, convergence verification
 
-### Phase S-6: Shelob Integration ✅ COMPLETE (P-0 3B)
+### Phase S-6: Production Integration ✅ COMPLETE
 
 **Depends on**: S-1, S-2, S-3, S-4
 
-Executed as P-0 3B — bottom-up aggregate TDD with 5-level hierarchical testing.
+Bottom-up aggregate TDD with 5-level hierarchical testing.
 
 **Deliverables**:
-- `src/shelob/store.py` — ontology (14 node types, 9 edge types) + `create_store()`
-- 11 aggregates: projects, servers, secrets, access_tokens, dns_zones, dns_records, sessions, health, deployments, incidents, guardrails
-- 11 API route modules mounted at `/api`
-- PostgreSQL fully removed — pure Silk, no dual-stack
+- Application ontology definition + `create_store()`
+- Domain aggregates backed by Silk graph operations
+- API route modules
 - No ORM, no SQL — aggregates call `store.add_node()`, `store.query_nodes_by_type()`, etc.
-- FastAPI routes use sync `def` (Silk is synchronous)
 
-**Tests** (321 Shelob + 78 Silk Python = 399 Python, 108 Rust):
-- L1 Store/Ontology: 21 tests
-- L2 Aggregates (Tiers 1-4): 179 tests
-- L3 API Routes: 62 tests
-- L4 Cross-Aggregate Integration: 36 tests
-- L5 Cluster Sync: 23 tests (basic, aggregates, conflicts, snapshot bootstrap)
-
-**Not yet migrated** (dead code, reference only):
-- MCP server (`src/shelob/mcp/`) — uses old EventStore/commands
-- Scheduler/background jobs — uses old PG
-- SSE event streaming — used pg_notify
-- Reactions/side effects — old PG-based
+**Tests**:
+- L1 Store/Ontology
+- L2 Aggregates
+- L3 API Routes
+- L4 Cross-Aggregate Integration
+- L5 Cluster Sync (basic, aggregates, conflicts, snapshot bootstrap)
 
 ### Phase S-7: Fleet Integration
 
@@ -1092,14 +1084,13 @@ Executed as P-0 3B — bottom-up aggregate TDD with 5-level hierarchical testing
 - Heartbeat protocol carries Silk sync data
 - New instances bootstrap via Silk snapshot from a peer
 - Seed file becomes the initial Silk state (ingested on first boot)
-- `shelob-init.sh` provisions instances with Silk as the only data store
 
 ---
 
 ## Decisions Log
 
-### D-001: 5 Primitives — Signal, Entity, Rule, Plan, Action (Shelob's Ontology)
-Shelob's domain model, not a Silk engine feature. See [SD-001 in architecture.md](architecture.md) for full details, research, and rationale.
+### D-001: 5 Primitives — Signal, Entity, Rule, Plan, Action (Example Ontology)
+An example domain model, not a Silk engine feature. Any application defines its own ontology. This example uses 5 primitives for a DevOps domain: Signal (something observed), Entity (something that exists), Rule (a condition), Plan (a course of action), Action (something executed).
 
 ### D-002: Rust + PyO3
 Rust core, Python API via PyO3/maturin. Same pattern as pydantic-core, polars, tiktoken. Memory safety, fearless concurrency, low FFI overhead.
@@ -1114,19 +1105,19 @@ Schemaless, compact, Serde integration. No codegen, no schema files. For sub-KB 
 Silk replaces PostgreSQL entirely. Events → op log. Projections → materialized graph. KG → native. Queue → graph transitions. SSE → subscriptions. Four current architectural gaps (metrics, exceptions, alert_rules, deploy_logs bypassing the event store) are eliminated.
 
 ### D-006: Action is Information, Not Knowledge
-Shelob's domain model. See [SD-007 in architecture.md](architecture.md).
+A domain modeling decision. Actions represent executed operations (Information tier in DIKW), not derived Knowledge.
 
 ### D-007: Wisdom is Enacted, Not Stored
-Shelob's domain model. See [SD-008 in architecture.md](architecture.md).
+A domain modeling decision. Wisdom emerges from the system's behavior (rule evaluation, plan selection), not from stored data.
 
 ### D-008: TDD — Tests Are the Specification
 Every feature is test-first. Tests grow in five levels of complexity: unit → component → integration → stress → Docker scenarios. If it's not tested, it doesn't exist. The test suite IS the specification of correct behavior. Convergence, commutativity, associativity, idempotency, causality, integrity, persistence, recovery, and liveness are all mechanically verified.
 
-### D-009: Silk is Standalone — Zero Shelob Dependencies
-Silk imports nothing from Shelob. No shared types, no shared config, no shared database. Silk is a general-purpose distributed knowledge graph engine. Shelob is its first consumer. The boundary is the public API: `GraphStore.open()`, `add_node()`, `query()`, `ops_since()`, `merge()`. This separation enables independent versioning, independent testing, and independent publication.
+### D-009: Silk is Standalone — Zero Consumer Dependencies
+Silk imports nothing from any consumer project. No shared types, no shared config, no shared database. Silk is a general-purpose distributed knowledge graph engine. The boundary is the public API: `GraphStore.open()`, `add_node()`, `query()`, `ops_since()`, `merge()`. This separation enables independent versioning, independent testing, and independent publication.
 
 ### D-010: Open-Source Candidate
-Silk is designed for open-source publication. The crate has its own README, LICENSE, and documentation. A whitepaper is planned documenting the Merkle-CRDT graph store design, the ontology-first approach, and the distributed sync protocol. Shelob remains private (C-070); Silk stands alone. With the ontology abstracted out (D-012), Silk is a general-purpose distributed graph engine usable in any domain — not tied to DevOps.
+Silk is designed for open-source publication. The crate has its own README, LICENSE, and documentation. A whitepaper is planned documenting the Merkle-CRDT graph store design, the ontology-first approach, and the distributed sync protocol. With the ontology abstracted out (D-012), Silk is a general-purpose distributed graph engine usable in any domain — not tied to DevOps.
 
 ### D-012: Ontology-First — No Built-in Types
 Silk has no built-in node types or edge types. The ontology is defined by the consumer and passed at graph creation as the immutable genesis entry (first entry in the DAG, `DefineOntology` op). Two design decisions:
@@ -1136,7 +1127,7 @@ Silk has no built-in node types or edge types. The ontology is defined by the co
 
 Previous design (D-001) hardcoded `NodeType` as a Rust enum with 5 DevOps variants. This was removed. `node_type` is now a `String` validated against the ontology. Edge types were already strings. The `NodeType` enum was deleted; `ontology.rs` was added with `Ontology`, `NodeTypeDef`, `EdgeTypeDef`, `PropertyDef`, and `ValueType` structs plus full validation logic.
 
-This separation enables Silk to be used in any domain: DevOps (Shelob), biology, supply chain, social networks, knowledge management — each defines its own ontology. Silk enforces it.
+This separation enables Silk to be used in any domain: DevOps, biology, supply chain, social networks, knowledge management — each defines its own ontology. Silk enforces it.
 
 ### D-013: BTreeMap for Deterministic Serialization
 Properties use `BTreeMap<String, Value>` instead of `HashMap<String, Value>`. HashMap iteration order is non-deterministic in Rust (randomized by default). Since entry hashes are computed from serialized content (`BLAKE3(msgpack(...))`), non-deterministic serialization order would produce different hashes for identical content. BTreeMap guarantees sorted key order, making content addressing deterministic. This was caught by the `entry_hash_deterministic` test.
@@ -1212,7 +1203,7 @@ Cost: the closure loop is O(E * D) where E is entries being sent and D is max DA
 
 Bloom filter false positives on **head entries** (DAG tips) are unrecoverable by the Phase 2 ancestor closure. The ancestor closure walks parents of entries already in the send set — but a head entry has no descendants in the send set to trigger the walk. If the bloom falsely reports that the remote has our head, the entry is permanently missed. Multiple sync rounds cannot fix it because the bloom is deterministic — the same FP recurs every time.
 
-This was originally documented as D-027 in session notes. It manifested specifically with Shelob's full ontology (14 node types, 9 edge types) where the larger entry set created hash collisions in the bloom filter that consistently hit head entries.
+This was originally documented as D-027 in session notes. It manifested specifically with a full ontology (14 node types, 9 edge types) where the larger entry set created hash collisions in the bloom filter that consistently hit head entries.
 
 **Fix**: Added Phase 1.5 between bloom check (Phase 1) and ancestor closure (Phase 2). Phase 1.5 forces all our heads into the send set when they are not in the remote's heads set. Rationale: if our head is not one of the remote's heads, the remote either doesn't have it or has moved past it. In either case, sending it is safe — `merge_entries` is idempotent and silently ignores duplicates.
 
@@ -1283,7 +1274,7 @@ Silk provides in-process change notification via `store.subscribe(callback)`. De
 
 **Backward compatible**: Types without subtypes work exactly as before. The `subtype` field on `GraphOp::AddNode` is `Option<String>` with `#[serde(default)]` — old serialized entries deserialize with `subtype: None`. Edge validation is unchanged — it uses `node_type`, not subtype.
 
-**Not Shelob-specific**: Subtypes are a generic Silk feature. Any ontology consumer can use them. Silk remains standalone (D-009).
+Subtypes are a generic Silk feature. Any ontology consumer can use them. Silk remains standalone (D-009).
 
 **Research basis**: Google KG (~1,500 types for 5B+ entities), Wikidata (`instance_of` P31 — type hierarchy in data, not schema), BFO (ISO/IEC 21838-2 — 34 categories, domain ontologies extend via downward population), Neo4j (coarse types with properties), ontological parsimony (Occam's Razor). See [architecture.md](architecture.md) for full research.
 
@@ -1291,14 +1282,14 @@ Silk provides in-process change notification via `store.subscribe(callback)`. De
 
 Silk gains a second store type: `ObservationLog`. While `GraphStore` embodies the "table" (decisions, CRDT-synced, permanent), `ObservationLog` embodies the "log" (raw observations, local-only, TTL-pruned). Two redb files, two purposes, one crate.
 
-**The problem**: Shelob's KG stores decisions, not data (SA-001). But the detection layer needs raw observations (health check results, CPU metrics, container status) to evaluate Rules and produce Signals. Without a local observation store, the detection layer can only operate in-memory — losing all history on restart and preventing windowed evaluation ("3 failures in 10 minutes").
+**The problem**: A knowledge graph stores decisions, not data. But the detection layer needs raw observations (health check results, CPU metrics, container status) to evaluate Rules and produce Signals. Without a local observation store, the detection layer can only operate in-memory — losing all history on restart and preventing windowed evaluation ("3 failures in 10 minutes").
 
 **Why not use GraphStore?**: Three reasons from production experience:
 1. **C-099 (store bloat)**: An 11MB GraphStore caused 100% CPU on boot. The Merkle-DAG oplog grows monotonically — entries can't be deleted without breaking hash chains. Observations at 60s cadence would bloat the oplog by ~10M entries/day at scale.
 2. **CRDT sync overhead**: Every GraphStore entry syncs to all fleet peers. Raw observations are local — "server-7 CPU was 47%" doesn't need to be on server-3.
 3. **SA-001 (DIKW filter)**: The KG stores Knowledge and Wisdom. Raw observations are Data. Mixing them violates the fundamental design principle.
 
-**Why not an external system (Kafka, NATS, SQLite)?**: C-072 (zero external dependencies for core operations). The observation layer must survive everything the KG survives — Docker crashes, network partitions, disk pressure. Adding a Go binary (NATS) or JVM (Kafka) creates dependencies Shelob runs below (C-091). SQLite via Python stdlib would work but splits persistence across two engines (redb + SQLite).
+**Why not an external system (Kafka, NATS, SQLite)?**: Zero external dependencies for core operations. The observation layer must survive everything the KG survives — Docker crashes, network partitions, disk pressure. Adding a Go binary (NATS) or JVM (Kafka) creates unnecessary dependencies. SQLite via Python stdlib would work but splits persistence across two engines (redb + SQLite).
 
 **The design**: A redb-backed append-only log with TTL truncation. No Merkle-DAG (no hash chains = deletable entries). No CRDT sync (local-only). No ontology validation (raw key-value, not typed nodes). Separate file from GraphStore.
 
@@ -1318,11 +1309,11 @@ ObservationLog (observations.redb)
 
 **Scale target**: 100 servers, 1200 projects, ~10M observations/day, ~1GB/day with 24h retention. redb handles this comfortably (B-tree, ACID, single-file).
 
-**Hierarchical federation (SA-015)**: Observations never leave the fleet. Only Signals (derived from observations by the detection layer) flow UP to parent Shelob instances. This is the DIKW filter applied to the network topology.
+**Hierarchical federation**: Observations never leave the fleet. Only Signals (derived from observations by the detection layer) flow UP to parent instances. This is the DIKW filter applied to the network topology.
 
 **Kreps' duality in Silk terms**: "If you have a log of changes, you can apply these changes to create a table." The ObservationLog is the raw change stream. The GraphStore's Signals are the materialized "table" of significant events. The detection layer is the stream processor.
 
-**Not Shelob-specific**: Any Silk consumer could use ObservationLog for time-series data, audit trails, or sensor readings. Silk remains standalone (D-009).
+Any Silk consumer could use ObservationLog for time-series data, audit trails, or sensor readings. Silk remains standalone (D-009).
 
 ---
 

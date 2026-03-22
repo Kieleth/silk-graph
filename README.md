@@ -5,7 +5,7 @@ A Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs.
 [![CI](https://github.com/Kieleth/silk-graph/actions/workflows/ci.yml/badge.svg)](https://github.com/Kieleth/silk-graph/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/silk-graph.svg)](https://crates.io/crates/silk-graph)
 [![PyPI](https://img.shields.io/pypi/v/silk-graph.svg)](https://pypi.org/project/silk-graph/)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-FSL--1.0--Apache--2.0-blue.svg)](LICENSE.md)
 
 Silk is an embedded graph database with automatic conflict resolution. Built on Merkle-DAGs and CRDTs, it requires no leader, no consensus protocol, and no coordinator. Any two Silk instances that exchange sync messages are guaranteed to converge to the same graph state. Schema is enforced at write time via an ontology — not at query time.
 
@@ -59,6 +59,54 @@ assert store_a.get_node("alice") is not None
 assert store_a.get_node("bob") is not None
 assert store_b.get_node("alice") is not None
 assert store_b.get_node("bob") is not None
+```
+
+### What just happened
+
+The code above created two independent graph stores, wrote data to each, and synced them — both now hold the same graph. No server, no coordinator, no conflict resolution code. Here's what it looks like:
+
+```mermaid
+graph TB
+    subgraph "Before Sync"
+        direction LR
+        subgraph "Store A"
+            A1["alice (person)"]
+            A2["acme (company)"]
+            A1 -->|WORKS_AT| A2
+        end
+        subgraph "Store B"
+            B1["bob (person)"]
+        end
+    end
+
+    subgraph "After Sync — both stores identical"
+        direction LR
+        subgraph "Store A '"
+            A3["alice (person)"]
+            A4["acme (company)"]
+            A5["bob (person)"]
+            A3 -->|WORKS_AT| A4
+        end
+        subgraph "Store B '"
+            B3["alice (person)"]
+            B4["acme (company)"]
+            B5["bob (person)"]
+            B3 -->|WORKS_AT| B4
+        end
+    end
+```
+
+Under the hood, every write becomes a content-addressed entry in a Merkle-DAG. Sync exchanges only the entries the other side is missing:
+
+```mermaid
+flowchart LR
+    W["add_node(...)"] --> E["Entry\n{hash, op, clock, author}"]
+    E --> O["OpLog\n(Merkle-DAG)"]
+    O --> G["Materialized\nGraph"]
+    O --> S["Sync Protocol"]
+    S <-->|"offer ⇄ payload"| P["Remote Peer"]
+    P --> O2["Peer OpLog"]
+    O2 --> G2["Peer Graph"]
 ```
 
 ### Rust
@@ -486,9 +534,11 @@ cargo bench
 
 ## License
 
-Licensed under either of:
+Licensed under the [Functional Source License, Version 1.0, Apache 2.0 Change License](LICENSE.md) (FSL-1.0-Apache-2.0).
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
+**What this means:**
+- Free to use, modify, and distribute for any purpose that doesn't compete with silk-graph
+- After 2 years from each release, the code converts to Apache License 2.0 (fully permissive)
+- Internal use, learning, research, and non-competing commercial use are unrestricted
 
-at your option.
+See [LICENSE.md](LICENSE.md) for full terms.

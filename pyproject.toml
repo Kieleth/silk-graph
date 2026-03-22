@@ -7,7 +7,7 @@ name = "silk-graph"
 version = "0.1.0"
 description = "Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs"
 requires-python = ">=3.11"
-license = "MIT OR Apache-2.0"
+license = {file = "LICENSE.md"}
 keywords = ["crdt", "graph", "distributed", "merkle", "conflict-free", "knowledge-graph"]
 classifiers = [
     "Development Status :: 4 - Beta",
