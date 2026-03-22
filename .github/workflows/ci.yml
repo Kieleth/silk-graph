@@ -37,20 +37,22 @@ jobs:
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Build and install with maturin
-        uses: PyO3/maturin-action@v1
-        with:
-          command: develop
-          args: --release
-          sccache: 'true'
+      - name: Build and install
+        run: |
+          pip install maturin pytest
+          maturin develop --release 2>&1 || {
+            echo "maturin develop failed, trying maturin build + pip install"
+            maturin build --release --out dist
+            pip install dist/*.whl
+          }
 
       - name: Run Python tests
-        run: |
-          pip install pytest
-          pytest pytests/ -v
+        run: pytest pytests/ -v
