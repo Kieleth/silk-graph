@@ -177,6 +177,58 @@ OpLog (append-only Merkle-DAG, content-addressed)
 
 **Convergence guarantee:** Two stores that have exchanged sync messages in both directions will have identical materialized graphs. This is a mathematical property of the Merkle-CRDT construction, not an implementation detail.
 
+## Benchmarks
+
+Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, release build. Full results via `cargo bench --no-default-features`.
+
+### Core Operations
+
+| Operation | Time | Throughput |
+|-----------|------|-----------|
+| Entry create (AddNode) | 449 ns | 2.2M ops/sec |
+| Entry serialize (MessagePack) | 289 ns | 3.5M ops/sec |
+| Entry deserialize | 957 ns | 1.0M ops/sec |
+| BLAKE3 hash verify | 247 ns | 4.0M ops/sec |
+
+### Graph Write + Materialize
+
+| Operation | 100 nodes | 1,000 nodes | 10,000 nodes |
+|-----------|-----------|-------------|--------------|
+| Add nodes (write + materialize) | 129 µs | 1.5 ms | 16.8 ms |
+| Rebuild graph from entries | 20 µs | 278 µs | 2.7 ms |
+
+### Graph Algorithms
+
+| Algorithm | 1,000 nodes | 10,000 nodes |
+|-----------|-------------|--------------|
+| BFS traversal | 564 ns | 580 ns |
+| Shortest path | 706 ns | 717 ns |
+| Impact analysis (reverse BFS) | 108 ns | 105 ns |
+| Pattern match (2-type chain) | 555 µs | 8.1 ms |
+
+### Sync Protocol
+
+| Scenario | Time |
+|----------|------|
+| Sync offer (100 nodes) | 24 µs |
+| Sync offer (1,000 nodes) | 282 µs |
+| Sync offer (10,000 nodes) | 3.3 ms |
+| Full transfer (100 nodes, zero overlap) | 111 µs |
+| Full transfer (1,000 nodes, zero overlap) | 1.3 ms |
+| Incremental sync (900/1000 shared, 10% delta) | 611 µs |
+| Partition heal (500 divergent writes per side) | 833 µs |
+
+### Python Examples (sync scenarios)
+
+| Scenario | Nodes | Sync time |
+|----------|-------|-----------|
+| Two offline peers converge | 2 x 500 | 5.1 ms |
+| Three-peer partition heal | 3 x 200 | 6.6 ms |
+| Concurrent property writes | 1 node | 0.06 ms |
+| 10-peer ring convergence | 10 x 100 | 51.8 ms (3 rounds) |
+
+Run the examples yourself: `python examples/offline_first.py`
+
 ## Design Decisions
 
 Silk's architecture is driven by 26 explicit design decisions (D-001 through D-026), documented in full in [DESIGN.md](DESIGN.md). Key choices:
@@ -251,8 +303,8 @@ log.truncate(before_ts_ms=1710000000000)
 ## Building from Source
 
 ```bash
-# Rust tests
-cargo test --all-features
+# Rust tests (without Python bindings)
+cargo test --no-default-features
 
 # Python development build
 pip install maturin

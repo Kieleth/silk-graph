@@ -12,6 +12,7 @@ fn make_genesis() -> Entry {
             NodeTypeDef {
                 description: None,
                 properties: BTreeMap::new(),
+                subtypes: None,
             },
         )]),
         edge_types: BTreeMap::new(),
@@ -35,6 +36,7 @@ fn bench_oplog_append(c: &mut Criterion) {
                 let op = GraphOp::AddNode {
                     node_id: format!("n{i}"),
                     node_type: "entity".into(),
+                    subtype: None,
                     label: format!("Node {i}"),
                     properties: BTreeMap::new(),
                 };
@@ -67,6 +69,7 @@ fn bench_oplog_entries_since(c: &mut Criterion) {
         let op = GraphOp::AddNode {
             node_id: format!("n{i}"),
             node_type: "entity".into(),
+            subtype: None,
             label: format!("Node {i}"),
             properties: BTreeMap::new(),
         };

@@ -9,6 +9,7 @@ fn bench_entry_creation(c: &mut Criterion) {
             let op = GraphOp::AddNode {
                 node_id: black_box("server-1".into()),
                 node_type: black_box("entity".into()),
+                subtype: None,
                 label: black_box("Production Server".into()),
                 properties: BTreeMap::from([
                     ("ip".into(), Value::String("10.0.0.1".into())),
@@ -25,6 +26,7 @@ fn bench_entry_roundtrip(c: &mut Criterion) {
     let op = GraphOp::AddNode {
         node_id: "server-1".into(),
         node_type: "entity".into(),
+        subtype: None,
         label: "Production Server".into(),
         properties: BTreeMap::from([
             ("ip".into(), Value::String("10.0.0.1".into())),
@@ -48,6 +50,7 @@ fn bench_verify_hash(c: &mut Criterion) {
     let op = GraphOp::AddNode {
         node_id: "server-1".into(),
         node_type: "entity".into(),
+        subtype: None,
         label: "Production Server".into(),
         properties: BTreeMap::new(),
     };

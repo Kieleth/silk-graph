@@ -39,3 +39,11 @@ harness = false
 [[bench]]
 name = "bench_oplog"
 harness = false
+
+[[bench]]
+name = "bench_sync"
+harness = false
+
+[[bench]]
+name = "bench_graph"
+harness = false
