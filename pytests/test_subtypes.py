@@ -122,11 +122,13 @@ def test_missing_subtype_when_required():
         store.add_node("srv-1", "entity", "srv", {"hostname": "web01"})
 
 
-def test_unknown_subtype():
-    """add_node with an unknown subtype → error."""
+def test_unknown_subtype_accepted():
+    """D-026: add_node with an unknown subtype succeeds (type-level validation only)."""
     store = _make_store()
-    with pytest.raises(ValueError, match="subtype"):
-        store.add_node("x", "entity", "x", {"hostname": "h"}, subtype="nonexistent")
+    store.add_node("x", "entity", "x", {"hostname": "h"}, subtype="nonexistent")
+    node = store.get_node("x")
+    assert node is not None
+    assert node["subtype"] == "nonexistent"
 
 
 # -- Per-subtype property validation --
@@ -158,11 +160,12 @@ def test_subtype_property_type_validation():
         store.add_node("srv-1", "entity", "srv", {"hostname": 123}, subtype="server")
 
 
-def test_subtype_unknown_property_rejected():
-    """Properties not defined in the subtype are rejected."""
+def test_subtype_unknown_property_accepted():
+    """D-026: unknown properties are accepted without validation."""
     store = _make_store()
-    with pytest.raises(ValueError):
-        store.add_node("srv-1", "entity", "srv", {"hostname": "h", "bogus": "x"}, subtype="server")
+    store.add_node("srv-1", "entity", "srv", {"hostname": "h", "bogus": "x"}, subtype="server")
+    node = store.get_node("srv-1")
+    assert node["properties"]["bogus"] == "x"
 
 
 # -- Backward compatibility: types without subtypes --
@@ -177,11 +180,12 @@ def test_type_without_subtypes_works_as_before():
     assert node["properties"]["name"] == "cpu-limit"
 
 
-def test_type_without_subtypes_rejects_subtype_arg():
-    """Passing subtype to a type that doesn't define subtypes → error."""
+def test_type_without_subtypes_accepts_subtype_arg():
+    """D-026: subtypes accepted even on types that don't declare any."""
     store = _make_store()
-    with pytest.raises(ValueError, match="subtype"):
-        store.add_node("r1", "rule", "rule-1", {"name": "x"}, subtype="guardrail")
+    store.add_node("r1", "rule", "rule-1", {"name": "x"}, subtype="guardrail")
+    node = store.get_node("r1")
+    assert node["subtype"] == "guardrail"
 
 
 def test_type_without_subtypes_validates_properties():

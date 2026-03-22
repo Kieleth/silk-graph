@@ -135,19 +135,20 @@ impl Ontology {
         })?;
 
         match (&def.subtypes, subtype) {
-            // Type has subtypes and caller provided one — validate per-subtype
+            // Type has subtypes and caller provided one
             (Some(subtypes), Some(st)) => {
-                let st_def = subtypes.get(st).ok_or_else(|| {
-                    ValidationError::UnknownSubtype {
-                        node_type: node_type.to_string(),
-                        subtype: st.to_string(),
-                        allowed: subtypes.keys().cloned().collect(),
+                match subtypes.get(st) {
+                    Some(st_def) => {
+                        // Known subtype — merge type-level + subtype-level properties
+                        let mut merged = def.properties.clone();
+                        merged.extend(st_def.properties.clone());
+                        validate_properties(node_type, &merged, properties)
                     }
-                })?;
-                // Merge type-level + subtype-level properties for validation
-                let mut merged = def.properties.clone();
-                merged.extend(st_def.properties.clone());
-                validate_properties(node_type, &merged, properties)
+                    None => {
+                        // D-026: unknown subtype — validate type-level properties only
+                        validate_properties(node_type, &def.properties, properties)
+                    }
+                }
             }
             // Type has subtypes but caller didn't provide one — error
             (Some(subtypes), None) => {
@@ -156,12 +157,9 @@ impl Ontology {
                     allowed: subtypes.keys().cloned().collect(),
                 })
             }
-            // Type has no subtypes but caller provided one — error
-            (None, Some(st)) => {
-                Err(ValidationError::UnexpectedSubtype {
-                    node_type: node_type.to_string(),
-                    subtype: st.to_string(),
-                })
+            // D-026: accept subtypes even if type doesn't declare any
+            (None, Some(_st)) => {
+                validate_properties(node_type, &def.properties, properties)
             }
             // Type has no subtypes and caller didn't provide one — validate as before
             (None, None) => {
@@ -247,12 +245,12 @@ fn validate_properties(
 
     // Check all provided properties are known and correctly typed
     for (prop_name, value) in values {
-        let prop_def = defs.get(prop_name).ok_or_else(|| {
-            ValidationError::UnknownProperty {
-                type_name: type_name.to_string(),
-                property: prop_name.clone(),
-            }
-        })?;
+        // D-026: accept unknown properties without validation.
+        // The ontology defines the minimum, not the maximum.
+        let prop_def = match defs.get(prop_name) {
+            Some(def) => def,
+            None => continue,
+        };
 
         if prop_def.value_type != ValueType::Any {
             let actual_type = value_type_name(value);
@@ -397,14 +395,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_node_unknown_property() {
+    fn validate_node_unknown_property_accepted() {
+        // D-026: unknown properties are accepted without validation
         let ont = devops_ontology();
         let props = BTreeMap::from([
             ("severity".into(), Value::String("warn".into())),
             ("bogus".into(), Value::Bool(true)),
         ]);
-        let err = ont.validate_node("signal", None, &props).unwrap_err();
-        assert!(matches!(err, ValidationError::UnknownProperty { property, .. } if property == "bogus"));
+        assert!(ont.validate_node("signal", None, &props).is_ok());
     }
 
     #[test]

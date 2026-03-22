@@ -151,10 +151,12 @@ class TestNodeValidation:
         with pytest.raises(ValueError, match="expects"):
             store.add_node("s1", "signal", "Alert", {"severity": 42})  # int, not string
 
-    def test_add_node_unknown_property_rejected(self):
+    def test_add_node_unknown_property_accepted(self):
+        """D-026: unknown properties are accepted without validation."""
         store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        with pytest.raises(ValueError, match="no property"):
-            store.add_node("s1", "signal", "Alert", {"severity": "high", "bogus": True})
+        store.add_node("s1", "signal", "Alert", {"severity": "high", "bogus": True})
+        node = store.get_node("s1")
+        assert node["properties"]["bogus"] is True
 
     def test_add_node_optional_property_absent(self):
         store = GraphStore("node-a", DEVOPS_ONTOLOGY)
