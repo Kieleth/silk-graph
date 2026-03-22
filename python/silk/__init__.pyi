@@ -122,11 +122,18 @@ class GraphStore:
     def get_node(self, node_id: str) -> dict[str, Any] | None:
         """Get a node by ID. Returns dict or None.
 
-        The returned dict includes a 'subtype' key (str or None).
+        Returns:
+            {"node_id": str, "node_type": str, "subtype": str | None,
+             "label": str, "properties": dict[str, Any]}
         """
         ...
     def get_edge(self, edge_id: str) -> dict[str, Any] | None:
-        """Get an edge by ID. Returns dict or None."""
+        """Get an edge by ID. Returns dict or None.
+
+        Returns:
+            {"edge_id": str, "edge_type": str, "source_id": str,
+             "target_id": str, "properties": dict[str, Any]}
+        """
         ...
     def query_nodes_by_type(self, node_type: str) -> list[dict[str, Any]]:
         """Query all live nodes of a given type."""

@@ -1,0 +1,257 @@
+# Silk Sync Protocol Specification
+
+This document specifies the wire format and protocol for peer-to-peer synchronization between Silk graph stores. It is intended for implementors building Silk-compatible peers in any language.
+
+## Overview
+
+Silk sync is a 3-step delta-state CRDT protocol:
+
+```
+Peer A                          Peer B
+  │                               │
+  ├── generate_sync_offer() ─────►│  "Here's what I have" (Bloom filter + heads)
+  │                               │
+  │◄── receive_sync_offer() ──────┤  "Here's what you're missing" (entries)
+  │                               │
+  ├── merge_sync_payload() ───────┤  Apply remote entries, re-materialize graph
+  │                               │
+```
+
+For full convergence, both peers must complete this exchange (A→B, then B→A). After both rounds, both stores hold identical materialized graphs.
+
+## Serialization
+
+All messages are serialized as [MessagePack](https://msgpack.org/) using `rmp_serde` (Rust). Fields are serialized in struct declaration order. MessagePack is schema-free — the receiver must know the expected structure.
+
+**Library**: `rmp-serde` 1.x (Rust), `msgpack` (Python), or any MessagePack implementation.
+
+## Data Types
+
+### Hash
+
+A 32-byte BLAKE3 hash, represented as `[u8; 32]`. In MessagePack: a `bin 32` (binary data, 32 bytes). In hex display: 64 lowercase hex characters.
+
+### LamportClock
+
+```
+{
+    "id": string,    // Instance identifier (e.g., "node-a")
+    "time": uint64   // Monotonically increasing logical time
+}
+```
+
+MessagePack: a 2-element map with string keys.
+
+**Rules:**
+- Incremented before each local write
+- On merge: `local.time = max(local.time, remote.time) + 1`
+- Ties broken by instance ID: lexicographically lower ID wins
+
+### Value (property values)
+
+```
+Null    → msgpack nil
+Bool    → msgpack bool
+Int     → msgpack int64
+Float   → msgpack float64
+String  → msgpack str
+List    → msgpack array of Value
+Map     → msgpack map of (str → Value)
+```
+
+Serialized with `#[serde(untagged)]` — no type tag. The MessagePack type byte determines the Value variant.
+
+### GraphOp (entry payload)
+
+Serialized with `#[serde(tag = "op")]` — an `"op"` field discriminates the variant.
+
+**define_ontology** (genesis — must be the first entry):
+```json
+{"op": "define_ontology", "ontology": {...}}
+```
+
+**add_node**:
+```json
+{"op": "add_node", "node_id": "alice", "node_type": "person", "subtype": null, "label": "Alice", "properties": {"age": 30}}
+```
+
+**add_edge**:
+```json
+{"op": "add_edge", "edge_id": "e1", "edge_type": "WORKS_AT", "source_id": "alice", "target_id": "acme", "properties": {}}
+```
+
+**update_property**:
+```json
+{"op": "update_property", "entity_id": "alice", "key": "age", "value": 31}
+```
+
+**remove_node**:
+```json
+{"op": "remove_node", "node_id": "alice"}
+```
+
+**remove_edge**:
+```json
+{"op": "remove_edge", "edge_id": "e1"}
+```
+
+### Entry
+
+The atomic unit of the Merkle-DAG. Content-addressed: `hash = BLAKE3(msgpack(signable_content))`.
+
+```
+{
+    "hash":    [u8; 32],          // BLAKE3 hash (see below)
+    "payload": GraphOp,           // The graph mutation
+    "next":    [[u8; 32], ...],   // Causal predecessors (DAG heads at write time)
+    "refs":    [[u8; 32], ...],   // Skip-list references (O(log n) traversal)
+    "clock":   LamportClock,      // Logical clock at creation
+    "author":  string             // Instance ID that created this entry
+}
+```
+
+**Hash computation:**
+
+The hash covers everything except the hash itself. The "signable content" is:
+
+```rust
+struct SignableContent {
+    payload: GraphOp,
+    next: Vec<Hash>,
+    refs: Vec<Hash>,
+    clock: LamportClock,
+    author: String,
+}
+```
+
+Serialized to MessagePack bytes, then hashed: `hash = BLAKE3(msgpack(signable_content))`.
+
+**To verify an entry**: recompute `BLAKE3(msgpack({payload, next, refs, clock, author}))` and compare to the `hash` field.
+
+## Protocol Messages
+
+### SyncOffer
+
+Sent by the initiating peer. Advertises its state.
+
+```
+{
+    "heads":      [[u8; 32], ...],   // Current DAG head hashes
+    "bloom":      BloomFilter,        // Bloom filter of all entry hashes
+    "clock_time": uint64              // Current Lamport clock time
+}
+```
+
+**Serialization**: `msgpack(SyncOffer)`, then transmitted as raw bytes.
+
+### SyncPayload
+
+Response to a SyncOffer. Contains entries the offerer is missing.
+
+```
+{
+    "entries": [Entry, ...],    // Entries the peer needs, in topological order
+    "need":   [[u8; 32], ...]   // Hashes the sender still needs (false-positive resolution)
+}
+```
+
+**Topological order**: entries are sorted so that every entry's `next` references appear before it in the list. This allows the receiver to apply them in order without missing dependencies.
+
+### Snapshot
+
+Full state transfer for bootstrapping new peers.
+
+```
+{
+    "entries": [Entry, ...]   // ALL entries, in topological order
+}
+```
+
+## Bloom Filter
+
+Used in SyncOffer to compactly represent which entries the peer has.
+
+### Parameters
+
+```
+{
+    "bits":       [uint64, ...],   // Bit array, packed into 64-bit words
+    "num_bits":   usize,           // Total number of bits
+    "num_hashes": uint32,          // Number of hash functions (k)
+    "count":      usize            // Number of items inserted
+}
+```
+
+**Sizing formulas** (standard Bloom filter):
+- `m = ceil(-n * ln(p) / ln(2)^2)` where n = expected items, p = false positive rate (default 0.01)
+- `k = ceil((m/n) * ln(2))`
+- Minimum 64 bits
+
+**Hash function**: BLAKE3 of the entry hash bytes. The 32-byte BLAKE3 output is sliced into `k` segments, each modulo `num_bits`, to produce `k` bit positions.
+
+**False positive rate**: ~1% with default parameters. False positives mean an entry is incorrectly reported as "already have it." The `need` field in SyncPayload handles this — if a DAG head is a false positive, the receiver explicitly requests it.
+
+## Protocol Flow
+
+### Normal Sync (Two Peers)
+
+```
+A                                    B
+│                                    │
+│  1. SyncOffer (A's heads + bloom) ──►
+│                                    │
+│     B computes entries_missing:    │
+│     - Walk A's heads              │
+│     - For each entry NOT in       │
+│       A's bloom → include         │
+│     - Force B's heads if not      │
+│       in A's heads (C-075)        │
+│                                    │
+│  ◄── 2. SyncPayload (entries + need)
+│                                    │
+│  A merges entries into OpLog      │
+│  A re-materializes graph          │
+│                                    │
+│  (Repeat in reverse: B→A)         │
+│                                    │
+```
+
+### Head Forcing (C-075)
+
+If a Bloom filter false positive hits a DAG-tip entry (head), no ancestor closure can recover it. The fix: always include local heads in the sync payload when they aren't in the remote's heads set. Sending entries the remote already has is harmless (merge is idempotent). Not sending entries the remote needs is data loss.
+
+### Bootstrap (New Peer)
+
+```
+A (existing)                    C (new)
+│                                │
+│  1. C requests snapshot ──────►│
+│                                │
+│  ◄── 2. Snapshot (all entries) │
+│                                │
+│  C creates OpLog from entries  │
+│  C materializes graph          │
+│  C switches to delta sync      │
+│                                │
+```
+
+## Merge Semantics
+
+### Entry Merge
+
+- Entries are identified by hash — identical hashes are the same entry
+- Merging is idempotent: applying the same entry twice has no effect
+- Out-of-order entries are retried: if an entry references unknown parents, it's queued and retried after other entries are applied
+- The OpLog accepts any valid entry regardless of arrival order
+
+### Conflict Resolution
+
+- **Add-wins**: If one peer removes a node and another adds an edge to it, the add wins after sync
+- **Per-property LWW**: Concurrent updates to the same property are resolved by Lamport clock comparison. Higher clock time wins. Equal times: lexicographically lower instance ID wins.
+- **Non-conflicting concurrent writes**: Two peers updating different properties on the same node both succeed — neither is lost
+
+## Version Compatibility
+
+The current protocol has no version field in messages. Any change to the Entry format, GraphOp variants, or Bloom filter structure is a breaking change requiring a major version bump of the library.
+
+Future versions may add a protocol version field to SyncOffer for negotiation.

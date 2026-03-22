@@ -350,6 +350,142 @@ log.query_latest(source="cpu")
 log.truncate(before_ts_ms=1710000000000)
 ```
 
+### Return Value Reference
+
+Methods like `get_node()` and `get_edge()` return plain dicts. Here's what's inside:
+
+**Node** (`get_node()`, `all_nodes()`, `query_nodes_by_*`):
+```python
+{
+    "node_id": "alice",          # str — unique identifier you passed to add_node
+    "node_type": "person",       # str — ontology-defined type
+    "subtype": "employee",       # str | None — subtype (D-024), None if not set
+    "label": "Alice Smith",      # str — human-readable label
+    "properties": {              # dict[str, Any] — known + open properties
+        "age": 30,
+        "department": "eng"
+    }
+}
+```
+
+**Edge** (`get_edge()`, `all_edges()`, `outgoing_edges()`, `incoming_edges()`):
+```python
+{
+    "edge_id": "e1",             # str — unique identifier
+    "edge_type": "WORKS_AT",     # str — ontology-defined type
+    "source_id": "alice",        # str — source node ID
+    "target_id": "acme",         # str — target node ID
+    "properties": {}             # dict[str, Any]
+}
+```
+
+**Subscription callback event** (`subscribe(callback)`):
+```python
+{
+    "hash": "7f3a...",          # str — hex BLAKE3 hash of the entry
+    "op": "add_node",           # str — add_node | add_edge | update_property |
+                                #        remove_node | remove_edge | define_ontology
+    "author": "node-a",        # str — instance that created this entry
+    "clock_time": 42,          # int — Lamport clock value
+    "local": True,             # bool — True if local write, False if from sync
+    # op-specific fields (present depending on op):
+    "node_id": "alice",        # add_node, remove_node
+    "edge_id": "e1",           # add_edge, remove_edge
+    "entity_id": "alice",      # update_property
+    "key": "age",              # update_property
+}
+```
+
+### Error Handling
+
+Silk uses Python's built-in exception types. Error messages are descriptive but must be matched as strings in v0.1 (custom exception classes planned for v0.2).
+
+```python
+# Validation error — bad schema, unknown type, missing required property
+try:
+    store.add_node("x", "spaceship", "X", {})
+except ValueError as e:
+    print(f"Validation: {e}")  # "unknown node type 'spaceship'"
+
+# I/O error — can't create or open store file
+try:
+    store = GraphStore("n1", ontology, path="/read-only/store.redb")
+except IOError as e:
+    print(f"Storage: {e}")
+
+# Sync error — corrupted or incompatible payload
+try:
+    store.merge_sync_payload(b"garbage")
+except ValueError as e:
+    print(f"Bad payload: {e}")
+```
+
+| Exception | When |
+|-----------|------|
+| `ValueError` | Invalid ontology, unknown node/edge type, missing required property, bad sync payload, invalid hash |
+| `IOError` | Store file can't be created/opened, redb I/O failure |
+| `RuntimeError` | Corrupted store (no genesis), snapshot with no entries |
+
+## Persistence
+
+### In-Memory vs Persistent
+
+| Mode | Constructor | Durability | Use case |
+|------|------------|-----------|----------|
+| In-memory | `GraphStore("id", ontology)` | Lost on process exit | Tests, ephemeral processing, short-lived computations |
+| Persistent | `GraphStore("id", ontology, path="store.redb")` | Durable (redb ACID) | Production, anything that must survive restarts |
+
+### Crash Recovery
+
+Persistent stores use [redb](https://github.com/cberner/redb), which provides ACID transactions. Each write (`add_node`, `add_edge`, `update_property`) is committed to disk in its own transaction before the method returns.
+
+If the process crashes:
+- **Completed writes** are durable — they survived the crash
+- **In-flight writes** are rolled back by redb's transaction recovery on next open
+- **No manual recovery needed** — `GraphStore.open(path)` replays the entry log and rebuilds the materialized graph
+
+```python
+# Persistent store — survives crashes
+store = GraphStore("srv-1", ontology, path="/var/lib/silk/myapp.redb")
+store.add_node("n1", "entity", "Node 1", {"status": "active"})
+# At this point, n1 is on disk. Kill -9 the process — it's safe.
+
+# Reopen after crash
+store = GraphStore.open("/var/lib/silk/myapp.redb")
+assert store.get_node("n1") is not None  # still there
+```
+
+## Scalability
+
+Silk keeps the full graph in memory (OpLog + MaterializedGraph). Practical limits depend on available RAM.
+
+| Graph size | Memory (approx) | Write throughput | Full sync |
+|-----------|-----------------|-----------------|-----------|
+| 1K nodes | ~5 MB | 670K nodes/sec | 1.3 ms |
+| 10K nodes | ~50 MB | 595K nodes/sec | ~13 ms |
+| 100K nodes | ~500 MB | ~500K nodes/sec | ~130 ms (est.) |
+
+### Query Performance at Scale
+
+| Method | Complexity | Safe at 100K+ |
+|--------|-----------|--------------|
+| `get_node(id)` | O(1) hash lookup | Yes |
+| `get_edge(id)` | O(1) hash lookup | Yes |
+| `query_nodes_by_type(t)` | O(n) type index scan | Yes |
+| `outgoing_edges(id)` | O(degree) | Yes |
+| `bfs(start)` | O(reachable subgraph) | Yes — visits only what's connected |
+| `shortest_path(a, b)` | O(reachable subgraph) | Yes |
+| `all_nodes()` | O(n) — loads all into Python list | Avoid for large graphs |
+| `pattern_match(types)` | O(n * branching^depth), capped at max_results | Yes — default limit 1000 |
+
+### Recommendations
+
+- **< 100K nodes**: Silk handles this comfortably on modern hardware (< 500 MB)
+- **100K–1M nodes**: Works but monitor memory. Prefer targeted queries (`get_node`, `query_nodes_by_type`) over `all_nodes()`
+- **> 1M nodes**: Consider sharding across multiple stores with application-level routing
+
+Silk is designed for knowledge graphs (thousands to hundreds of thousands of richly-connected entities), not for big-data workloads (millions of rows with simple schemas). If you need the latter, use DuckDB or ClickHouse.
+
 ## Tutorial: Build a Distributed Note-Taking App
 
 A complete walkthrough showing how to use Silk for a real project — a note-taking app where notes sync across devices without a server.
@@ -528,6 +664,7 @@ cargo bench
 | [README.md](README.md) | Quick start, features, API reference, tutorial |
 | [WHY.md](WHY.md) | Why Silk exists, what makes it different, benchmark analysis |
 | [DESIGN.md](DESIGN.md) | Research foundations, 26 design decisions (D-001–D-026), architecture |
+| [PROTOCOL.md](PROTOCOL.md) | Sync wire format specification — for implementing peers in other languages |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, PR guidelines |
 | [`examples/`](examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology) |
