@@ -49,11 +49,7 @@ pub fn bfs(
 /// Shortest path between two nodes (unweighted BFS).
 /// Returns the path as a list of node IDs (including start and end),
 /// or None if no path exists.
-pub fn shortest_path(
-    graph: &MaterializedGraph,
-    start: &str,
-    end: &str,
-) -> Option<Vec<String>> {
+pub fn shortest_path(graph: &MaterializedGraph, start: &str, end: &str) -> Option<Vec<String>> {
     if graph.get_node(start).is_none() || graph.get_node(end).is_none() {
         return None;
     }
@@ -132,11 +128,7 @@ pub fn impact_analysis(
 
 /// Extract subgraph: all nodes and edges within N hops of a start node.
 /// Returns (node_ids, edge_ids).
-pub fn subgraph(
-    graph: &MaterializedGraph,
-    start: &str,
-    hops: usize,
-) -> (Vec<String>, Vec<String>) {
+pub fn subgraph(graph: &MaterializedGraph, start: &str, hops: usize) -> (Vec<String>, Vec<String>) {
     let mut visited_nodes = HashSet::new();
     let mut visited_edges = HashSet::new();
     let mut queue: VecDeque<(String, usize)> = VecDeque::new();
@@ -180,10 +172,7 @@ pub fn subgraph(
 /// Pattern match: find chains matching a sequence of node types connected by edges.
 /// E.g., `["signal", "rule", "plan", "action"]` finds all MAPE-K loops.
 /// Returns list of chains, each chain being a list of node_ids.
-pub fn pattern_match(
-    graph: &MaterializedGraph,
-    type_sequence: &[&str],
-) -> Vec<Vec<String>> {
+pub fn pattern_match(graph: &MaterializedGraph, type_sequence: &[&str]) -> Vec<Vec<String>> {
     if type_sequence.is_empty() {
         return vec![];
     }
@@ -220,9 +209,7 @@ pub fn pattern_match(
 
 /// Topological sort of nodes connected by directed edges.
 /// For DAGs only — returns None if a cycle is detected.
-pub fn topological_sort(
-    graph: &MaterializedGraph,
-) -> Option<Vec<String>> {
+pub fn topological_sort(graph: &MaterializedGraph) -> Option<Vec<String>> {
     let nodes = graph.all_nodes();
     let node_ids: HashSet<String> = nodes.iter().map(|n| n.node_id.clone()).collect();
 
@@ -281,30 +268,116 @@ mod tests {
     fn test_ontology() -> Ontology {
         Ontology {
             node_types: BTreeMap::from([
-                ("entity".into(), NodeTypeDef { description: None, properties: BTreeMap::new(), subtypes: None }),
-                ("signal".into(), NodeTypeDef { description: None, properties: BTreeMap::new(), subtypes: None }),
-                ("rule".into(), NodeTypeDef { description: None, properties: BTreeMap::new(), subtypes: None }),
-                ("plan".into(), NodeTypeDef { description: None, properties: BTreeMap::new(), subtypes: None }),
-                ("action".into(), NodeTypeDef { description: None, properties: BTreeMap::new(), subtypes: None }),
+                (
+                    "entity".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
+                (
+                    "signal".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
+                (
+                    "rule".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
+                (
+                    "plan".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
+                (
+                    "action".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
             ]),
             edge_types: BTreeMap::from([
-                ("DEPENDS_ON".into(), EdgeTypeDef { description: None, source_types: vec!["entity".into()], target_types: vec!["entity".into()], properties: BTreeMap::new() }),
-                ("TRIGGERS".into(), EdgeTypeDef { description: None, source_types: vec!["signal".into()], target_types: vec!["rule".into()], properties: BTreeMap::new() }),
-                ("PRODUCES".into(), EdgeTypeDef { description: None, source_types: vec!["rule".into(), "plan".into(), "action".into()], target_types: vec!["plan".into(), "action".into(), "signal".into()], properties: BTreeMap::new() }),
+                (
+                    "DEPENDS_ON".into(),
+                    EdgeTypeDef {
+                        description: None,
+                        source_types: vec!["entity".into()],
+                        target_types: vec!["entity".into()],
+                        properties: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "TRIGGERS".into(),
+                    EdgeTypeDef {
+                        description: None,
+                        source_types: vec!["signal".into()],
+                        target_types: vec!["rule".into()],
+                        properties: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "PRODUCES".into(),
+                    EdgeTypeDef {
+                        description: None,
+                        source_types: vec!["rule".into(), "plan".into(), "action".into()],
+                        target_types: vec!["plan".into(), "action".into(), "signal".into()],
+                        properties: BTreeMap::new(),
+                    },
+                ),
             ]),
         }
     }
 
     fn make_entry(op: GraphOp, clock_time: u64) -> Entry {
-        Entry::new(op, vec![], vec![], LamportClock { id: "test".into(), time: clock_time }, "test")
+        Entry::new(
+            op,
+            vec![],
+            vec![],
+            LamportClock {
+                id: "test".into(),
+                time: clock_time,
+            },
+            "test",
+        )
     }
 
     fn add_node(id: &str, ntype: &str, clock: u64) -> Entry {
-        make_entry(GraphOp::AddNode { node_id: id.into(), node_type: ntype.into(), label: id.into(), properties: BTreeMap::new(), subtype: None }, clock)
+        make_entry(
+            GraphOp::AddNode {
+                node_id: id.into(),
+                node_type: ntype.into(),
+                label: id.into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            clock,
+        )
     }
 
     fn add_edge(id: &str, etype: &str, src: &str, tgt: &str, clock: u64) -> Entry {
-        make_entry(GraphOp::AddEdge { edge_id: id.into(), edge_type: etype.into(), source_id: src.into(), target_id: tgt.into(), properties: BTreeMap::new() }, clock)
+        make_entry(
+            GraphOp::AddEdge {
+                edge_id: id.into(),
+                edge_type: etype.into(),
+                source_id: src.into(),
+                target_id: tgt.into(),
+                properties: BTreeMap::new(),
+            },
+            clock,
+        )
     }
 
     /// Build a linear chain: A → B → C → D
@@ -375,7 +448,7 @@ mod tests {
     #[test]
     fn impact_analysis_reverse_traversal() {
         let g = linear_graph(); // a → b → c → d
-        // "What depends on d?" → reverse: c, b, a
+                                // "What depends on d?" → reverse: c, b, a
         let impact = impact_analysis(&g, "d", None);
         assert!(impact.contains(&"d".to_string()));
         assert!(impact.contains(&"c".to_string()));

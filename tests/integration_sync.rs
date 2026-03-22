@@ -174,7 +174,12 @@ impl Peer {
             if merged > 0 {
                 other.rebuild_graph();
                 // Merge clock.
-                let max_remote = payload.entries.iter().map(|e| e.clock.time).max().unwrap_or(0);
+                let max_remote = payload
+                    .entries
+                    .iter()
+                    .map(|e| e.clock.time)
+                    .max()
+                    .unwrap_or(0);
                 other.clock.merge(max_remote);
             }
         }
@@ -189,7 +194,12 @@ impl Peer {
             let merged = merge_entries(&mut b.oplog, &payload_for_b.entries).unwrap();
             if merged > 0 {
                 b.rebuild_graph();
-                let max_t = payload_for_b.entries.iter().map(|e| e.clock.time).max().unwrap_or(0);
+                let max_t = payload_for_b
+                    .entries
+                    .iter()
+                    .map(|e| e.clock.time)
+                    .max()
+                    .unwrap_or(0);
                 b.clock.merge(max_t);
             }
         }
@@ -200,7 +210,12 @@ impl Peer {
             let merged = merge_entries(&mut a.oplog, &payload_for_a.entries).unwrap();
             if merged > 0 {
                 a.rebuild_graph();
-                let max_t = payload_for_a.entries.iter().map(|e| e.clock.time).max().unwrap_or(0);
+                let max_t = payload_for_a
+                    .entries
+                    .iter()
+                    .map(|e| e.clock.time)
+                    .max()
+                    .unwrap_or(0);
                 a.clock.merge(max_t);
             }
         }
@@ -276,11 +291,10 @@ fn partition_heal_three_peers() {
 
     // Phase 4: VERIFY CONVERGENCE.
     // All three should have the same nodes.
-    let expected_nodes: HashSet<String> =
-        ["shared-1", "from-a", "from-b", "from-c"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+    let expected_nodes: HashSet<String> = ["shared-1", "from-a", "from-b", "from-c"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
 
     assert_eq!(a.live_node_ids(), expected_nodes, "A missing nodes");
     assert_eq!(b.live_node_ids(), expected_nodes, "B missing nodes");
@@ -314,8 +328,22 @@ fn partition_heal_conflicting_property_updates() {
     Peer::sync_bidi(&mut a, &mut c);
 
     // Both must agree on the same value (LWW deterministic).
-    let val_a = a.graph.get_node("s1").unwrap().properties.get("status").unwrap().clone();
-    let val_c = c.graph.get_node("s1").unwrap().properties.get("status").unwrap().clone();
+    let val_a = a
+        .graph
+        .get_node("s1")
+        .unwrap()
+        .properties
+        .get("status")
+        .unwrap()
+        .clone();
+    let val_c = c
+        .graph
+        .get_node("s1")
+        .unwrap()
+        .properties
+        .get("status")
+        .unwrap()
+        .clone();
     assert_eq!(val_a, val_c, "LWW did not converge");
 }
 
@@ -332,7 +360,10 @@ fn partition_heal_add_wins_across_partition() {
 
     // PARTITION: A removes, C re-adds.
     a.remove_node("s1");
-    c.add_node("s1", BTreeMap::from([("revived".into(), Value::Bool(true))]));
+    c.add_node(
+        "s1",
+        BTreeMap::from([("revived".into(), Value::Bool(true))]),
+    );
 
     // HEAL.
     Peer::sync_bidi(&mut a, &mut c);

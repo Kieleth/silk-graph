@@ -134,7 +134,13 @@ impl Entry {
 
     /// Verify that the stored hash matches the content.
     pub fn verify_hash(&self) -> bool {
-        let computed = Self::compute_hash(&self.payload, &self.next, &self.refs, &self.clock, &self.author);
+        let computed = Self::compute_hash(
+            &self.payload,
+            &self.next,
+            &self.refs,
+            &self.clock,
+            &self.author,
+        );
         self.hash == computed
     }
 
@@ -167,36 +173,49 @@ mod tests {
     fn sample_ontology() -> Ontology {
         Ontology {
             node_types: BTreeMap::from([
-                ("entity".into(), NodeTypeDef {
-                    description: None,
-                    properties: BTreeMap::from([
-                        ("ip".into(), PropertyDef {
-                            value_type: ValueType::String,
-                            required: false,
-                            description: None,
-                        }),
-                        ("port".into(), PropertyDef {
-                            value_type: ValueType::Int,
-                            required: false,
-                            description: None,
-                        }),
-                    ]),
-                    subtypes: None,
-                }),
-                ("signal".into(), NodeTypeDef {
-                    description: None,
-                    properties: BTreeMap::new(),
-                    subtypes: None,
-                }),
+                (
+                    "entity".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::from([
+                            (
+                                "ip".into(),
+                                PropertyDef {
+                                    value_type: ValueType::String,
+                                    required: false,
+                                    description: None,
+                                },
+                            ),
+                            (
+                                "port".into(),
+                                PropertyDef {
+                                    value_type: ValueType::Int,
+                                    required: false,
+                                    description: None,
+                                },
+                            ),
+                        ]),
+                        subtypes: None,
+                    },
+                ),
+                (
+                    "signal".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
             ]),
-            edge_types: BTreeMap::from([
-                ("RUNS_ON".into(), EdgeTypeDef {
+            edge_types: BTreeMap::from([(
+                "RUNS_ON".into(),
+                EdgeTypeDef {
                     description: None,
                     source_types: vec!["entity".into()],
                     target_types: vec!["entity".into()],
                     properties: BTreeMap::new(),
-                }),
-            ]),
+                },
+            )]),
         }
     }
 
@@ -260,7 +279,13 @@ mod tests {
     #[test]
     fn entry_hash_changes_with_different_next() {
         let e1 = Entry::new(sample_op(), vec![], vec![], sample_clock(), "inst-a");
-        let e2 = Entry::new(sample_op(), vec![[0u8; 32]], vec![], sample_clock(), "inst-a");
+        let e2 = Entry::new(
+            sample_op(),
+            vec![[0u8; 32]],
+            vec![],
+            sample_clock(),
+            "inst-a",
+        );
         assert_ne!(e1.hash, e2.hash);
     }
 
@@ -279,7 +304,13 @@ mod tests {
 
     #[test]
     fn entry_roundtrip_msgpack() {
-        let entry = Entry::new(sample_op(), vec![[1u8; 32]], vec![[2u8; 32]], sample_clock(), "inst-a");
+        let entry = Entry::new(
+            sample_op(),
+            vec![[1u8; 32]],
+            vec![[2u8; 32]],
+            sample_clock(),
+            "inst-a",
+        );
         let bytes = entry.to_bytes();
         let decoded = Entry::from_bytes(&bytes).unwrap();
         assert_eq!(entry, decoded);
@@ -289,10 +320,15 @@ mod tests {
     fn entry_next_links_causal() {
         let e1 = Entry::new(sample_op(), vec![], vec![], sample_clock(), "inst-a");
         let e2 = Entry::new(
-            GraphOp::RemoveNode { node_id: "server-1".into() },
+            GraphOp::RemoveNode {
+                node_id: "server-1".into(),
+            },
             vec![e1.hash],
             vec![],
-            LamportClock { id: "inst-a".into(), time: 2 },
+            LamportClock {
+                id: "inst-a".into(),
+                time: 2,
+            },
             "inst-a",
         );
         assert_eq!(e2.next, vec![e1.hash]);
@@ -302,7 +338,9 @@ mod tests {
     #[test]
     fn graphop_all_variants_serialize() {
         let ops = vec![
-            GraphOp::DefineOntology { ontology: sample_ontology() },
+            GraphOp::DefineOntology {
+                ontology: sample_ontology(),
+            },
             sample_op(),
             GraphOp::AddEdge {
                 edge_id: "e1".into(),
@@ -316,8 +354,12 @@ mod tests {
                 key: "cpu".into(),
                 value: Value::Float(85.5),
             },
-            GraphOp::RemoveNode { node_id: "server-1".into() },
-            GraphOp::RemoveEdge { edge_id: "e1".into() },
+            GraphOp::RemoveNode {
+                node_id: "server-1".into(),
+            },
+            GraphOp::RemoveEdge {
+                edge_id: "e1".into(),
+            },
         ];
         for op in ops {
             let entry = Entry::new(op, vec![], vec![], sample_clock(), "inst-a");
@@ -331,7 +373,9 @@ mod tests {
     fn genesis_entry_contains_ontology() {
         let ont = sample_ontology();
         let genesis = Entry::new(
-            GraphOp::DefineOntology { ontology: ont.clone() },
+            GraphOp::DefineOntology {
+                ontology: ont.clone(),
+            },
             vec![],
             vec![],
             LamportClock::new("inst-a"),

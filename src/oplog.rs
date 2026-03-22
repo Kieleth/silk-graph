@@ -63,10 +63,7 @@ impl OpLog {
         // Update heads: parents are no longer heads (this entry succeeds them).
         for parent_hash in &entry.next {
             self.heads.remove(parent_hash);
-            self.children
-                .entry(*parent_hash)
-                .or_default()
-                .insert(hash);
+            self.children.entry(*parent_hash).or_default().insert(hash);
         }
 
         // The new entry is a head (no successors yet).
@@ -229,34 +226,38 @@ impl std::error::Error for OpLogError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
     use crate::clock::LamportClock;
     use crate::entry::GraphOp;
-    use crate::ontology::{Ontology, NodeTypeDef, EdgeTypeDef};
+    use crate::ontology::{EdgeTypeDef, NodeTypeDef, Ontology};
+    use std::collections::BTreeMap;
 
     fn test_ontology() -> Ontology {
         Ontology {
-            node_types: BTreeMap::from([
-                ("entity".into(), NodeTypeDef {
+            node_types: BTreeMap::from([(
+                "entity".into(),
+                NodeTypeDef {
                     description: None,
                     properties: BTreeMap::new(),
                     subtypes: None,
-                }),
-            ]),
-            edge_types: BTreeMap::from([
-                ("LINKS".into(), EdgeTypeDef {
+                },
+            )]),
+            edge_types: BTreeMap::from([(
+                "LINKS".into(),
+                EdgeTypeDef {
                     description: None,
                     source_types: vec!["entity".into()],
                     target_types: vec!["entity".into()],
                     properties: BTreeMap::new(),
-                }),
-            ]),
+                },
+            )]),
         }
     }
 
     fn genesis() -> Entry {
         Entry::new(
-            GraphOp::DefineOntology { ontology: test_ontology() },
+            GraphOp::DefineOntology {
+                ontology: test_ontology(),
+            },
             vec![],
             vec![],
             LamportClock::new("test"),
@@ -279,7 +280,10 @@ mod tests {
             op,
             next,
             vec![],
-            LamportClock { id: "test".into(), time: clock_time },
+            LamportClock {
+                id: "test".into(),
+                time: clock_time,
+            },
             "test",
         )
     }

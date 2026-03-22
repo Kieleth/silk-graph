@@ -167,10 +167,7 @@ impl MaterializedGraph {
     /// Query all live nodes of a given type.
     pub fn nodes_by_type(&self, node_type: &str) -> Vec<&Node> {
         match self.by_type.get(node_type) {
-            Some(ids) => ids
-                .iter()
-                .filter_map(|id| self.get_node(id))
-                .collect(),
+            Some(ids) => ids.iter().filter_map(|id| self.get_node(id)).collect(),
             None => vec![],
         }
     }
@@ -225,9 +222,7 @@ impl MaterializedGraph {
         self.edges
             .values()
             .filter(|e| {
-                !e.tombstoned
-                    && self.is_node_live(&e.source_id)
-                    && self.is_node_live(&e.target_id)
+                !e.tombstoned && self.is_node_live(&e.source_id) && self.is_node_live(&e.target_id)
             })
             .collect()
     }
@@ -275,7 +270,9 @@ impl MaterializedGraph {
             // Per-property LWW: each property from add_node competes
             // only with writes to the same key.
             for (k, v) in properties {
-                let dominated = existing.property_clocks.get(k)
+                let dominated = existing
+                    .property_clocks
+                    .get(k)
                     .map(|c| clock_wins(clock, c))
                     .unwrap_or(true);
                 if dominated {
@@ -284,7 +281,8 @@ impl MaterializedGraph {
                 }
             }
         } else {
-            let property_clocks: HashMap<String, LamportClock> = properties.keys()
+            let property_clocks: HashMap<String, LamportClock> = properties
+                .keys()
                 .map(|k| (k.clone(), clock.clone()))
                 .collect();
             let node = Node {
@@ -326,7 +324,9 @@ impl MaterializedGraph {
             }
             // Per-property LWW for edge properties.
             for (k, v) in properties {
-                let dominated = existing.property_clocks.get(k)
+                let dominated = existing
+                    .property_clocks
+                    .get(k)
                     .map(|c| clock_wins(clock, c))
                     .unwrap_or(true);
                 if dominated {
@@ -335,7 +335,8 @@ impl MaterializedGraph {
                 }
             }
         } else {
-            let property_clocks: HashMap<String, LamportClock> = properties.keys()
+            let property_clocks: HashMap<String, LamportClock> = properties
+                .keys()
                 .map(|k| (k.clone(), clock.clone()))
                 .collect();
             let edge = Edge {
@@ -371,7 +372,9 @@ impl MaterializedGraph {
         // Try node first, then edge. Per-property LWW: each key competes
         // only with other writes to the same key, not the entire entity.
         if let Some(node) = self.nodes.get_mut(entity_id) {
-            let dominated = node.property_clocks.get(key)
+            let dominated = node
+                .property_clocks
+                .get(key)
                 .map(|c| clock_wins(clock, c))
                 .unwrap_or(true);
             if dominated {
@@ -383,7 +386,9 @@ impl MaterializedGraph {
                 node.last_clock = clock.clone();
             }
         } else if let Some(edge) = self.edges.get_mut(entity_id) {
-            let dominated = edge.property_clocks.get(key)
+            let dominated = edge
+                .property_clocks
+                .get(key)
                 .map(|c| clock_wins(clock, c))
                 .unwrap_or(true);
             if dominated {
@@ -445,30 +450,42 @@ mod tests {
     fn test_ontology() -> Ontology {
         Ontology {
             node_types: BTreeMap::from([
-                ("entity".into(), NodeTypeDef {
-                    description: None,
-                    properties: BTreeMap::new(),
-                    subtypes: None,
-                }),
-                ("signal".into(), NodeTypeDef {
-                    description: None,
-                    properties: BTreeMap::new(),
-                    subtypes: None,
-                }),
+                (
+                    "entity".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
+                (
+                    "signal".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
             ]),
             edge_types: BTreeMap::from([
-                ("RUNS_ON".into(), EdgeTypeDef {
-                    description: None,
-                    source_types: vec!["entity".into()],
-                    target_types: vec!["entity".into()],
-                    properties: BTreeMap::new(),
-                }),
-                ("OBSERVES".into(), EdgeTypeDef {
-                    description: None,
-                    source_types: vec!["signal".into()],
-                    target_types: vec!["entity".into()],
-                    properties: BTreeMap::new(),
-                }),
+                (
+                    "RUNS_ON".into(),
+                    EdgeTypeDef {
+                        description: None,
+                        source_types: vec!["entity".into()],
+                        target_types: vec!["entity".into()],
+                        properties: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "OBSERVES".into(),
+                    EdgeTypeDef {
+                        description: None,
+                        source_types: vec!["signal".into()],
+                        target_types: vec!["entity".into()],
+                        properties: BTreeMap::new(),
+                    },
+                ),
             ]),
         }
     }
@@ -478,7 +495,10 @@ mod tests {
             op,
             vec![],
             vec![],
-            LamportClock { id: author.into(), time: clock_time },
+            LamportClock {
+                id: author.into(),
+                time: clock_time,
+            },
             author,
         )
     }
@@ -496,30 +516,55 @@ mod tests {
                 properties: BTreeMap::from([("ip".into(), Value::String("10.0.0.1".into()))]),
                 subtype: None,
             },
-            1, "inst-a",
+            1,
+            "inst-a",
         );
         g.apply(&entry);
 
         let node = g.get_node("server-1").unwrap();
         assert_eq!(node.node_type, "entity");
         assert_eq!(node.label, "Server 1");
-        assert_eq!(node.properties.get("ip"), Some(&Value::String("10.0.0.1".into())));
+        assert_eq!(
+            node.properties.get("ip"),
+            Some(&Value::String("10.0.0.1".into()))
+        );
     }
 
     #[test]
     fn add_edge_creates_adjacency() {
         let mut g = MaterializedGraph::new(test_ontology());
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "svc".into(), node_type: "entity".into(), label: "svc".into(), properties: BTreeMap::new(), subtype: None },
-            1, "inst-a",
+            GraphOp::AddNode {
+                node_id: "svc".into(),
+                node_type: "entity".into(),
+                label: "svc".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            1,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "srv".into(), node_type: "entity".into(), label: "srv".into(), properties: BTreeMap::new(), subtype: None },
-            2, "inst-a",
+            GraphOp::AddNode {
+                node_id: "srv".into(),
+                node_type: "entity".into(),
+                label: "srv".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            2,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::AddEdge { edge_id: "e1".into(), edge_type: "RUNS_ON".into(), source_id: "svc".into(), target_id: "srv".into(), properties: BTreeMap::new() },
-            3, "inst-a",
+            GraphOp::AddEdge {
+                edge_id: "e1".into(),
+                edge_type: "RUNS_ON".into(),
+                source_id: "svc".into(),
+                target_id: "srv".into(),
+                properties: BTreeMap::new(),
+            },
+            3,
+            "inst-a",
         ));
 
         // Both endpoints know about the edge.
@@ -538,12 +583,24 @@ mod tests {
     fn update_property_reflected() {
         let mut g = MaterializedGraph::new(test_ontology());
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "s1".into(), node_type: "entity".into(), label: "s1".into(), properties: BTreeMap::new(), subtype: None },
-            1, "inst-a",
+            GraphOp::AddNode {
+                node_id: "s1".into(),
+                node_type: "entity".into(),
+                label: "s1".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            1,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::UpdateProperty { entity_id: "s1".into(), key: "cpu".into(), value: Value::Float(85.5) },
-            2, "inst-a",
+            GraphOp::UpdateProperty {
+                entity_id: "s1".into(),
+                key: "cpu".into(),
+                value: Value::Float(85.5),
+            },
+            2,
+            "inst-a",
         ));
 
         let node = g.get_node("s1").unwrap();
@@ -554,23 +611,47 @@ mod tests {
     fn remove_node_cascades_edges() {
         let mut g = MaterializedGraph::new(test_ontology());
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "a".into(), node_type: "entity".into(), label: "a".into(), properties: BTreeMap::new(), subtype: None },
-            1, "inst-a",
+            GraphOp::AddNode {
+                node_id: "a".into(),
+                node_type: "entity".into(),
+                label: "a".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            1,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "b".into(), node_type: "entity".into(), label: "b".into(), properties: BTreeMap::new(), subtype: None },
-            2, "inst-a",
+            GraphOp::AddNode {
+                node_id: "b".into(),
+                node_type: "entity".into(),
+                label: "b".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            2,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::AddEdge { edge_id: "e1".into(), edge_type: "RUNS_ON".into(), source_id: "a".into(), target_id: "b".into(), properties: BTreeMap::new() },
-            3, "inst-a",
+            GraphOp::AddEdge {
+                edge_id: "e1".into(),
+                edge_type: "RUNS_ON".into(),
+                source_id: "a".into(),
+                target_id: "b".into(),
+                properties: BTreeMap::new(),
+            },
+            3,
+            "inst-a",
         ));
         assert_eq!(g.all_edges().len(), 1);
 
         // Remove node 'b' — edge becomes invisible (dangling target).
         g.apply(&make_entry(
-            GraphOp::RemoveNode { node_id: "b".into() },
-            4, "inst-a",
+            GraphOp::RemoveNode {
+                node_id: "b".into(),
+            },
+            4,
+            "inst-a",
         ));
         assert!(g.get_node("b").is_none());
         // Edge still exists but not returned by all_edges (target tombstoned).
@@ -583,20 +664,44 @@ mod tests {
     fn remove_edge_preserves_nodes() {
         let mut g = MaterializedGraph::new(test_ontology());
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "a".into(), node_type: "entity".into(), label: "a".into(), properties: BTreeMap::new(), subtype: None },
-            1, "inst-a",
+            GraphOp::AddNode {
+                node_id: "a".into(),
+                node_type: "entity".into(),
+                label: "a".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            1,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "b".into(), node_type: "entity".into(), label: "b".into(), properties: BTreeMap::new(), subtype: None },
-            2, "inst-a",
+            GraphOp::AddNode {
+                node_id: "b".into(),
+                node_type: "entity".into(),
+                label: "b".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            2,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::AddEdge { edge_id: "e1".into(), edge_type: "RUNS_ON".into(), source_id: "a".into(), target_id: "b".into(), properties: BTreeMap::new() },
-            3, "inst-a",
+            GraphOp::AddEdge {
+                edge_id: "e1".into(),
+                edge_type: "RUNS_ON".into(),
+                source_id: "a".into(),
+                target_id: "b".into(),
+                properties: BTreeMap::new(),
+            },
+            3,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::RemoveEdge { edge_id: "e1".into() },
-            4, "inst-a",
+            GraphOp::RemoveEdge {
+                edge_id: "e1".into(),
+            },
+            4,
+            "inst-a",
         ));
 
         // Nodes still exist.
@@ -611,16 +716,37 @@ mod tests {
     fn query_by_type_filters() {
         let mut g = MaterializedGraph::new(test_ontology());
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "s1".into(), node_type: "entity".into(), label: "s1".into(), properties: BTreeMap::new(), subtype: None },
-            1, "inst-a",
+            GraphOp::AddNode {
+                node_id: "s1".into(),
+                node_type: "entity".into(),
+                label: "s1".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            1,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "s2".into(), node_type: "entity".into(), label: "s2".into(), properties: BTreeMap::new(), subtype: None },
-            2, "inst-a",
+            GraphOp::AddNode {
+                node_id: "s2".into(),
+                node_type: "entity".into(),
+                label: "s2".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            2,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "alert".into(), node_type: "signal".into(), label: "alert".into(), properties: BTreeMap::new(), subtype: None },
-            3, "inst-a",
+            GraphOp::AddNode {
+                node_id: "alert".into(),
+                node_type: "signal".into(),
+                label: "alert".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            3,
+            "inst-a",
         ));
 
         let entities = g.nodes_by_type("entity");
@@ -634,12 +760,26 @@ mod tests {
     fn query_by_property_filters() {
         let mut g = MaterializedGraph::new(test_ontology());
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "s1".into(), node_type: "entity".into(), label: "s1".into(), properties: BTreeMap::from([("status".into(), Value::String("alive".into()))]), subtype: None },
-            1, "inst-a",
+            GraphOp::AddNode {
+                node_id: "s1".into(),
+                node_type: "entity".into(),
+                label: "s1".into(),
+                properties: BTreeMap::from([("status".into(), Value::String("alive".into()))]),
+                subtype: None,
+            },
+            1,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "s2".into(), node_type: "entity".into(), label: "s2".into(), properties: BTreeMap::from([("status".into(), Value::String("dead".into()))]), subtype: None },
-            2, "inst-a",
+            GraphOp::AddNode {
+                node_id: "s2".into(),
+                node_type: "entity".into(),
+                label: "s2".into(),
+                properties: BTreeMap::from([("status".into(), Value::String("dead".into()))]),
+                subtype: None,
+            },
+            2,
+            "inst-a",
         ));
 
         let alive = g.nodes_by_property("status", &Value::String("alive".into()));
@@ -652,10 +792,46 @@ mod tests {
         // Build graph incrementally.
         let mut g1 = MaterializedGraph::new(test_ontology());
         let entries = vec![
-            make_entry(GraphOp::DefineOntology { ontology: test_ontology() }, 0, "inst-a"),
-            make_entry(GraphOp::AddNode { node_id: "a".into(), node_type: "entity".into(), label: "a".into(), properties: BTreeMap::new(), subtype: None }, 1, "inst-a"),
-            make_entry(GraphOp::AddNode { node_id: "b".into(), node_type: "entity".into(), label: "b".into(), properties: BTreeMap::new(), subtype: None }, 2, "inst-a"),
-            make_entry(GraphOp::AddEdge { edge_id: "e1".into(), edge_type: "RUNS_ON".into(), source_id: "a".into(), target_id: "b".into(), properties: BTreeMap::new() }, 3, "inst-a"),
+            make_entry(
+                GraphOp::DefineOntology {
+                    ontology: test_ontology(),
+                },
+                0,
+                "inst-a",
+            ),
+            make_entry(
+                GraphOp::AddNode {
+                    node_id: "a".into(),
+                    node_type: "entity".into(),
+                    label: "a".into(),
+                    properties: BTreeMap::new(),
+                    subtype: None,
+                },
+                1,
+                "inst-a",
+            ),
+            make_entry(
+                GraphOp::AddNode {
+                    node_id: "b".into(),
+                    node_type: "entity".into(),
+                    label: "b".into(),
+                    properties: BTreeMap::new(),
+                    subtype: None,
+                },
+                2,
+                "inst-a",
+            ),
+            make_entry(
+                GraphOp::AddEdge {
+                    edge_id: "e1".into(),
+                    edge_type: "RUNS_ON".into(),
+                    source_id: "a".into(),
+                    target_id: "b".into(),
+                    properties: BTreeMap::new(),
+                },
+                3,
+                "inst-a",
+            ),
         ];
         for e in &entries {
             g1.apply(e);
@@ -679,12 +855,62 @@ mod tests {
     #[test]
     fn incremental_equals_full() {
         let entries = vec![
-            make_entry(GraphOp::DefineOntology { ontology: test_ontology() }, 0, "inst-a"),
-            make_entry(GraphOp::AddNode { node_id: "a".into(), node_type: "entity".into(), label: "a".into(), properties: BTreeMap::from([("x".into(), Value::Int(1))]), subtype: None }, 1, "inst-a"),
-            make_entry(GraphOp::UpdateProperty { entity_id: "a".into(), key: "x".into(), value: Value::Int(2) }, 2, "inst-a"),
-            make_entry(GraphOp::AddNode { node_id: "b".into(), node_type: "entity".into(), label: "b".into(), properties: BTreeMap::new(), subtype: None }, 3, "inst-a"),
-            make_entry(GraphOp::AddEdge { edge_id: "e1".into(), edge_type: "RUNS_ON".into(), source_id: "a".into(), target_id: "b".into(), properties: BTreeMap::new() }, 4, "inst-a"),
-            make_entry(GraphOp::RemoveEdge { edge_id: "e1".into() }, 5, "inst-a"),
+            make_entry(
+                GraphOp::DefineOntology {
+                    ontology: test_ontology(),
+                },
+                0,
+                "inst-a",
+            ),
+            make_entry(
+                GraphOp::AddNode {
+                    node_id: "a".into(),
+                    node_type: "entity".into(),
+                    label: "a".into(),
+                    properties: BTreeMap::from([("x".into(), Value::Int(1))]),
+                    subtype: None,
+                },
+                1,
+                "inst-a",
+            ),
+            make_entry(
+                GraphOp::UpdateProperty {
+                    entity_id: "a".into(),
+                    key: "x".into(),
+                    value: Value::Int(2),
+                },
+                2,
+                "inst-a",
+            ),
+            make_entry(
+                GraphOp::AddNode {
+                    node_id: "b".into(),
+                    node_type: "entity".into(),
+                    label: "b".into(),
+                    properties: BTreeMap::new(),
+                    subtype: None,
+                },
+                3,
+                "inst-a",
+            ),
+            make_entry(
+                GraphOp::AddEdge {
+                    edge_id: "e1".into(),
+                    edge_type: "RUNS_ON".into(),
+                    source_id: "a".into(),
+                    target_id: "b".into(),
+                    properties: BTreeMap::new(),
+                },
+                4,
+                "inst-a",
+            ),
+            make_entry(
+                GraphOp::RemoveEdge {
+                    edge_id: "e1".into(),
+                },
+                5,
+                "inst-a",
+            ),
         ];
 
         // Incremental.
@@ -699,8 +925,14 @@ mod tests {
         g_full.rebuild(&refs);
 
         // Property should be 2 (updated).
-        assert_eq!(g_inc.get_node("a").unwrap().properties.get("x"), Some(&Value::Int(2)));
-        assert_eq!(g_full.get_node("a").unwrap().properties.get("x"), Some(&Value::Int(2)));
+        assert_eq!(
+            g_inc.get_node("a").unwrap().properties.get("x"),
+            Some(&Value::Int(2))
+        );
+        assert_eq!(
+            g_full.get_node("a").unwrap().properties.get("x"),
+            Some(&Value::Int(2))
+        );
         // Edge should be removed.
         assert_eq!(g_inc.all_edges().len(), 0);
         assert_eq!(g_full.all_edges().len(), 0);
@@ -711,18 +943,35 @@ mod tests {
         // Two instances update the same property — higher clock wins.
         let mut g = MaterializedGraph::new(test_ontology());
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "s1".into(), node_type: "entity".into(), label: "s1".into(), properties: BTreeMap::new(), subtype: None },
-            1, "inst-a",
+            GraphOp::AddNode {
+                node_id: "s1".into(),
+                node_type: "entity".into(),
+                label: "s1".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            1,
+            "inst-a",
         ));
         // inst-a sets status=alive at time 2
         g.apply(&make_entry(
-            GraphOp::UpdateProperty { entity_id: "s1".into(), key: "status".into(), value: Value::String("alive".into()) },
-            2, "inst-a",
+            GraphOp::UpdateProperty {
+                entity_id: "s1".into(),
+                key: "status".into(),
+                value: Value::String("alive".into()),
+            },
+            2,
+            "inst-a",
         ));
         // inst-b sets status=dead at time 3 — wins (higher clock)
         g.apply(&make_entry(
-            GraphOp::UpdateProperty { entity_id: "s1".into(), key: "status".into(), value: Value::String("dead".into()) },
-            3, "inst-b",
+            GraphOp::UpdateProperty {
+                entity_id: "s1".into(),
+                key: "status".into(),
+                value: Value::String("dead".into()),
+            },
+            3,
+            "inst-b",
         ));
         assert_eq!(
             g.get_node("s1").unwrap().properties.get("status"),
@@ -735,19 +984,39 @@ mod tests {
         // Same clock time — higher instance ID wins.
         let mut g = MaterializedGraph::new(test_ontology());
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "s1".into(), node_type: "entity".into(), label: "s1".into(), properties: BTreeMap::new(), subtype: None },
-            1, "inst-a",
+            GraphOp::AddNode {
+                node_id: "s1".into(),
+                node_type: "entity".into(),
+                label: "s1".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            1,
+            "inst-a",
         ));
         // Both at time 5, inst-b > inst-a lexicographically.
         g.apply(&make_entry(
-            GraphOp::UpdateProperty { entity_id: "s1".into(), key: "x".into(), value: Value::Int(1) },
-            5, "inst-a",
+            GraphOp::UpdateProperty {
+                entity_id: "s1".into(),
+                key: "x".into(),
+                value: Value::Int(1),
+            },
+            5,
+            "inst-a",
         ));
         g.apply(&make_entry(
-            GraphOp::UpdateProperty { entity_id: "s1".into(), key: "x".into(), value: Value::Int(2) },
-            5, "inst-b",
+            GraphOp::UpdateProperty {
+                entity_id: "s1".into(),
+                key: "x".into(),
+                value: Value::Int(2),
+            },
+            5,
+            "inst-b",
         ));
-        assert_eq!(g.get_node("s1").unwrap().properties.get("x"), Some(&Value::Int(2)));
+        assert_eq!(
+            g.get_node("s1").unwrap().properties.get("x"),
+            Some(&Value::Int(2))
+        );
     }
 
     #[test]
@@ -767,7 +1036,8 @@ mod tests {
                 ]),
                 subtype: None,
             },
-            1, "inst-a",
+            1,
+            "inst-a",
         ));
         // inst-a updates "x" at time 3
         g.apply(&make_entry(
@@ -776,7 +1046,8 @@ mod tests {
                 key: "x".into(),
                 value: Value::Int(42),
             },
-            3, "inst-a",
+            3,
+            "inst-a",
         ));
         // inst-b updates "y" at time 3 (concurrent, different property)
         g.apply(&make_entry(
@@ -785,15 +1056,22 @@ mod tests {
                 key: "y".into(),
                 value: Value::Int(99),
             },
-            3, "inst-b",
+            3,
+            "inst-b",
         ));
 
         let node = g.get_node("s1").unwrap();
         // Both updates must be applied — no conflict.
-        assert_eq!(node.properties.get("x"), Some(&Value::Int(42)),
-            "update to 'x' must not be rejected by concurrent update to 'y'");
-        assert_eq!(node.properties.get("y"), Some(&Value::Int(99)),
-            "update to 'y' must not be rejected by concurrent update to 'x'");
+        assert_eq!(
+            node.properties.get("x"),
+            Some(&Value::Int(42)),
+            "update to 'x' must not be rejected by concurrent update to 'y'"
+        );
+        assert_eq!(
+            node.properties.get("y"),
+            Some(&Value::Int(99)),
+            "update to 'y' must not be rejected by concurrent update to 'x'"
+        );
     }
 
     #[test]
@@ -811,7 +1089,8 @@ mod tests {
                 ]),
                 subtype: None,
             },
-            1, "inst-a",
+            1,
+            "inst-a",
         ));
         // Apply inst-b first this time
         g.apply(&make_entry(
@@ -820,7 +1099,8 @@ mod tests {
                 key: "y".into(),
                 value: Value::Int(99),
             },
-            3, "inst-b",
+            3,
+            "inst-b",
         ));
         g.apply(&make_entry(
             GraphOp::UpdateProperty {
@@ -828,7 +1108,8 @@ mod tests {
                 key: "x".into(),
                 value: Value::Int(42),
             },
-            3, "inst-a",
+            3,
+            "inst-a",
         ));
 
         let node = g.get_node("s1").unwrap();
@@ -841,20 +1122,37 @@ mod tests {
         // Concurrent add + remove → node should exist (add-wins).
         let mut g = MaterializedGraph::new(test_ontology());
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "s1".into(), node_type: "entity".into(), label: "s1".into(), properties: BTreeMap::new(), subtype: None },
-            1, "inst-a",
+            GraphOp::AddNode {
+                node_id: "s1".into(),
+                node_type: "entity".into(),
+                label: "s1".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            1,
+            "inst-a",
         ));
         // Remove at time 2.
         g.apply(&make_entry(
-            GraphOp::RemoveNode { node_id: "s1".into() },
-            2, "inst-a",
+            GraphOp::RemoveNode {
+                node_id: "s1".into(),
+            },
+            2,
+            "inst-a",
         ));
         assert!(g.get_node("s1").is_none());
 
         // Re-add at time 3 (add-wins — resurrects).
         g.apply(&make_entry(
-            GraphOp::AddNode { node_id: "s1".into(), node_type: "entity".into(), label: "s1 v2".into(), properties: BTreeMap::new(), subtype: None },
-            3, "inst-b",
+            GraphOp::AddNode {
+                node_id: "s1".into(),
+                node_type: "entity".into(),
+                label: "s1 v2".into(),
+                properties: BTreeMap::new(),
+                subtype: None,
+            },
+            3,
+            "inst-b",
         ));
         let node = g.get_node("s1").unwrap();
         assert_eq!(node.label, "s1 v2");

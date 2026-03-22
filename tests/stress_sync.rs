@@ -89,7 +89,12 @@ impl Peer {
                 let all = dst.oplog.entries_since(None);
                 let refs: Vec<&Entry> = all.iter().copied().collect();
                 dst.graph.rebuild(&refs);
-                let max_t = payload.entries.iter().map(|e| e.clock.time).max().unwrap_or(0);
+                let max_t = payload
+                    .entries
+                    .iter()
+                    .map(|e| e.clock.time)
+                    .max()
+                    .unwrap_or(0);
                 dst.clock.merge(max_t);
             }
         }
@@ -154,7 +159,8 @@ fn five_peer_mesh_convergence() {
     for (i, peer) in peers.iter().enumerate() {
         let nodes = peer.live_node_ids();
         assert_eq!(
-            nodes, expected,
+            nodes,
+            expected,
             "Peer p{i} has {} nodes, expected 50",
             nodes.len()
         );
@@ -203,7 +209,8 @@ fn ten_peer_chain_convergence() {
     for (i, peer) in peers.iter().enumerate() {
         let nodes = peer.live_node_ids();
         assert_eq!(
-            nodes, expected,
+            nodes,
+            expected,
             "Peer p{i} has {} nodes, expected 50",
             nodes.len()
         );
@@ -265,7 +272,8 @@ fn chaos_random_ops_random_sync() {
     for (i, peer) in peers.iter().enumerate() {
         let nodes = peer.live_node_ids();
         assert_eq!(
-            nodes, expected,
+            nodes,
+            expected,
             "Peer p{i} has {} nodes, expected 200",
             nodes.len()
         );
@@ -275,11 +283,7 @@ fn chaos_random_ops_random_sync() {
     let len_0 = peers[0].oplog.len();
     let heads_0: HashSet<Hash> = peers[0].oplog.heads().into_iter().collect();
     for (i, peer) in peers.iter().enumerate().skip(1) {
-        assert_eq!(
-            peer.oplog.len(),
-            len_0,
-            "Peer p{i} entry count diverges"
-        );
+        assert_eq!(peer.oplog.len(), len_0, "Peer p{i} entry count diverges");
         let heads_i: HashSet<Hash> = peer.oplog.heads().into_iter().collect();
         assert_eq!(heads_i, heads_0, "Peer p{i} heads diverge");
     }

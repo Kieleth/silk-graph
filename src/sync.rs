@@ -89,11 +89,7 @@ impl SyncPayload {
 impl Snapshot {
     /// Build a full snapshot from an op log.
     pub fn from_oplog(oplog: &OpLog) -> Self {
-        let entries: Vec<Entry> = oplog
-            .entries_since(None)
-            .into_iter()
-            .cloned()
-            .collect();
+        let entries: Vec<Entry> = oplog.entries_since(None).into_iter().cloned().collect();
         Self { entries }
     }
 
@@ -672,8 +668,14 @@ mod tests {
 
         // All non-genesis entries must be sent: e1, e2, e3.
         // Phase 1.5 forces e3 (our head), Phase 2 recovers e2 and e1.
-        assert!(sent_hashes.contains(&e1.hash), "e1 must be recovered by ancestor closure");
-        assert!(sent_hashes.contains(&e2.hash), "e2 must be recovered by ancestor closure");
+        assert!(
+            sent_hashes.contains(&e1.hash),
+            "e1 must be recovered by ancestor closure"
+        );
+        assert!(
+            sent_hashes.contains(&e2.hash),
+            "e2 must be recovered by ancestor closure"
+        );
         assert!(sent_hashes.contains(&e3.hash), "e3 must be forced as head");
     }
 

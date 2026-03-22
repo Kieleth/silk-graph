@@ -52,12 +52,8 @@ impl Backend {
 
     fn append(&mut self, entry: Entry) -> Result<bool, String> {
         match self {
-            Backend::Memory(oplog) => oplog
-                .append(entry)
-                .map_err(|e| e.to_string()),
-            Backend::Persistent(store) => store
-                .append(entry)
-                .map_err(|e| e.to_string()),
+            Backend::Memory(oplog) => oplog.append(entry).map_err(|e| e.to_string()),
+            Backend::Persistent(store) => store.append(entry).map_err(|e| e.to_string()),
         }
     }
 }
@@ -85,7 +81,9 @@ impl PyGraphStore {
         clock.tick();
 
         let genesis = Entry::new(
-            GraphOp::DefineOntology { ontology: ontology.clone() },
+            GraphOp::DefineOntology {
+                ontology: ontology.clone(),
+            },
             vec![],
             vec![],
             clock.clone(),
@@ -97,16 +95,17 @@ impl PyGraphStore {
 
         let backend = match path {
             Some(p) => {
-                let store = Store::open(&PathBuf::from(p), Some(genesis)).map_err(|e| {
-                    pyo3::exceptions::PyIOError::new_err(e.to_string())
-                })?;
+                let store = Store::open(&PathBuf::from(p), Some(genesis))
+                    .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
                 // Rebuild materialized graph from existing entries (handles reopen).
                 let all = store.oplog.entries_since(None);
                 let refs: Vec<&Entry> = all.iter().copied().collect();
                 graph.rebuild(&refs);
                 for entry in &all {
                     match &entry.payload {
-                        GraphOp::AddNode { node_id, node_type, .. } => {
+                        GraphOp::AddNode {
+                            node_id, node_type, ..
+                        } => {
                             node_types.insert(node_id.clone(), node_type.clone());
                         }
                         GraphOp::RemoveNode { node_id } => {
@@ -142,28 +141,31 @@ impl PyGraphStore {
     /// Open an existing persistent store (no genesis needed).
     #[staticmethod]
     fn open(path: String) -> PyResult<Self> {
-        let store = Store::open(&PathBuf::from(&path), None).map_err(|e| {
-            pyo3::exceptions::PyIOError::new_err(e.to_string())
-        })?;
+        let store = Store::open(&PathBuf::from(&path), None)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
         // Extract ontology from genesis entry.
         let oplog = &store.oplog;
         let all = oplog.entries_since(None);
-        let genesis = all.first().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("store has no entries")
-        })?;
+        let genesis = all
+            .first()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("store has no entries"))?;
         let ontology = match &genesis.payload {
             GraphOp::DefineOntology { ontology } => ontology.clone(),
-            _ => return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "first entry is not DefineOntology",
-            )),
+            _ => {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "first entry is not DefineOntology",
+                ))
+            }
         };
 
         // Reconstruct node_types from replaying ops.
         let mut node_types = HashMap::new();
         for entry in &all {
             match &entry.payload {
-                GraphOp::AddNode { node_id, node_type, .. } => {
+                GraphOp::AddNode {
+                    node_id, node_type, ..
+                } => {
                     node_types.insert(node_id.clone(), node_type.clone());
                 }
                 GraphOp::RemoveNode { node_id } => {
@@ -205,9 +207,9 @@ impl PyGraphStore {
     ) -> PyResult<String> {
         let props = convert_props(properties)?;
 
-        self.ontology.validate_node(&node_type, subtype.as_deref(), &props).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(e.to_string())
-        })?;
+        self.ontology
+            .validate_node(&node_type, subtype.as_deref(), &props)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
         let op = GraphOp::AddNode {
             node_id: node_id.clone(),
@@ -244,9 +246,9 @@ impl PyGraphStore {
             ))
         })?;
 
-        self.ontology.validate_edge(&edge_type, source_type, target_type, &props).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(e.to_string())
-        })?;
+        self.ontology
+            .validate_edge(&edge_type, source_type, target_type, &props)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
         let op = GraphOp::AddEdge {
             edge_id,
@@ -288,14 +290,21 @@ impl PyGraphStore {
     /// Get an entry by hex hash. Returns None if not found.
     fn get(&self, hex_hash: &str) -> PyResult<Option<PyObject>> {
         let hash = parse_hex_hash(hex_hash)?;
-        Ok(self.backend.oplog().get(&hash).map(|e| {
-            Python::with_gil(|py| entry_to_pydict(py, e).unwrap().into())
-        }))
+        Ok(self
+            .backend
+            .oplog()
+            .get(&hash)
+            .map(|e| Python::with_gil(|py| entry_to_pydict(py, e).unwrap().into())))
     }
 
     /// Return current DAG head hashes as list of hex strings.
     fn heads(&self) -> Vec<String> {
-        self.backend.oplog().heads().iter().map(|h| hex::encode(h)).collect()
+        self.backend
+            .oplog()
+            .heads()
+            .iter()
+            .map(|h| hex::encode(h))
+            .collect()
     }
 
     /// Total number of entries in the store (including genesis).
@@ -315,9 +324,8 @@ impl PyGraphStore {
 
     /// Return the ontology as a JSON string.
     fn ontology_json(&self) -> PyResult<String> {
-        serde_json::to_string(&self.ontology).map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-        })
+        serde_json::to_string(&self.ontology)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Return the list of valid node types.
@@ -339,24 +347,25 @@ impl PyGraphStore {
             None => None,
         };
         let entries = self.backend.oplog().entries_since(hash.as_ref());
-        Python::with_gil(|py| {
-            entries
-                .iter()
-                .map(|e| entry_to_pydict(py, e))
-                .collect()
-        })
+        Python::with_gil(|py| entries.iter().map(|e| entry_to_pydict(py, e)).collect())
     }
 
     // -- Graph queries --
 
     /// Get a node by ID. Returns dict or None.
     fn get_node(&self, py: Python<'_>, node_id: &str) -> PyResult<Option<PyObject>> {
-        Ok(self.graph.get_node(node_id).map(|n| node_to_pydict(py, n).unwrap()))
+        Ok(self
+            .graph
+            .get_node(node_id)
+            .map(|n| node_to_pydict(py, n).unwrap()))
     }
 
     /// Get an edge by ID. Returns dict or None.
     fn get_edge(&self, py: Python<'_>, edge_id: &str) -> PyResult<Option<PyObject>> {
-        Ok(self.graph.get_edge(edge_id).map(|e| edge_to_pydict(py, e).unwrap()))
+        Ok(self
+            .graph
+            .get_edge(edge_id)
+            .map(|e| edge_to_pydict(py, e).unwrap()))
     }
 
     /// Query nodes by type. Returns list of node dicts.
@@ -378,7 +387,12 @@ impl PyGraphStore {
     }
 
     /// Query nodes by property value. Returns list of node dicts.
-    fn query_nodes_by_property(&self, py: Python<'_>, key: &str, value: &Bound<'_, pyo3::PyAny>) -> PyResult<Vec<PyObject>> {
+    fn query_nodes_by_property(
+        &self,
+        py: Python<'_>,
+        key: &str,
+        value: &Bound<'_, pyo3::PyAny>,
+    ) -> PyResult<Vec<PyObject>> {
         let val = py_to_value(value)?;
         self.graph
             .nodes_by_property(key, &val)
@@ -425,7 +439,11 @@ impl PyGraphStore {
 
     /// Neighbor node IDs (via outgoing edges).
     fn neighbors(&self, node_id: &str) -> Vec<String> {
-        self.graph.neighbors(node_id).iter().map(|s| s.to_string()).collect()
+        self.graph
+            .neighbors(node_id)
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     // -- Engine methods --
@@ -486,8 +504,7 @@ impl PyGraphStore {
     ///
     /// Send this to a peer so they can compute which entries you're missing.
     fn generate_sync_offer(&self) -> PyResult<Vec<u8>> {
-        let offer =
-            crate::sync::SyncOffer::from_oplog(self.backend.oplog(), self.clock.time);
+        let offer = crate::sync::SyncOffer::from_oplog(self.backend.oplog(), self.clock.time);
         Ok(offer.to_bytes())
     }
 
@@ -630,7 +647,9 @@ impl PyGraphStore {
     /// Merge a vec of entries into the store, updating the materialized graph.
     fn merge_entries_vec(&mut self, entries: &[Entry]) -> PyResult<usize> {
         // Collect existing hashes before merge so we can identify new entries.
-        let existing: HashSet<Hash> = self.backend.oplog()
+        let existing: HashSet<Hash> = self
+            .backend
+            .oplog()
             .entries_since(None)
             .iter()
             .map(|e| e.hash)
@@ -638,16 +657,11 @@ impl PyGraphStore {
 
         // Merge into oplog (and redb for persistent backend).
         let inserted = match &mut self.backend {
-            Backend::Memory(oplog) => {
-                crate::sync::merge_entries(oplog, entries).map_err(|e| {
-                    pyo3::exceptions::PyRuntimeError::new_err(e)
-                })?
-            }
-            Backend::Persistent(store) => {
-                store.merge(entries).map_err(|e| {
-                    pyo3::exceptions::PyRuntimeError::new_err(e.to_string())
-                })?
-            }
+            Backend::Memory(oplog) => crate::sync::merge_entries(oplog, entries)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?,
+            Backend::Persistent(store) => store
+                .merge(entries)
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?,
         };
 
         if inserted > 0 {
@@ -683,19 +697,13 @@ impl PyGraphStore {
     fn append(&mut self, op: GraphOp) -> PyResult<String> {
         self.clock.tick();
         let heads = self.backend.oplog().heads();
-        let entry = Entry::new(
-            op,
-            heads,
-            vec![],
-            self.clock.clone(),
-            &self.instance_id,
-        );
+        let entry = Entry::new(op, heads, vec![], self.clock.clone(), &self.instance_id);
         let hex = hex::encode(entry.hash);
         // Apply to materialized graph before backend (graph needs the entry ref).
         self.graph.apply(&entry);
-        self.backend.append(entry.clone()).map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(e)
-        })?;
+        self.backend
+            .append(entry.clone())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
         // D-023: notify subscribers (local write → local=true)
         self.notify_subscribers(&entry, true);
         Ok(hex)
@@ -728,14 +736,21 @@ impl PyGraphStore {
 
         match &entry.payload {
             GraphOp::AddNode {
-                node_id, node_type, subtype, ..
+                node_id,
+                node_type,
+                subtype,
+                ..
             } => {
                 let _ = dict.set_item("op", "add_node");
                 let _ = dict.set_item("node_id", node_id);
                 let _ = dict.set_item("node_type", node_type);
                 match subtype {
-                    Some(st) => { let _ = dict.set_item("subtype", st); }
-                    None => { let _ = dict.set_item("subtype", py.None()); }
+                    Some(st) => {
+                        let _ = dict.set_item("subtype", st);
+                    }
+                    None => {
+                        let _ = dict.set_item("subtype", py.None());
+                    }
                 }
             }
             GraphOp::AddEdge {
@@ -784,9 +799,8 @@ impl PyGraphStore {
 // ---------------------------------------------------------------------------
 
 fn parse_hex_hash(hex_str: &str) -> PyResult<Hash> {
-    let bytes = hex::decode(hex_str).map_err(|e| {
-        pyo3::exceptions::PyValueError::new_err(format!("invalid hex hash: {e}"))
-    })?;
+    let bytes = hex::decode(hex_str)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid hex hash: {e}")))?;
     if bytes.len() != 32 {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "hash must be 32 bytes, got {}",
@@ -881,7 +895,8 @@ fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
         Value::Float(f) => Ok(f.to_object(py)),
         Value::String(s) => Ok(s.to_object(py)),
         Value::List(items) => {
-            let py_items: Vec<PyObject> = items.iter().map(|v| value_to_py(py, v).unwrap()).collect();
+            let py_items: Vec<PyObject> =
+                items.iter().map(|v| value_to_py(py, v).unwrap()).collect();
             let list = PyList::new(py, &py_items)?;
             Ok(list.into())
         }
@@ -895,8 +910,14 @@ fn entry_to_pydict(py: Python<'_>, entry: &Entry) -> PyResult<PyObject> {
     dict.set_item("author", &entry.author)?;
     dict.set_item("clock_time", entry.clock.time)?;
     dict.set_item("clock_id", &entry.clock.id)?;
-    dict.set_item("next", entry.next.iter().map(hex::encode).collect::<Vec<_>>())?;
-    dict.set_item("refs", entry.refs.iter().map(hex::encode).collect::<Vec<_>>())?;
+    dict.set_item(
+        "next",
+        entry.next.iter().map(hex::encode).collect::<Vec<_>>(),
+    )?;
+    dict.set_item(
+        "refs",
+        entry.refs.iter().map(hex::encode).collect::<Vec<_>>(),
+    )?;
 
     let payload_json = serde_json::to_string(&entry.payload)
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
@@ -919,17 +940,19 @@ impl PyObservationLog {
     #[new]
     #[pyo3(signature = (path, max_age_secs = 86400))]
     fn new(path: &str, max_age_secs: u64) -> PyResult<Self> {
-        let log = crate::obslog::ObservationLog::open(
-            std::path::Path::new(path),
-            max_age_secs,
-        )
-        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+        let log = crate::obslog::ObservationLog::open(std::path::Path::new(path), max_age_secs)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
         Ok(Self { log })
     }
 
     /// Append a single observation.
     #[pyo3(signature = (source, value, metadata = None))]
-    fn append(&self, source: &str, value: f64, metadata: Option<HashMap<String, String>>) -> PyResult<()> {
+    fn append(
+        &self,
+        source: &str,
+        value: f64,
+        metadata: Option<HashMap<String, String>>,
+    ) -> PyResult<()> {
         let meta: BTreeMap<String, String> = metadata.unwrap_or_default().into_iter().collect();
         self.log
             .append(source, value, meta)

@@ -1,9 +1,13 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use silk::{Entry, GraphOp, LamportClock, OpLog, Ontology, NodeTypeDef, EdgeTypeDef, MaterializedGraph};
+use silk::{
+    EdgeTypeDef, Entry, GraphOp, LamportClock, MaterializedGraph, NodeTypeDef, Ontology, OpLog,
+};
 use std::collections::BTreeMap;
 
 fn lcg_next(state: &mut u64) -> u64 {
-    *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    *state = state
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     *state
 }
 

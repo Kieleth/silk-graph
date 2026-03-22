@@ -62,15 +62,6 @@ fn decode_key(key: &[u8]) -> Option<(String, u64)> {
     Some((source, timestamp_ms))
 }
 
-/// Key prefix for a source (for range scans).
-fn source_prefix(source: &str) -> Vec<u8> {
-    let src = source.as_bytes();
-    let mut prefix = Vec::with_capacity(2 + src.len());
-    prefix.extend_from_slice(&(src.len() as u16).to_be_bytes());
-    prefix.extend_from_slice(src);
-    prefix
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -108,10 +99,16 @@ impl ObservationLog {
 
         // Ensure tables exist.
         {
-            let txn = db.begin_write().map_err(|e| ObsLogError::Io(e.to_string()))?;
+            let txn = db
+                .begin_write()
+                .map_err(|e| ObsLogError::Io(e.to_string()))?;
             {
-                let _t = txn.open_table(OBS_TABLE).map_err(|e| ObsLogError::Io(e.to_string()))?;
-                let _m = txn.open_table(OBS_META).map_err(|e| ObsLogError::Io(e.to_string()))?;
+                let _t = txn
+                    .open_table(OBS_TABLE)
+                    .map_err(|e| ObsLogError::Io(e.to_string()))?;
+                let _m = txn
+                    .open_table(OBS_META)
+                    .map_err(|e| ObsLogError::Io(e.to_string()))?;
             }
             txn.commit().map_err(|e| ObsLogError::Io(e.to_string()))?;
         }
@@ -131,9 +128,14 @@ impl ObservationLog {
         let obs = ObsValue { value, metadata };
         let val = rmp_serde::to_vec(&obs).map_err(|e| ObsLogError::Serialization(e.to_string()))?;
 
-        let txn = self.db.begin_write().map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
         {
-            let mut table = txn.open_table(OBS_TABLE).map_err(|e| ObsLogError::Io(e.to_string()))?;
+            let mut table = txn
+                .open_table(OBS_TABLE)
+                .map_err(|e| ObsLogError::Io(e.to_string()))?;
             table
                 .insert(key.as_slice(), val.as_slice())
                 .map_err(|e| ObsLogError::Io(e.to_string()))?;
@@ -143,11 +145,19 @@ impl ObservationLog {
     }
 
     /// Append a batch of observations in a single transaction.
-    pub fn append_batch(&self, observations: &[(String, f64, BTreeMap<String, String>)]) -> Result<(), ObsLogError> {
+    pub fn append_batch(
+        &self,
+        observations: &[(String, f64, BTreeMap<String, String>)],
+    ) -> Result<(), ObsLogError> {
         let ts = now_ms();
-        let txn = self.db.begin_write().map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
         {
-            let mut table = txn.open_table(OBS_TABLE).map_err(|e| ObsLogError::Io(e.to_string()))?;
+            let mut table = txn
+                .open_table(OBS_TABLE)
+                .map_err(|e| ObsLogError::Io(e.to_string()))?;
             for (i, (source, value, metadata)) in observations.iter().enumerate() {
                 // Offset each by 1ms to ensure unique keys within batch
                 let key = encode_key(source, ts + i as u64);
@@ -155,7 +165,8 @@ impl ObservationLog {
                     value: *value,
                     metadata: metadata.clone(),
                 };
-                let val = rmp_serde::to_vec(&obs).map_err(|e| ObsLogError::Serialization(e.to_string()))?;
+                let val = rmp_serde::to_vec(&obs)
+                    .map_err(|e| ObsLogError::Serialization(e.to_string()))?;
                 table
                     .insert(key.as_slice(), val.as_slice())
                     .map_err(|e| ObsLogError::Io(e.to_string()))?;
@@ -170,8 +181,13 @@ impl ObservationLog {
         let start = encode_key(source, since_ts_ms);
         let end = encode_key(source, u64::MAX);
 
-        let txn = self.db.begin_read().map_err(|e| ObsLogError::Io(e.to_string()))?;
-        let table = txn.open_table(OBS_TABLE).map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let table = txn
+            .open_table(OBS_TABLE)
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
 
         let mut results = Vec::new();
         let range = table
@@ -204,8 +220,13 @@ impl ObservationLog {
         let start = encode_key(source, 0);
         let end = encode_key(source, u64::MAX);
 
-        let txn = self.db.begin_read().map_err(|e| ObsLogError::Io(e.to_string()))?;
-        let table = txn.open_table(OBS_TABLE).map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let table = txn
+            .open_table(OBS_TABLE)
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
 
         let range = table
             .range(start.as_slice()..=end.as_slice())
@@ -232,8 +253,13 @@ impl ObservationLog {
 
     /// List distinct sources that have observations.
     pub fn sources(&self) -> Result<Vec<String>, ObsLogError> {
-        let txn = self.db.begin_read().map_err(|e| ObsLogError::Io(e.to_string()))?;
-        let table = txn.open_table(OBS_TABLE).map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let table = txn
+            .open_table(OBS_TABLE)
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
 
         let mut seen = std::collections::BTreeSet::new();
         let range = table.iter().map_err(|e| ObsLogError::Io(e.to_string()))?;
@@ -249,10 +275,15 @@ impl ObservationLog {
 
     /// Delete all observations older than `before_ts_ms`. Returns count deleted.
     pub fn truncate(&self, before_ts_ms: u64) -> Result<u64, ObsLogError> {
-        let txn = self.db.begin_write().map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
         let mut deleted = 0u64;
         {
-            let mut table = txn.open_table(OBS_TABLE).map_err(|e| ObsLogError::Io(e.to_string()))?;
+            let mut table = txn
+                .open_table(OBS_TABLE)
+                .map_err(|e| ObsLogError::Io(e.to_string()))?;
 
             // Collect keys to delete (can't delete while iterating).
             let mut to_delete = Vec::new();
@@ -281,8 +312,13 @@ impl ObservationLog {
 
     /// Total number of observations.
     pub fn count(&self) -> Result<u64, ObsLogError> {
-        let txn = self.db.begin_read().map_err(|e| ObsLogError::Io(e.to_string()))?;
-        let table = txn.open_table(OBS_TABLE).map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
+        let table = txn
+            .open_table(OBS_TABLE)
+            .map_err(|e| ObsLogError::Io(e.to_string()))?;
         let mut count = 0u64;
         let iter = table.iter().map_err(|e| ObsLogError::Io(e.to_string()))?;
         for _ in iter {
@@ -348,11 +384,15 @@ mod tests {
     fn test_sources() {
         let log = temp_log();
         log.append("health.claro", 200.0, BTreeMap::new()).unwrap();
-        log.append("health.colibri", 200.0, BTreeMap::new()).unwrap();
+        log.append("health.colibri", 200.0, BTreeMap::new())
+            .unwrap();
         log.append("metrics.cpu", 45.0, BTreeMap::new()).unwrap();
 
         let sources = log.sources().unwrap();
-        assert_eq!(sources, vec!["health.claro", "health.colibri", "metrics.cpu"]);
+        assert_eq!(
+            sources,
+            vec!["health.claro", "health.colibri", "metrics.cpu"]
+        );
     }
 
     #[test]
@@ -411,7 +451,8 @@ mod tests {
     fn test_isolation_between_sources() {
         let log = temp_log();
         log.append("health.claro", 200.0, BTreeMap::new()).unwrap();
-        log.append("health.colibri", 500.0, BTreeMap::new()).unwrap();
+        log.append("health.colibri", 500.0, BTreeMap::new())
+            .unwrap();
 
         let claro = log.query("health.claro", 0).unwrap();
         assert_eq!(claro.len(), 1);

@@ -1,6 +1,8 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use silk::{Entry, GraphOp, LamportClock, OpLog, Ontology, NodeTypeDef, EdgeTypeDef, SyncOffer, SyncPayload};
 use silk::sync::{entries_missing, merge_entries};
+use silk::{
+    EdgeTypeDef, Entry, GraphOp, LamportClock, NodeTypeDef, Ontology, OpLog, SyncOffer, SyncPayload,
+};
 use std::collections::BTreeMap;
 
 fn make_ontology() -> Ontology {

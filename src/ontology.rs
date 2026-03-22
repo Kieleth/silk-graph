@@ -81,39 +81,98 @@ pub struct Ontology {
 pub enum ValidationError {
     UnknownNodeType(String),
     UnknownEdgeType(String),
-    InvalidSource { edge_type: String, node_type: String, allowed: Vec<String> },
-    InvalidTarget { edge_type: String, node_type: String, allowed: Vec<String> },
-    MissingRequiredProperty { type_name: String, property: String },
-    WrongPropertyType { type_name: String, property: String, expected: ValueType, got: String },
-    UnknownProperty { type_name: String, property: String },
-    MissingSubtype { node_type: String, allowed: Vec<String> },
-    UnknownSubtype { node_type: String, subtype: String, allowed: Vec<String> },
-    UnexpectedSubtype { node_type: String, subtype: String },
+    InvalidSource {
+        edge_type: String,
+        node_type: String,
+        allowed: Vec<String>,
+    },
+    InvalidTarget {
+        edge_type: String,
+        node_type: String,
+        allowed: Vec<String>,
+    },
+    MissingRequiredProperty {
+        type_name: String,
+        property: String,
+    },
+    WrongPropertyType {
+        type_name: String,
+        property: String,
+        expected: ValueType,
+        got: String,
+    },
+    UnknownProperty {
+        type_name: String,
+        property: String,
+    },
+    MissingSubtype {
+        node_type: String,
+        allowed: Vec<String>,
+    },
+    UnknownSubtype {
+        node_type: String,
+        subtype: String,
+        allowed: Vec<String>,
+    },
+    UnexpectedSubtype {
+        node_type: String,
+        subtype: String,
+    },
 }
 
 impl std::fmt::Display for ValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValidationError::UnknownNodeType(t) =>
-                write!(f, "unknown node type: '{t}'"),
-            ValidationError::UnknownEdgeType(t) =>
-                write!(f, "unknown edge type: '{t}'"),
-            ValidationError::InvalidSource { edge_type, node_type, allowed } =>
-                write!(f, "edge '{edge_type}' cannot have source type '{node_type}' (allowed: {allowed:?})"),
-            ValidationError::InvalidTarget { edge_type, node_type, allowed } =>
-                write!(f, "edge '{edge_type}' cannot have target type '{node_type}' (allowed: {allowed:?})"),
-            ValidationError::MissingRequiredProperty { type_name, property } =>
-                write!(f, "'{type_name}' requires property '{property}'"),
-            ValidationError::WrongPropertyType { type_name, property, expected, got } =>
-                write!(f, "'{type_name}'.'{property}' expects {expected:?}, got {got}"),
-            ValidationError::UnknownProperty { type_name, property } =>
-                write!(f, "'{type_name}' has no property '{property}' in ontology"),
-            ValidationError::MissingSubtype { node_type, allowed } =>
-                write!(f, "'{node_type}' requires a subtype (allowed: {allowed:?})"),
-            ValidationError::UnknownSubtype { node_type, subtype, allowed } =>
-                write!(f, "'{node_type}' has no subtype '{subtype}' (allowed: {allowed:?})"),
-            ValidationError::UnexpectedSubtype { node_type, subtype } =>
-                write!(f, "'{node_type}' does not define subtypes, but got subtype '{subtype}'"),
+            ValidationError::UnknownNodeType(t) => write!(f, "unknown node type: '{t}'"),
+            ValidationError::UnknownEdgeType(t) => write!(f, "unknown edge type: '{t}'"),
+            ValidationError::InvalidSource {
+                edge_type,
+                node_type,
+                allowed,
+            } => write!(
+                f,
+                "edge '{edge_type}' cannot have source type '{node_type}' (allowed: {allowed:?})"
+            ),
+            ValidationError::InvalidTarget {
+                edge_type,
+                node_type,
+                allowed,
+            } => write!(
+                f,
+                "edge '{edge_type}' cannot have target type '{node_type}' (allowed: {allowed:?})"
+            ),
+            ValidationError::MissingRequiredProperty {
+                type_name,
+                property,
+            } => write!(f, "'{type_name}' requires property '{property}'"),
+            ValidationError::WrongPropertyType {
+                type_name,
+                property,
+                expected,
+                got,
+            } => write!(
+                f,
+                "'{type_name}'.'{property}' expects {expected:?}, got {got}"
+            ),
+            ValidationError::UnknownProperty {
+                type_name,
+                property,
+            } => write!(f, "'{type_name}' has no property '{property}' in ontology"),
+            ValidationError::MissingSubtype { node_type, allowed } => {
+                write!(f, "'{node_type}' requires a subtype (allowed: {allowed:?})")
+            }
+            ValidationError::UnknownSubtype {
+                node_type,
+                subtype,
+                allowed,
+            } => write!(
+                f,
+                "'{node_type}' has no subtype '{subtype}' (allowed: {allowed:?})"
+            ),
+            ValidationError::UnexpectedSubtype { node_type, subtype } => write!(
+                f,
+                "'{node_type}' does not define subtypes, but got subtype '{subtype}'"
+            ),
         }
     }
 }
@@ -130,9 +189,10 @@ impl Ontology {
         subtype: Option<&str>,
         properties: &BTreeMap<String, Value>,
     ) -> Result<(), ValidationError> {
-        let def = self.node_types.get(node_type).ok_or_else(|| {
-            ValidationError::UnknownNodeType(node_type.to_string())
-        })?;
+        let def = self
+            .node_types
+            .get(node_type)
+            .ok_or_else(|| ValidationError::UnknownNodeType(node_type.to_string()))?;
 
         match (&def.subtypes, subtype) {
             // Type has subtypes and caller provided one
@@ -151,20 +211,14 @@ impl Ontology {
                 }
             }
             // Type has subtypes but caller didn't provide one — error
-            (Some(subtypes), None) => {
-                Err(ValidationError::MissingSubtype {
-                    node_type: node_type.to_string(),
-                    allowed: subtypes.keys().cloned().collect(),
-                })
-            }
+            (Some(subtypes), None) => Err(ValidationError::MissingSubtype {
+                node_type: node_type.to_string(),
+                allowed: subtypes.keys().cloned().collect(),
+            }),
             // D-026: accept subtypes even if type doesn't declare any
-            (None, Some(_st)) => {
-                validate_properties(node_type, &def.properties, properties)
-            }
+            (None, Some(_st)) => validate_properties(node_type, &def.properties, properties),
             // Type has no subtypes and caller didn't provide one — validate as before
-            (None, None) => {
-                validate_properties(node_type, &def.properties, properties)
-            }
+            (None, None) => validate_properties(node_type, &def.properties, properties),
         }
     }
 
@@ -177,9 +231,10 @@ impl Ontology {
         target_node_type: &str,
         properties: &BTreeMap<String, Value>,
     ) -> Result<(), ValidationError> {
-        let def = self.edge_types.get(edge_type).ok_or_else(|| {
-            ValidationError::UnknownEdgeType(edge_type.to_string())
-        })?;
+        let def = self
+            .edge_types
+            .get(edge_type)
+            .ok_or_else(|| ValidationError::UnknownEdgeType(edge_type.to_string()))?;
 
         if !def.source_types.iter().any(|t| t == source_node_type) {
             return Err(ValidationError::InvalidSource {
@@ -302,63 +357,91 @@ mod tests {
     fn devops_ontology() -> Ontology {
         Ontology {
             node_types: BTreeMap::from([
-                ("signal".into(), NodeTypeDef {
-                    description: Some("Something observed".into()),
-                    properties: BTreeMap::from([
-                        ("severity".into(), PropertyDef {
-                            value_type: ValueType::String,
-                            required: true,
-                            description: None,
-                        }),
-                    ]),
-                    subtypes: None,
-                }),
-                ("entity".into(), NodeTypeDef {
-                    description: Some("Something that exists".into()),
-                    properties: BTreeMap::from([
-                        ("status".into(), PropertyDef {
-                            value_type: ValueType::String,
-                            required: false,
-                            description: None,
-                        }),
-                        ("port".into(), PropertyDef {
-                            value_type: ValueType::Int,
-                            required: false,
-                            description: None,
-                        }),
-                    ]),
-                    subtypes: None,
-                }),
-                ("rule".into(), NodeTypeDef {
-                    description: None,
-                    properties: BTreeMap::new(),
-                    subtypes: None,
-                }),
-                ("action".into(), NodeTypeDef {
-                    description: None,
-                    properties: BTreeMap::new(),
-                    subtypes: None,
-                }),
+                (
+                    "signal".into(),
+                    NodeTypeDef {
+                        description: Some("Something observed".into()),
+                        properties: BTreeMap::from([(
+                            "severity".into(),
+                            PropertyDef {
+                                value_type: ValueType::String,
+                                required: true,
+                                description: None,
+                            },
+                        )]),
+                        subtypes: None,
+                    },
+                ),
+                (
+                    "entity".into(),
+                    NodeTypeDef {
+                        description: Some("Something that exists".into()),
+                        properties: BTreeMap::from([
+                            (
+                                "status".into(),
+                                PropertyDef {
+                                    value_type: ValueType::String,
+                                    required: false,
+                                    description: None,
+                                },
+                            ),
+                            (
+                                "port".into(),
+                                PropertyDef {
+                                    value_type: ValueType::Int,
+                                    required: false,
+                                    description: None,
+                                },
+                            ),
+                        ]),
+                        subtypes: None,
+                    },
+                ),
+                (
+                    "rule".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
+                (
+                    "action".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                    },
+                ),
             ]),
             edge_types: BTreeMap::from([
-                ("OBSERVES".into(), EdgeTypeDef {
-                    description: None,
-                    source_types: vec!["signal".into()],
-                    target_types: vec!["entity".into()],
-                    properties: BTreeMap::new(),
-                }),
-                ("TRIGGERS".into(), EdgeTypeDef {
-                    description: None,
-                    source_types: vec!["signal".into()],
-                    target_types: vec!["rule".into()],
-                    properties: BTreeMap::new(),
-                }),
-                ("RUNS_ON".into(), EdgeTypeDef {
-                    description: None,
-                    source_types: vec!["entity".into()],
-                    target_types: vec!["entity".into()],
-                    properties: BTreeMap::new(),
-                }),
+                (
+                    "OBSERVES".into(),
+                    EdgeTypeDef {
+                        description: None,
+                        source_types: vec!["signal".into()],
+                        target_types: vec!["entity".into()],
+                        properties: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "TRIGGERS".into(),
+                    EdgeTypeDef {
+                        description: None,
+                        source_types: vec!["signal".into()],
+                        target_types: vec!["rule".into()],
+                        properties: BTreeMap::new(),
+                    },
+                ),
+                (
+                    "RUNS_ON".into(),
+                    EdgeTypeDef {
+                        description: None,
+                        source_types: vec!["entity".into()],
+                        target_types: vec!["entity".into()],
+                        properties: BTreeMap::new(),
+                    },
+                ),
             ]),
         }
     }
@@ -375,15 +458,21 @@ mod tests {
     #[test]
     fn validate_node_unknown_type() {
         let ont = devops_ontology();
-        let err = ont.validate_node("potato", None, &BTreeMap::new()).unwrap_err();
+        let err = ont
+            .validate_node("potato", None, &BTreeMap::new())
+            .unwrap_err();
         assert!(matches!(err, ValidationError::UnknownNodeType(t) if t == "potato"));
     }
 
     #[test]
     fn validate_node_missing_required() {
         let ont = devops_ontology();
-        let err = ont.validate_node("signal", None, &BTreeMap::new()).unwrap_err();
-        assert!(matches!(err, ValidationError::MissingRequiredProperty { property, .. } if property == "severity"));
+        let err = ont
+            .validate_node("signal", None, &BTreeMap::new())
+            .unwrap_err();
+        assert!(
+            matches!(err, ValidationError::MissingRequiredProperty { property, .. } if property == "severity")
+        );
     }
 
     #[test]
@@ -391,7 +480,9 @@ mod tests {
         let ont = devops_ontology();
         let props = BTreeMap::from([("severity".into(), Value::Int(5))]);
         let err = ont.validate_node("signal", None, &props).unwrap_err();
-        assert!(matches!(err, ValidationError::WrongPropertyType { property, .. } if property == "severity"));
+        assert!(
+            matches!(err, ValidationError::WrongPropertyType { property, .. } if property == "severity")
+        );
     }
 
     #[test]
@@ -425,13 +516,17 @@ mod tests {
     #[test]
     fn validate_edge_valid() {
         let ont = devops_ontology();
-        assert!(ont.validate_edge("OBSERVES", "signal", "entity", &BTreeMap::new()).is_ok());
+        assert!(ont
+            .validate_edge("OBSERVES", "signal", "entity", &BTreeMap::new())
+            .is_ok());
     }
 
     #[test]
     fn validate_edge_unknown_type() {
         let ont = devops_ontology();
-        let err = ont.validate_edge("FLIES_TO", "signal", "entity", &BTreeMap::new()).unwrap_err();
+        let err = ont
+            .validate_edge("FLIES_TO", "signal", "entity", &BTreeMap::new())
+            .unwrap_err();
         assert!(matches!(err, ValidationError::UnknownEdgeType(t) if t == "FLIES_TO"));
     }
 
@@ -439,7 +534,9 @@ mod tests {
     fn validate_edge_invalid_source() {
         let ont = devops_ontology();
         // OBSERVES requires source=signal, not entity
-        let err = ont.validate_edge("OBSERVES", "entity", "entity", &BTreeMap::new()).unwrap_err();
+        let err = ont
+            .validate_edge("OBSERVES", "entity", "entity", &BTreeMap::new())
+            .unwrap_err();
         assert!(matches!(err, ValidationError::InvalidSource { .. }));
     }
 
@@ -447,7 +544,9 @@ mod tests {
     fn validate_edge_invalid_target() {
         let ont = devops_ontology();
         // OBSERVES requires target=entity, not signal
-        let err = ont.validate_edge("OBSERVES", "signal", "signal", &BTreeMap::new()).unwrap_err();
+        let err = ont
+            .validate_edge("OBSERVES", "signal", "signal", &BTreeMap::new())
+            .unwrap_err();
         assert!(matches!(err, ValidationError::InvalidTarget { .. }));
     }
 
@@ -462,39 +561,55 @@ mod tests {
     #[test]
     fn validate_self_dangling_source() {
         let ont = Ontology {
-            node_types: BTreeMap::from([
-                ("entity".into(), NodeTypeDef { description: None, properties: BTreeMap::new(), subtypes: None }),
-            ]),
-            edge_types: BTreeMap::from([
-                ("OBSERVES".into(), EdgeTypeDef {
+            node_types: BTreeMap::from([(
+                "entity".into(),
+                NodeTypeDef {
                     description: None,
-                    source_types: vec!["ghost".into()],  // doesn't exist
+                    properties: BTreeMap::new(),
+                    subtypes: None,
+                },
+            )]),
+            edge_types: BTreeMap::from([(
+                "OBSERVES".into(),
+                EdgeTypeDef {
+                    description: None,
+                    source_types: vec!["ghost".into()], // doesn't exist
                     target_types: vec!["entity".into()],
                     properties: BTreeMap::new(),
-                }),
-            ]),
+                },
+            )]),
         };
         let err = ont.validate_self().unwrap_err();
-        assert!(matches!(err, ValidationError::InvalidSource { node_type, .. } if node_type == "ghost"));
+        assert!(
+            matches!(err, ValidationError::InvalidSource { node_type, .. } if node_type == "ghost")
+        );
     }
 
     #[test]
     fn validate_self_dangling_target() {
         let ont = Ontology {
-            node_types: BTreeMap::from([
-                ("signal".into(), NodeTypeDef { description: None, properties: BTreeMap::new(), subtypes: None }),
-            ]),
-            edge_types: BTreeMap::from([
-                ("OBSERVES".into(), EdgeTypeDef {
+            node_types: BTreeMap::from([(
+                "signal".into(),
+                NodeTypeDef {
+                    description: None,
+                    properties: BTreeMap::new(),
+                    subtypes: None,
+                },
+            )]),
+            edge_types: BTreeMap::from([(
+                "OBSERVES".into(),
+                EdgeTypeDef {
                     description: None,
                     source_types: vec!["signal".into()],
-                    target_types: vec!["phantom".into()],  // doesn't exist
+                    target_types: vec!["phantom".into()], // doesn't exist
                     properties: BTreeMap::new(),
-                }),
-            ]),
+                },
+            )]),
         };
         let err = ont.validate_self().unwrap_err();
-        assert!(matches!(err, ValidationError::InvalidTarget { node_type, .. } if node_type == "phantom"));
+        assert!(
+            matches!(err, ValidationError::InvalidTarget { node_type, .. } if node_type == "phantom")
+        );
     }
 
     // --- Serialization ---

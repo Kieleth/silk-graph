@@ -28,10 +28,7 @@ impl BloomFilter {
     /// - k = (m/n) * ln(2)
     pub fn new(expected_items: usize, fp_rate: f64) -> Self {
         assert!(expected_items > 0, "expected_items must be > 0");
-        assert!(
-            (0.0..1.0).contains(&fp_rate),
-            "fp_rate must be in (0, 1)"
-        );
+        assert!((0.0..1.0).contains(&fp_rate), "fp_rate must be in (0, 1)");
 
         let n = expected_items as f64;
         let ln2 = std::f64::consts::LN_2;
@@ -42,7 +39,7 @@ impl BloomFilter {
         let num_hashes = ((num_bits as f64 / n) * ln2).ceil() as u32;
         let num_hashes = num_hashes.max(1);
 
-        let words = (num_bits + 63) / 64;
+        let words = num_bits.div_ceil(64);
         Self {
             bits: vec![0u64; words],
             num_bits,
@@ -120,7 +117,9 @@ impl BloomFilter {
             .map(|i| {
                 let i = i as u64;
                 // Enhanced double hashing with quadratic probing
-                let idx = h1.wrapping_add(i.wrapping_mul(h2)).wrapping_add(i.wrapping_mul(i));
+                let idx = h1
+                    .wrapping_add(i.wrapping_mul(h2))
+                    .wrapping_add(i.wrapping_mul(i));
                 (idx % m) as usize
             })
             .collect()

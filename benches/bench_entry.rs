@@ -1,6 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use silk::entry::{Entry, GraphOp, Value};
 use silk::clock::LamportClock;
+use silk::entry::{Entry, GraphOp, Value};
 use std::collections::BTreeMap;
 
 fn bench_entry_creation(c: &mut Criterion) {
@@ -16,7 +16,10 @@ fn bench_entry_creation(c: &mut Criterion) {
                     ("port".into(), Value::Int(8080)),
                 ]),
             };
-            let clock = LamportClock { id: "inst-a".into(), time: 1 };
+            let clock = LamportClock {
+                id: "inst-a".into(),
+                time: 1,
+            };
             Entry::new(op, vec![], vec![], clock, "inst-a")
         })
     });
@@ -33,7 +36,10 @@ fn bench_entry_roundtrip(c: &mut Criterion) {
             ("port".into(), Value::Int(8080)),
         ]),
     };
-    let clock = LamportClock { id: "inst-a".into(), time: 1 };
+    let clock = LamportClock {
+        id: "inst-a".into(),
+        time: 1,
+    };
     let entry = Entry::new(op, vec![], vec![], clock, "inst-a");
     let bytes = entry.to_bytes();
 
@@ -54,7 +60,10 @@ fn bench_verify_hash(c: &mut Criterion) {
         label: "Production Server".into(),
         properties: BTreeMap::new(),
     };
-    let clock = LamportClock { id: "inst-a".into(), time: 1 };
+    let clock = LamportClock {
+        id: "inst-a".into(),
+        time: 1,
+    };
     let entry = Entry::new(op, vec![], vec![], clock, "inst-a");
 
     c.bench_function("entry_verify_hash", |b| {
@@ -62,5 +71,10 @@ fn bench_verify_hash(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_entry_creation, bench_entry_roundtrip, bench_verify_hash);
+criterion_group!(
+    benches,
+    bench_entry_creation,
+    bench_entry_roundtrip,
+    bench_verify_hash
+);
 criterion_main!(benches);

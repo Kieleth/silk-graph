@@ -30,10 +30,16 @@ impl Store {
 
         // Ensure tables exist.
         {
-            let txn = db.begin_write().map_err(|e| StoreError::Io(e.to_string()))?;
+            let txn = db
+                .begin_write()
+                .map_err(|e| StoreError::Io(e.to_string()))?;
             {
-                let _t = txn.open_table(ENTRIES_TABLE).map_err(|e| StoreError::Io(e.to_string()))?;
-                let _m = txn.open_table(META_TABLE).map_err(|e| StoreError::Io(e.to_string()))?;
+                let _t = txn
+                    .open_table(ENTRIES_TABLE)
+                    .map_err(|e| StoreError::Io(e.to_string()))?;
+                let _m = txn
+                    .open_table(META_TABLE)
+                    .map_err(|e| StoreError::Io(e.to_string()))?;
             }
             txn.commit().map_err(|e| StoreError::Io(e.to_string()))?;
         }
@@ -61,7 +67,10 @@ impl Store {
 
     /// Append an entry — writes to both OpLog and redb.
     pub fn append(&mut self, entry: Entry) -> Result<bool, StoreError> {
-        let inserted = self.oplog.append(entry.clone()).map_err(StoreError::OpLog)?;
+        let inserted = self
+            .oplog
+            .append(entry.clone())
+            .map_err(StoreError::OpLog)?;
         if inserted {
             self.persist_entry(&entry)?;
             self.persist_heads()?;
@@ -119,9 +128,14 @@ impl Store {
 
     /// Persist a single entry to redb.
     fn persist_entry(&self, entry: &Entry) -> Result<(), StoreError> {
-        let txn = self.db.begin_write().map_err(|e| StoreError::Io(e.to_string()))?;
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Io(e.to_string()))?;
         {
-            let mut table = txn.open_table(ENTRIES_TABLE).map_err(|e| StoreError::Io(e.to_string()))?;
+            let mut table = txn
+                .open_table(ENTRIES_TABLE)
+                .map_err(|e| StoreError::Io(e.to_string()))?;
             let bytes = entry.to_bytes();
             table
                 .insert(entry.hash.as_slice(), bytes.as_slice())
@@ -135,9 +149,14 @@ impl Store {
     fn persist_heads(&self) -> Result<(), StoreError> {
         let heads = self.oplog.heads();
         let bytes = rmp_serde::to_vec(&heads).map_err(|e| StoreError::Io(e.to_string()))?;
-        let txn = self.db.begin_write().map_err(|e| StoreError::Io(e.to_string()))?;
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Io(e.to_string()))?;
         {
-            let mut table = txn.open_table(META_TABLE).map_err(|e| StoreError::Io(e.to_string()))?;
+            let mut table = txn
+                .open_table(META_TABLE)
+                .map_err(|e| StoreError::Io(e.to_string()))?;
             table
                 .insert("heads", bytes.as_slice())
                 .map_err(|e| StoreError::Io(e.to_string()))?;
@@ -244,20 +263,23 @@ mod tests {
 
     fn test_ontology() -> Ontology {
         Ontology {
-            node_types: BTreeMap::from([
-                ("entity".into(), NodeTypeDef {
+            node_types: BTreeMap::from([(
+                "entity".into(),
+                NodeTypeDef {
                     description: None,
                     properties: BTreeMap::new(),
                     subtypes: None,
-                }),
-            ]),
+                },
+            )]),
             edge_types: BTreeMap::new(),
         }
     }
 
     fn genesis() -> Entry {
         Entry::new(
-            GraphOp::DefineOntology { ontology: test_ontology() },
+            GraphOp::DefineOntology {
+                ontology: test_ontology(),
+            },
             vec![],
             vec![],
             LamportClock::new("test"),
@@ -280,7 +302,10 @@ mod tests {
             op,
             next,
             vec![],
-            LamportClock { id: "test".into(), time: clock_time },
+            LamportClock {
+                id: "test".into(),
+                time: clock_time,
+            },
             "test",
         )
     }
