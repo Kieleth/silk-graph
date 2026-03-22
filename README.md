@@ -28,7 +28,7 @@ ontology = json.dumps({
         "company": {"properties": {}}
     },
     "edge_types": {
-        "WORKS_AT": {"source": "person", "target": "company", "properties": {}}
+        "WORKS_AT": {"source_types": ["person"], "target_types": ["company"], "properties": {}}
     }
 })
 
@@ -157,6 +157,8 @@ This means your application can evolve its data model without touching the ontol
 
 ## Architecture
 
+For the full architectural overview — research foundations (Merkle-CRDTs, Delta-state CRDTs, MAPE-K), design principles, and 26 design decisions — see [DESIGN.md](DESIGN.md).
+
 ```
 Write (add_node, add_edge, update_property)
   │
@@ -179,7 +181,7 @@ OpLog (append-only Merkle-DAG, content-addressed)
 
 ## Benchmarks
 
-Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, release build. Full results via `cargo bench --no-default-features`.
+Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, release build. Run `cargo bench --no-default-features` on your hardware. For the full analysis — what these numbers mean and why they matter — see [WHY.md](WHY.md).
 
 ### Core Operations
 
@@ -227,7 +229,7 @@ Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, releas
 | Concurrent property writes | 1 node | 0.06 ms |
 | 10-peer ring convergence | 10 x 100 | 51.8 ms (3 rounds) |
 
-Run the examples yourself: `python examples/offline_first.py`
+Run the examples yourself: `python examples/offline_first.py`. See all four scenarios in [`examples/`](examples/).
 
 ## Design Decisions
 
@@ -300,6 +302,160 @@ log.query_latest(source="cpu")
 log.truncate(before_ts_ms=1710000000000)
 ```
 
+## Tutorial: Build a Distributed Note-Taking App
+
+A complete walkthrough showing how to use Silk for a real project — a note-taking app where notes sync across devices without a server.
+
+### 1. Define the Schema
+
+```python
+import json
+from silk import GraphStore
+
+ontology = json.dumps({
+    "node_types": {
+        "notebook": {
+            "properties": {
+                "title": {"value_type": "string", "required": True}
+            }
+        },
+        "note": {
+            "properties": {
+                "title": {"value_type": "string", "required": True},
+                "body": {"value_type": "string"},
+                "created_at": {"value_type": "string"}
+            }
+        },
+        "tag": {
+            "properties": {
+                "name": {"value_type": "string", "required": True}
+            }
+        }
+    },
+    "edge_types": {
+        "CONTAINS": {
+            "source_types": ["notebook"],
+            "target_types": ["note"],
+            "properties": {}
+        },
+        "TAGGED": {
+            "source_types": ["note"],
+            "target_types": ["tag"],
+            "properties": {}
+        }
+    }
+})
+```
+
+### 2. Create a Store (Persistent)
+
+```python
+# Each device gets its own store, backed by a local file
+store = GraphStore("laptop-1", ontology, path="notes.redb")
+```
+
+### 3. Add Data
+
+```python
+# Create a notebook
+store.add_node("nb-work", "notebook", "Work Notes", {"title": "Work Notes"})
+
+# Add notes
+store.add_node("n1", "note", "Meeting notes", {
+    "title": "Meeting notes",
+    "body": "Discussed Q2 roadmap. Action items: ...",
+    "created_at": "2026-03-22T10:00:00Z"
+})
+store.add_node("n2", "note", "Ideas", {
+    "title": "Ideas",
+    "body": "What if we built a distributed note app?",
+    "created_at": "2026-03-22T11:30:00Z"
+})
+
+# Organize: notebook contains notes
+store.add_edge("e1", "CONTAINS", "nb-work", "n1")
+store.add_edge("e2", "CONTAINS", "nb-work", "n2")
+
+# Tag notes
+store.add_node("t-urgent", "tag", "urgent", {"name": "urgent"})
+store.add_edge("e3", "TAGGED", "n1", "t-urgent")
+```
+
+### 4. Query the Graph
+
+```python
+# Get all notes in a notebook
+edges = store.outgoing_edges("nb-work")
+note_ids = [e["target_id"] for e in edges if e["edge_type"] == "CONTAINS"]
+notes = [store.get_node(nid) for nid in note_ids]
+
+for note in notes:
+    print(f"  {note['properties']['title']}")
+
+# Find notes by tag — traverse TAGGED edges
+tagged_edges = store.incoming_edges("t-urgent")
+urgent_notes = [store.get_node(e["source_id"]) for e in tagged_edges]
+
+# Use BFS to find all nodes connected to a notebook within 2 hops
+connected = store.bfs("nb-work", max_depth=2)
+```
+
+### 5. Sync Between Devices
+
+```python
+# Phone creates its own store
+phone = GraphStore("phone-1", ontology, path="notes-phone.redb")
+
+# Phone adds a note while offline
+phone.add_node("nb-work", "notebook", "Work Notes", {"title": "Work Notes"})
+phone.add_node("n3", "note", "Quick thought", {
+    "title": "Quick thought",
+    "body": "Remember to call Alice",
+    "created_at": "2026-03-22T14:00:00Z"
+})
+phone.add_edge("e4", "CONTAINS", "nb-work", "n3")
+
+# Later, when connected — sync both ways
+offer = store.generate_sync_offer()
+payload = phone.receive_sync_offer(offer)
+store.merge_sync_payload(payload)
+
+offer = phone.generate_sync_offer()
+payload = store.receive_sync_offer(offer)
+phone.merge_sync_payload(payload)
+
+# Both devices now have all 3 notes
+assert len(store.all_nodes()) == len(phone.all_nodes())
+```
+
+### 6. Handle Conflicts
+
+```python
+# Both devices edit the same note at the same time
+store.update_property("n1", "body", "Updated from laptop")
+phone.update_property("n1", "body", "Updated from phone")
+
+# Also, laptop adds a tag (non-conflicting change)
+phone.update_property("n1", "priority", "high")
+
+# Sync — per-property LWW resolves the conflict
+# "body" goes to whichever write happened later (Lamport clock)
+# "priority" is non-conflicting — preserved on both sides
+```
+
+### 7. Subscribe to Changes
+
+```python
+def on_change(event):
+    print(f"Change: {event['op']} by {event['author']}")
+
+sub_id = store.subscribe(on_change)
+# ... any write or merge triggers the callback
+store.unsubscribe(sub_id)
+```
+
+This pattern — schema, local store, sync, conflict resolution — works for any domain: task managers, CRMs, inventory systems, collaborative editors, IoT dashboards.
+
 ## Building from Source
 
 ```bash
@@ -316,6 +472,17 @@ pytest pytests/
 # Benchmarks
 cargo bench
 ```
+
+## Documentation
+
+| Document | What it covers |
+|----------|---------------|
+| [README.md](README.md) | Quick start, features, API reference, tutorial |
+| [WHY.md](WHY.md) | Why Silk exists, what makes it different, benchmark analysis |
+| [DESIGN.md](DESIGN.md) | Research foundations, 26 design decisions (D-001–D-026), architecture |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, PR guidelines |
+| [`examples/`](examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology) |
 
 ## License
 
