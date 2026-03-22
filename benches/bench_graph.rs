@@ -276,7 +276,7 @@ fn pattern_match_bench(c: &mut Criterion) {
         let graph = build_graph(n, n * 3);
         group.bench_with_input(BenchmarkId::new("N", n), &graph, |b, graph| {
             b.iter(|| {
-                let result = silk::engine::pattern_match(graph, &["entity", "signal"]);
+                let result = silk::engine::pattern_match(graph, &["entity", "signal"], 10_000);
                 black_box(result.len());
             })
         });

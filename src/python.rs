@@ -477,9 +477,16 @@ impl PyGraphStore {
 
     /// Pattern match: find chains matching a sequence of node types.
     /// Returns list of chains (each chain is a list of node IDs).
-    fn pattern_match(&self, py: Python<'_>, type_sequence: Vec<String>) -> PyResult<PyObject> {
+    /// Limited to 1000 results by default to prevent runaway expansion on dense graphs.
+    #[pyo3(signature = (type_sequence, max_results=1000))]
+    fn pattern_match(
+        &self,
+        py: Python<'_>,
+        type_sequence: Vec<String>,
+        max_results: usize,
+    ) -> PyResult<PyObject> {
         let refs: Vec<&str> = type_sequence.iter().map(|s| s.as_str()).collect();
-        let chains = engine::pattern_match(&self.graph, &refs);
+        let chains = engine::pattern_match(&self.graph, &refs, max_results);
         let list = PyList::empty(py);
         for chain in chains {
             let py_chain = PyList::new(py, &chain)?;

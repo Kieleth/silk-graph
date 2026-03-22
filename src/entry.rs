@@ -128,6 +128,8 @@ impl Entry {
             clock,
             author,
         };
+        // Safety: rmp_serde serialization of #[derive(Serialize)] structs with known
+        // types (String, i64, bool, Vec, BTreeMap) cannot fail. Same pattern as sled/redb.
         let bytes = rmp_serde::to_vec(&signable).expect("serialization should not fail");
         *blake3::hash(&bytes).as_bytes()
     }
@@ -145,6 +147,10 @@ impl Entry {
     }
 
     /// Serialize the entry to MessagePack bytes.
+    ///
+    /// Uses `expect()` because msgpack serialization of `#[derive(Serialize)]` structs
+    /// with known types cannot fail in practice. Converting to `Result` would add API
+    /// complexity for a failure mode that doesn't exist.
     pub fn to_bytes(&self) -> Vec<u8> {
         rmp_serde::to_vec(self).expect("entry serialization should not fail")
     }

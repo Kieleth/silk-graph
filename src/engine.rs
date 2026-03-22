@@ -172,7 +172,16 @@ pub fn subgraph(graph: &MaterializedGraph, start: &str, hops: usize) -> (Vec<Str
 /// Pattern match: find chains matching a sequence of node types connected by edges.
 /// E.g., `["signal", "rule", "plan", "action"]` finds all MAPE-K loops.
 /// Returns list of chains, each chain being a list of node_ids.
-pub fn pattern_match(graph: &MaterializedGraph, type_sequence: &[&str]) -> Vec<Vec<String>> {
+/// Find chains of nodes matching a type sequence (e.g., `["signal", "rule", "plan"]`).
+///
+/// Complexity: O(n * b^d) where n = nodes of first type, b = average branching,
+/// d = sequence length. Bounded by `max_results` to prevent runaway expansion on
+/// dense graphs. Cycle-safe: a node cannot appear twice in the same chain.
+pub fn pattern_match(
+    graph: &MaterializedGraph,
+    type_sequence: &[&str],
+    max_results: usize,
+) -> Vec<Vec<String>> {
     if type_sequence.is_empty() {
         return vec![];
     }
@@ -194,6 +203,11 @@ pub fn pattern_match(graph: &MaterializedGraph, type_sequence: &[&str]) -> Vec<V
                             let mut new_chain = chain.clone();
                             new_chain.push(edge.target_id.clone());
                             extended.push(new_chain);
+                            if results.len() + extended.len() >= max_results {
+                                results.extend(extended);
+                                results.truncate(max_results);
+                                return results;
+                            }
                         }
                     }
                 }
@@ -202,6 +216,10 @@ pub fn pattern_match(graph: &MaterializedGraph, type_sequence: &[&str]) -> Vec<V
         }
 
         results.extend(chains);
+        if results.len() >= max_results {
+            results.truncate(max_results);
+            return results;
+        }
     }
 
     results
@@ -479,7 +497,7 @@ mod tests {
         g.apply(&add_edge("e2", "PRODUCES", "rule1", "plan1", 6));
         g.apply(&add_edge("e3", "PRODUCES", "plan1", "act1", 7));
 
-        let chains = pattern_match(&g, &["signal", "rule", "plan", "action"]);
+        let chains = pattern_match(&g, &["signal", "rule", "plan", "action"], 1000);
         assert_eq!(chains.len(), 1);
         assert_eq!(chains[0], vec!["sig1", "rule1", "plan1", "act1"]);
     }

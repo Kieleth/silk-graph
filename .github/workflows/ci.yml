@@ -48,11 +48,15 @@ jobs:
       - name: Build and install
         run: |
           pip install maturin pytest
-          maturin develop --release 2>&1 || {
-            echo "maturin develop failed, trying maturin build + pip install"
-            maturin build --release --out dist
-            pip install dist/*.whl
-          }
+          maturin develop --release
 
       - name: Run Python tests
         run: pytest pytests/ -v
+
+      - name: Run examples
+        if: matrix.python-version == '3.12'
+        run: |
+          python examples/offline_first.py
+          python examples/partition_heal.py
+          python examples/concurrent_writes.py
+          python examples/ring_topology.py
