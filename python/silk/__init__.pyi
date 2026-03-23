@@ -17,15 +17,15 @@ class GraphStore:
     def __init__(
         self,
         instance_id: str,
-        ontology_json: str,
+        ontology: str | dict[str, Any],
         path: str | None = None,
     ) -> None:
         """Create a new graph store.
 
         Args:
             instance_id: Unique identifier for this instance.
-            ontology_json: JSON string defining node types, edge types,
-                           and their properties/constraints.
+            ontology: JSON string or Python dict defining node types, edge types,
+                      and their properties/constraints.
             path: Optional file path for persistent storage (redb).
                   If omitted, the store is purely in-memory.
 
@@ -86,7 +86,7 @@ class GraphStore:
     def remove_edge(self, edge_id: str) -> str:
         """Remove an edge. Returns hex hash."""
         ...
-    def extend_ontology(self, extension_json: str) -> str:
+    def extend_ontology(self, extension: str | dict[str, Any]) -> str:
         """R-03: Extend the ontology with new types, properties, or subtypes.
 
         Only additive (monotonic) changes allowed. Returns hex hash of the entry.

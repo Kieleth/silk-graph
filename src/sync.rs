@@ -15,8 +15,15 @@ const MAX_ENTRIES_PER_MESSAGE: usize = 100_000;
 /// Contains the peer's current DAG heads and a bloom filter of all
 /// entry hashes it holds. The recipient uses this to compute which
 /// entries the peer is missing and needs to receive.
+/// Current protocol version. Incremented on breaking wire format changes.
+pub const PROTOCOL_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncOffer {
+    /// Protocol version — peers reject offers with unknown versions.
+    /// Defaults to 0 for backward compat with pre-versioned offers.
+    #[serde(default)]
+    pub protocol_version: u32,
     /// Current DAG heads of the offering peer.
     pub heads: Vec<Hash>,
     /// Bloom filter containing all entry hashes the peer has.
@@ -64,6 +71,7 @@ impl SyncOffer {
             bloom.insert(&entry.hash);
         }
         Self {
+            protocol_version: PROTOCOL_VERSION,
             heads: oplog.heads(),
             bloom,
             physical_ms,
@@ -87,6 +95,13 @@ impl SyncOffer {
         }
         let offer: Self =
             rmp_serde::from_slice(bytes).map_err(|e| format!("invalid sync offer: {e}"))?;
+        // Protocol version check — reject offers from incompatible future versions
+        if offer.protocol_version > PROTOCOL_VERSION {
+            return Err(format!(
+                "unsupported protocol version {} (this peer supports up to {})",
+                offer.protocol_version, PROTOCOL_VERSION
+            ));
+        }
         offer
             .bloom
             .validate()
@@ -672,6 +687,7 @@ mod tests {
         bloom.insert(&e2.hash); // FP: bloom claims remote has e2
 
         let fake_offer = SyncOffer {
+            protocol_version: PROTOCOL_VERSION,
             heads: vec![e1.hash], // remote doesn't actually have e2
             bloom,
             physical_ms: 2,
@@ -709,6 +725,7 @@ mod tests {
         }
 
         let fake_offer = SyncOffer {
+            protocol_version: PROTOCOL_VERSION,
             heads: vec![g.hash],
             bloom,
             physical_ms: 1,

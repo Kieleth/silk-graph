@@ -25,7 +25,7 @@ pub use ontology::{
 };
 pub use oplog::{OpLog, OpLogError};
 pub use store::{Store, StoreError};
-pub use sync::{Snapshot, SyncOffer, SyncPayload};
+pub use sync::{Snapshot, SyncOffer, SyncPayload, PROTOCOL_VERSION};
 
 /// PyO3 module entry point — called by Python when `import silk._native`.
 #[cfg(feature = "python")]

@@ -48,6 +48,24 @@ pub struct PyGraphStore {
     gossip: crate::gossip::PeerRegistry,
 }
 
+/// Convert a Python ontology argument (str or dict) to a JSON string.
+/// Accepts both `json.dumps({...})` and `{...}` directly.
+fn ontology_arg_to_json(obj: &pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<String> {
+    // If it's already a string, use it directly
+    if let Ok(s) = obj.extract::<String>() {
+        return Ok(s);
+    }
+    // If it's a dict, serialize to JSON via Python's json module
+    if obj.downcast::<pyo3::types::PyDict>().is_ok() {
+        let json_mod = obj.py().import("json")?;
+        let json_str: String = json_mod.call_method1("dumps", (obj,))?.extract()?;
+        return Ok(json_str);
+    }
+    Err(pyo3::exceptions::PyTypeError::new_err(
+        "ontology must be a JSON string or a Python dict",
+    ))
+}
+
 enum Backend {
     Memory(OpLog),
     Persistent(Store),
@@ -74,13 +92,18 @@ impl PyGraphStore {
     /// Create a new graph store with the given ontology.
     ///
     /// - `instance_id`: unique identifier for this instance.
-    /// - `ontology_json`: JSON string defining the graph ontology.
+    /// - `ontology`: JSON string OR Python dict defining the graph ontology.
     /// - `path` (optional): file path for persistent storage (redb).
     ///   If omitted, the store is purely in-memory.
     #[new]
-    #[pyo3(signature = (instance_id, ontology_json, path=None))]
-    fn new(instance_id: String, ontology_json: &str, path: Option<String>) -> PyResult<Self> {
-        let mut ontology: Ontology = serde_json::from_str(ontology_json).map_err(|e| {
+    #[pyo3(signature = (instance_id, ontology, path=None))]
+    fn new(
+        instance_id: String,
+        ontology: &pyo3::Bound<'_, pyo3::PyAny>,
+        path: Option<String>,
+    ) -> PyResult<Self> {
+        let ontology_json = ontology_arg_to_json(ontology)?;
+        let mut ontology: Ontology = serde_json::from_str(&ontology_json).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("invalid ontology JSON: {e}"))
         })?;
 
@@ -317,10 +340,11 @@ impl PyGraphStore {
     }
 
     /// R-03: Extend the ontology with new types/properties.
-    /// Takes a JSON string matching OntologyExtension format.
+    /// Takes a JSON string or Python dict matching OntologyExtension format.
     /// Only additive changes allowed (monotonic).
-    fn extend_ontology(&mut self, extension_json: &str) -> PyResult<String> {
-        let extension: crate::ontology::OntologyExtension = serde_json::from_str(extension_json)
+    fn extend_ontology(&mut self, extension: &pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<String> {
+        let json_str = ontology_arg_to_json(extension)?;
+        let extension: crate::ontology::OntologyExtension = serde_json::from_str(&json_str)
             .map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("invalid extension JSON: {e}"))
             })?;
