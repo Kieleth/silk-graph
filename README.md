@@ -140,6 +140,7 @@ store.merge_sync_payload(&payload)?;
 - **Author authentication** — ed25519 signatures on every entry. Auto-sign on write, verify on merge. Trust registry for known peers. Strict mode rejects unsigned entries. (D-027)
 - **Evolvable schema** — extend the ontology at runtime with new types, properties, and subtypes via `extend_ontology()`. Only additive changes — no migrations, no store recreation. (R-03)
 - **Scalable sync** — gossip-based peer selection (R-05). Instead of syncing with all N peers, select ceil(ln(N)+1) random targets per round. Scales from 2 peers to 10,000+.
+- **Time-travel queries** — `store.as_of(physical_ms)` returns a read-only `GraphSnapshot` at any historical time. All query and algorithm methods available. Datomic-style "the database is a value." (R-06)
 
 ## When to Use Silk
 
@@ -151,6 +152,7 @@ store.merge_sync_payload(&payload)?;
 - Multi-device sync (phone, laptop, server — all converge)
 - Systems that need an audit trail (every change is a Merkle-DAG entry)
 - Systems with evolving schemas (extend ontology without migrations — R-03)
+- Systems that need historical queries (time-travel to any point in the past — R-06)
 
 **Not the right tool:**
 - High-throughput analytics — use DuckDB or ClickHouse
@@ -321,7 +323,7 @@ Edge density scales linearly with traversal cost — no surprise, but now measur
 
 Higher overlap = more Bloom filter cross-checking. The fast path is low-overlap (first sync). Incremental syncs on already-converged peers use the 10% delta path (611 µs, see above).
 
-Run the examples yourself: `python examples/offline_first.py`. See all five scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
+Run the examples yourself: `python examples/offline_first.py`. See all six scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
 
 ## Design Decisions
 
@@ -340,6 +342,7 @@ Silk's architecture is driven by 28 design decisions (D-001–D-028) plus 8 road
 | Schema evolution | Monotonic (R-03) | Add types/properties only, never remove |
 | Convergence | Formal proof (R-04) | Three theorems proving determinism, idempotence, convergence |
 | Peer selection | Gossip (R-05) | Logarithmic fan-out: ceil(ln(N)+1) per round, scales to 10K+ peers |
+| Time-travel | as_of() replay (R-06) | Query graph state at any historical time — Datomic-inspired |
 
 ## Python API Reference
 
@@ -401,6 +404,16 @@ store.unregister_peer(peer_id)                              # remove a peer
 peers = store.list_peers()                                  # [{"peer_id", "address", "last_seen_ms"}]
 targets = store.select_sync_targets()                       # ceil(ln(N)+1) random peer IDs
 store.record_sync(peer_id)                                  # mark sync completed
+```
+
+### Time-Travel (R-06)
+
+```python
+# Time-Travel (R-06)
+snapshot = store.as_of(physical_ms, logical)               # read-only GraphSnapshot
+# GraphSnapshot has: get_node, all_nodes, all_edges, query_nodes_by_type,
+# outgoing_edges, incoming_edges, bfs, shortest_path, impact_analysis,
+# pattern_match, topological_sort, has_cycle, neighbors, subgraph
 ```
 
 ### ObservationLog
@@ -744,7 +757,7 @@ cargo bench
 | [CHANGELOG.md](https://github.com/Kieleth/silk-graph/blob/main/CHANGELOG.md) | Release history |
 | [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |
 | [CONTRIBUTING.md](https://github.com/Kieleth/silk-graph/blob/main/CONTRIBUTING.md) | Development setup, PR guidelines |
-| [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology) |
+| [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology, signing, time-travel) |
 
 ## License
 

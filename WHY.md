@@ -8,12 +8,13 @@ Knowledge graphs today force a choice:
 
 **Distributed CRDTs** (Automerge, Yjs, cr-sqlite) give you offline-first, conflict-free replication — but they are document-oriented or row-oriented. No schema enforcement at write time. No graph traversal primitives. You bolt on your own validation, your own BFS, your own impact analysis. The CRDT handles merge; everything else is your responsibility.
 
-**No tool combines all five:**
+**No tool combines all six:**
 1. Distributed (no server required)
 2. Schema-enforced (validated at write time)
 3. Graph-native (traversal, algorithms, pattern matching built in)
 4. Conflict-free (mathematical convergence guarantee)
 5. Provenance (ed25519 signatures — every entry is cryptographically signed)
+6. Time-travel (query the graph at any historical time)
 
 Silk is that tool.
 
@@ -38,6 +39,10 @@ BFS, shortest path, impact analysis, subgraph extraction, pattern matching, topo
 ### Provenance
 
 ed25519 signatures on every entry. You can verify who created each piece of data. Trust registries control which peers are accepted. Strict mode rejects unsigned entries on merge. No external PKI required — keys are generated locally and exchanged out of band (same trust model as the ontology itself).
+
+### Time-travel
+
+Query the graph at any point in the past with `store.as_of(physical_ms)`. Every entry carries a hybrid logical clock (R-01) — real wall-clock time, not just a counter. "What did we know yesterday at 3pm?" is a meaningful question with a precise answer. The entire oplog is the audit trail; `as_of()` materializes any prefix of it. No other CRDT-based graph engine offers this.
 
 ## Proof by Example
 

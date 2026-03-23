@@ -36,7 +36,7 @@ cargo bench
 
 ## Architecture
 
-Design decisions are numbered D-001 through D-028 in [DESIGN.md](DESIGN.md). Roadmap items R-01 through R-08 are tracked in [ROADMAP.md](ROADMAP.md) (R-01 through R-05 complete). To run tests with signing: `cargo test --features signing`
+Design decisions are numbered D-001 through D-028 in [DESIGN.md](DESIGN.md). Roadmap items R-01 through R-08 are tracked in [ROADMAP.md](ROADMAP.md) (R-01 through R-06 complete). To run tests with signing: `cargo test --features signing`
 
 ## License
 
