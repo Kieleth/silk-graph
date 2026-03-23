@@ -46,7 +46,7 @@ MessagePack: a 3-element map with string keys.
 **Rules:**
 - On local event (`tick`): physical = max(old_physical, wall_clock). If physical advanced → logical = 0. Else → logical += 1.
 - On merge: physical = max(local, remote, wall_clock). If physical advanced past both → logical = 0. If tied with one side → logical = max(tied) + 1.
-- Total order: (physical_ms, logical, id). Higher physical wins. Same → higher logical wins. Both equal → lower id wins.
+- Total order: (physical_ms, logical, id). Higher physical wins. Same → higher logical wins. Both equal → **lower** id wins (lexicographic, deterministic). Note: this means instance names create an implicit priority hierarchy. Both orderings (lower-wins, higher-wins) are valid per Shapiro et al. (2011); Silk chose lower-wins.
 
 ### Value (property values)
 

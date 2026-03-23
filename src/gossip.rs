@@ -24,9 +24,11 @@ pub struct PeerInfo {
 ///
 /// The registry is ephemeral — not stored in the graph or oplog.
 /// The application manages peer lifecycle (register/unregister).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct PeerRegistry {
     peers: BTreeMap<String, PeerInfo>,
+    /// Instance ID — mixed into RNG seed to prevent thundering herd (Bug 9).
+    instance_seed: u64,
 }
 
 fn now_ms() -> u64 {
@@ -40,6 +42,21 @@ impl PeerRegistry {
     pub fn new() -> Self {
         Self {
             peers: BTreeMap::new(),
+            instance_seed: 0,
+        }
+    }
+
+    /// Create with an instance ID for RNG seed diversification (prevents thundering herd).
+    pub fn with_instance_id(instance_id: &str) -> Self {
+        // Simple hash of instance_id for seed mixing
+        let mut h: u64 = 0xcbf29ce484222325; // FNV offset basis
+        for b in instance_id.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3); // FNV prime
+        }
+        Self {
+            peers: BTreeMap::new(),
+            instance_seed: h,
         }
     }
 
@@ -95,7 +112,7 @@ impl PeerRegistry {
         let fan_out = fan_out.min(n); // can't select more than N
 
         // Deterministic pseudo-random selection using timestamp seed
-        let seed = now_ms();
+        let seed = now_ms() ^ self.instance_seed;
         let peer_ids: Vec<&String> = self.peers.keys().collect();
         let mut selected = Vec::with_capacity(fan_out);
         let mut state = seed;

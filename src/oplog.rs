@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::entry::{Entry, Hash};
+use crate::entry::{Entry, GraphOp, Hash};
 
 /// In-memory Merkle-DAG operation log.
 ///
@@ -49,6 +49,16 @@ impl OpLog {
         // Duplicate — idempotent, no error.
         if self.entries.contains_key(&entry.hash) {
             return Ok(false);
+        }
+
+        // Bug 7 fix: if this is a Checkpoint entry (next=[]) arriving at a non-empty
+        // oplog, replace the oplog instead of creating a second root.
+        if entry.next.is_empty()
+            && !self.entries.is_empty()
+            && matches!(entry.payload, GraphOp::Checkpoint { .. })
+        {
+            self.replace_with_checkpoint(entry);
+            return Ok(true);
         }
 
         // All causal predecessors must exist (except for genesis which has next=[]).

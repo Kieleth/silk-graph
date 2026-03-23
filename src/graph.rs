@@ -94,16 +94,16 @@ impl MaterializedGraph {
     /// convergence — quarantine is a graph-layer concern, not an oplog concern.
     pub fn apply(&mut self, entry: &Entry) {
         match &entry.payload {
-            GraphOp::Checkpoint { ops, .. } => {
-                // R-08: Replay synthetic ops to restore graph state
-                for op in ops {
-                    let synthetic = Entry::new(
-                        op.clone(),
-                        vec![],
-                        vec![],
-                        entry.clock.clone(),
-                        &entry.author,
-                    );
+            GraphOp::Checkpoint { ops, op_clocks, .. } => {
+                // R-08: Replay synthetic ops to restore graph state.
+                // Bug 6 fix: use per-op clocks (preserves LWW metadata).
+                for (i, op) in ops.iter().enumerate() {
+                    let clock = if i < op_clocks.len() {
+                        LamportClock::with_values(&entry.author, op_clocks[i].0, op_clocks[i].1)
+                    } else {
+                        entry.clock.clone() // fallback for old checkpoints without op_clocks
+                    };
+                    let synthetic = Entry::new(op.clone(), vec![], vec![], clock, &entry.author);
                     self.apply(&synthetic);
                 }
             }
@@ -146,12 +146,27 @@ impl MaterializedGraph {
                 target_id,
                 properties,
             } => {
-                // R-02: validate edge type exists. Full source/target type
-                // validation is skipped — during sync, source/target nodes
-                // may not be materialized yet (out-of-order batch).
+                // R-02: validate edge type exists.
                 if !self.ontology.edge_types.contains_key(edge_type.as_str()) {
                     self.quarantined.insert(entry.hash);
                     return;
+                }
+                // Bug 13 fix: validate source/target type constraints when both nodes
+                // are materialized. If one is missing (out-of-order sync), skip —
+                // validation happens on rebuild.
+                if let (Some(src), Some(tgt)) = (
+                    self.nodes.get(source_id.as_str()),
+                    self.nodes.get(target_id.as_str()),
+                ) {
+                    if let Err(_) = self.ontology.validate_edge(
+                        edge_type,
+                        &src.node_type,
+                        &tgt.node_type,
+                        properties,
+                    ) {
+                        self.quarantined.insert(entry.hash);
+                        return;
+                    }
                 }
                 self.apply_add_edge(
                     edge_id,

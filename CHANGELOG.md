@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-03-23
+
+### Fixed
+- **Bug 5: Concurrent schema conflicts** — `ExtendOntology` entries during sync now trigger a full graph `rebuild()` instead of incremental apply. Deterministic topological order ensures identical quarantine sets across all peers. Fixes Theorem 1 violation.
+- **Bug 6: Checkpoint per-property clocks** — Checkpoint now preserves per-entity max clocks (`op_clocks` field). Synthetic entries use original clocks, not the checkpoint clock. Prevents LWW divergence after compaction.
+- **Bug 7: Mixed-compaction sync doubled oplog** — When a Checkpoint entry (next=[]) is merged into a non-compacted oplog, it now replaces the entire oplog instead of creating a second root.
+- **Bug 9: Gossip thundering herd** — Peer selection seed now includes instance ID hash (`now_ms ^ fnv(instance_id)`). NTP-synchronized peers select different targets.
+- **Bug 13: Edge source/target validation on sync** — `AddEdge` in the quarantine path now validates source/target node type constraints when both endpoints are materialized.
+
 ### Added
 - **R-07: Query Builder** — Fluent `Query` class for Python-native graph queries. Chain `.nodes()`, `.where()`, `.follow()`, `.collect()`. Works with both `GraphStore` and `GraphSnapshot`. `QueryEngine` protocol for plugging in Datalog/SPARQL/custom engines.
 - **R-08: Epoch Compaction** — `store.compact()` compresses the entire oplog into a single checkpoint entry. Preserves all live nodes, edges, and ontology extensions. Tombstoned entities excluded. Works with persistent stores. `create_checkpoint()` for inspection without compacting.

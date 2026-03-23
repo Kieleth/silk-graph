@@ -187,7 +187,7 @@ impl PyGraphStore {
             key_registry: HashMap::new(),
             #[cfg(feature = "signing")]
             require_signatures: false,
-            gossip: crate::gossip::PeerRegistry::new(),
+            gossip: crate::gossip::PeerRegistry::with_instance_id(&instance_id),
         })
     }
 
@@ -241,6 +241,7 @@ impl PyGraphStore {
         // R-03: sync ontology from graph (may have been extended).
         let ontology = graph.ontology.clone();
 
+        let gossip = crate::gossip::PeerRegistry::with_instance_id(&instance_id);
         Ok(Self {
             backend: Backend::Persistent(store),
             graph,
@@ -256,7 +257,7 @@ impl PyGraphStore {
             key_registry: HashMap::new(),
             #[cfg(feature = "signing")]
             require_signatures: false,
-            gossip: crate::gossip::PeerRegistry::new(),
+            gossip,
         })
     }
 
@@ -725,6 +726,7 @@ impl PyGraphStore {
             .unwrap_or(0);
         let clock = LamportClock::with_values(&instance_id, max_physical, max_logical);
 
+        let gossip = crate::gossip::PeerRegistry::with_instance_id(&instance_id);
         Ok(Self {
             backend: Backend::Memory(oplog),
             graph,
@@ -740,7 +742,7 @@ impl PyGraphStore {
             key_registry: HashMap::new(),
             #[cfg(feature = "signing")]
             require_signatures: false,
-            gossip: crate::gossip::PeerRegistry::new(),
+            gossip,
         })
     }
 
@@ -901,10 +903,12 @@ impl PyGraphStore {
     /// R-08: Create a checkpoint entry from the current graph state.
     /// Returns the checkpoint as bytes (for inspection), does NOT compact yet.
     fn create_checkpoint(&self) -> PyResult<Vec<u8>> {
-        let ops = self.build_checkpoint_ops();
+        let (ops, clocks) = self.build_checkpoint_ops();
+        let op_clocks: Vec<(u64, u32)> = clocks.iter().map(|c| c.as_tuple()).collect();
         let (phys, log) = self.clock.as_tuple();
         let checkpoint_op = GraphOp::Checkpoint {
             ops,
+            op_clocks,
             compacted_at_physical_ms: phys,
             compacted_at_logical: log,
         };
@@ -923,12 +927,14 @@ impl PyGraphStore {
     /// Returns the hex hash of the checkpoint entry.
     /// SAFETY: Only call when ALL peers have synced to current state.
     fn compact(&mut self) -> PyResult<String> {
-        let ops = self.build_checkpoint_ops();
+        let (ops, clocks) = self.build_checkpoint_ops();
+        let op_clocks: Vec<(u64, u32)> = clocks.iter().map(|c| c.as_tuple()).collect();
         self.clock.tick();
         let (phys, log) = self.clock.as_tuple();
         let checkpoint = self.create_entry(
             GraphOp::Checkpoint {
                 ops,
+                op_clocks,
                 compacted_at_physical_ms: phys,
                 compacted_at_logical: log,
             },
@@ -955,16 +961,29 @@ impl PyGraphStore {
 impl PyGraphStore {
     /// R-08: Build synthetic ops that reconstruct the current graph state.
     /// Order: DefineOntology (with all extensions merged), AddNode for each live node, AddEdge for each live edge.
-    fn build_checkpoint_ops(&self) -> Vec<GraphOp> {
+    /// Build synthetic ops + per-entity clocks for checkpoint.
+    /// Returns (ops, clocks) where clocks[i] is the clock to use for ops[i].
+    /// Bug 6 fix: each entity uses its max per-property clock, not the checkpoint clock.
+    fn build_checkpoint_ops(&self) -> (Vec<GraphOp>, Vec<LamportClock>) {
         let mut ops = Vec::new();
+        let mut clocks = Vec::new();
 
         // 1. Ontology (with all extensions merged)
         ops.push(GraphOp::DefineOntology {
             ontology: self.ontology.clone(),
         });
+        clocks.push(self.clock.clone());
 
-        // 2. All live nodes
+        // 2. All live nodes — use max per-property clock
         for node in self.graph.all_nodes() {
+            let max_clock = node
+                .property_clocks
+                .values()
+                .chain(std::iter::once(&node.last_clock))
+                .max_by(|a, b| a.cmp_order(b))
+                .cloned()
+                .unwrap_or_else(|| node.last_clock.clone());
+
             ops.push(GraphOp::AddNode {
                 node_id: node.node_id.clone(),
                 node_type: node.node_type.clone(),
@@ -972,10 +991,19 @@ impl PyGraphStore {
                 label: node.label.clone(),
                 properties: node.properties.clone(),
             });
+            clocks.push(max_clock);
         }
 
-        // 3. All live edges
+        // 3. All live edges — use max per-property clock
         for edge in self.graph.all_edges() {
+            let max_clock = edge
+                .property_clocks
+                .values()
+                .chain(std::iter::once(&edge.last_clock))
+                .max_by(|a, b| a.cmp_order(b))
+                .cloned()
+                .unwrap_or_else(|| edge.last_clock.clone());
+
             ops.push(GraphOp::AddEdge {
                 edge_id: edge.edge_id.clone(),
                 edge_type: edge.edge_type.clone(),
@@ -983,9 +1011,10 @@ impl PyGraphStore {
                 target_id: edge.target_id.clone(),
                 properties: edge.properties.clone(),
             });
+            clocks.push(max_clock);
         }
 
-        ops
+        (ops, clocks)
     }
 
     /// Validate an entry's payload against the ontology (used by graph.apply() for R-02 quarantine).
@@ -1110,47 +1139,54 @@ impl PyGraphStore {
         };
 
         if inserted > 0 {
-            // Apply new entries in topological order. Merged entries from
-            // concurrent branches may be interleaved with existing entries
-            // in the topo sort, so we filter by hash rather than skipping
-            // a fixed count.
             let all = self.backend.oplog().entries_since(None);
+
+            // Bug 5 fix: check if any new entry is ExtendOntology or Checkpoint.
+            // If so, full rebuild is required for deterministic quarantine resolution.
+            // Incremental apply can diverge when concurrent schema extensions conflict.
+            let has_schema_change = all.iter().any(|e| {
+                !existing.contains(&e.hash)
+                    && matches!(
+                        e.payload,
+                        GraphOp::ExtendOntology { .. } | GraphOp::Checkpoint { .. }
+                    )
+            });
+
+            if has_schema_change {
+                // Full rebuild: deterministic topo order → identical quarantine sets
+                let refs: Vec<&Entry> = all.iter().copied().collect();
+                self.graph.rebuild(&refs);
+                // Rebuild node_types and ontology from the rebuilt graph
+                self.node_types.clear();
+                for node in self.graph.all_nodes() {
+                    self.node_types
+                        .insert(node.node_id.clone(), node.node_type.clone());
+                }
+                self.ontology = self.graph.ontology.clone();
+            } else {
+                // Incremental apply: safe when no schema changes
+                for entry in &all {
+                    if !existing.contains(&entry.hash) {
+                        self.graph.apply(entry);
+                        match &entry.payload {
+                            GraphOp::AddNode {
+                                node_id, node_type, ..
+                            } => {
+                                self.node_types.insert(node_id.clone(), node_type.clone());
+                            }
+                            GraphOp::RemoveNode { node_id } => {
+                                self.node_types.remove(node_id);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            // Update clock and notify subscribers for all new entries
             for entry in &all {
                 if !existing.contains(&entry.hash) {
-                    self.graph.apply(entry);
-                    match &entry.payload {
-                        GraphOp::AddNode {
-                            node_id, node_type, ..
-                        } => {
-                            self.node_types.insert(node_id.clone(), node_type.clone());
-                        }
-                        GraphOp::RemoveNode { node_id } => {
-                            self.node_types.remove(node_id);
-                        }
-                        GraphOp::ExtendOntology { extension } => {
-                            // R-03: sync local ontology (best-effort, quarantined if invalid)
-                            let _ = self.ontology.merge_extension(extension);
-                        }
-                        GraphOp::Checkpoint { ops, .. } => {
-                            // R-08: process synthetic ops for node_types and ontology
-                            for op in ops {
-                                match op {
-                                    GraphOp::DefineOntology { ontology } => {
-                                        self.ontology = ontology.clone();
-                                    }
-                                    GraphOp::AddNode {
-                                        node_id, node_type, ..
-                                    } => {
-                                        self.node_types.insert(node_id.clone(), node_type.clone());
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
                     self.clock.merge(&entry.clock);
-                    // D-023: notify subscribers (remote merge → local=false)
                     self.notify_subscribers(entry, false);
                 }
             }

@@ -67,6 +67,10 @@ pub enum GraphOp {
     Checkpoint {
         /// Synthetic ops that reconstruct the graph state
         ops: Vec<GraphOp>,
+        /// Per-op clocks: (physical_ms, logical) for each op.
+        /// Bug 6 fix: preserves per-entity clock metadata for correct LWW after compaction.
+        #[serde(default)]
+        op_clocks: Vec<(u64, u32)>,
         /// Physical timestamp when compaction was performed
         compacted_at_physical_ms: u64,
         /// Logical timestamp when compaction was performed
@@ -457,6 +461,7 @@ mod tests {
                         properties: BTreeMap::new(),
                     },
                 ],
+                op_clocks: vec![(1, 0), (2, 0)],
                 compacted_at_physical_ms: 1000,
                 compacted_at_logical: 5,
             },
