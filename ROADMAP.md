@@ -32,7 +32,9 @@ Each one makes the next one possible. None can be skipped without breaking somet
 
 ---
 
-## R-01: The Clock Is Lying
+## R-01: The Clock Is Lying ✓
+
+> **Status: COMPLETE** — Implemented in commit c5bc05c. HybridClock replaces LamportClock in `src/clock.rs`.
 
 Right now, Silk's clock is like counting on your fingers. Every time you write something, you say "this is thing number 47." Your friend says "this is thing number 52." When you disagree about the cat's color, whoever has the bigger number wins.
 

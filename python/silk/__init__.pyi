@@ -239,7 +239,8 @@ class GraphStore:
             op (str): "add_node" | "add_edge" | "update_property"
                       | "remove_node" | "remove_edge" | "define_ontology".
             author (str): Instance ID of the writer.
-            clock_time (int): Lamport time.
+            physical_ms (int): Wall-clock time in milliseconds (R-01 HLC).
+            logical (int): Counter within same millisecond (R-01 HLC).
             local (bool): True if this store wrote it, False if received via merge.
             Plus op-specific fields (node_id, node_type, subtype, edge_id, entity_id, key, value, etc.)
 

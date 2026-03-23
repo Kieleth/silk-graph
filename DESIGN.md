@@ -80,7 +80,7 @@ Silk (engine)                    Your App (domain ontology)
 │ Ontology enforcement │◄───────│ signal, entity, rule,    │
 │ Merkle-DAG           │        │ plan, action             │
 │ BLAKE3 hashing       │        │ OBSERVES, TRIGGERS,      │
-│ Lamport clocks       │        │ RUNS_ON, PRODUCES...     │
+│ Hybrid Logical Clocks│        │ RUNS_ON, PRODUCES...     │
 │ CRDT sync            │        └──────────────────────────┘
 │                      │
 │ No domain knowledge  │        Any other domain
@@ -186,7 +186,7 @@ struct Entry {
     sig: Vec<u8>,             // signature over (payload, next, refs, clock)
 }
 
-struct LamportClock {
+struct LamportClock {  // (R-01: replaced with Hybrid Logical Clock — see ROADMAP.md)
     id: String,               // instance identifier
     time: u64,                // monotonic, incremented on each local op
 }

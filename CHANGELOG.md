@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **D-027: Author authentication** — ed25519 signatures on entries. `generate_signing_key()`, `set_signing_key()`, `get_public_key()`, `register_trusted_author()`, `set_require_signatures()`. Auto-sign on write, verify on merge. Strict mode rejects unsigned entries. Backward compatible — unsigned entries accepted by default.
 
 ### Security
-- **S-01**: Lamport clock uses `saturating_add` — prevents overflow wrap-around at u64::MAX
+- **S-01**: HybridClock logical counter uses `saturating_add` — prevents overflow wrap-around at u64::MAX
 - **S-03**: Sync message size limits — 64 MB max bytes, 100K max entries per payload
 - **S-04**: Ontology validation on sync merge — invalid entries from remote peers are skipped, not silently accepted
 - **S-05**: Bloom filter dimension validation — rejects malformed bloom filters that would cause panics
@@ -21,9 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **S-12**: Value size limits — strings capped at 1 MB, lists/maps at 10K items
 - **S-13**: ObservationLog rejects source names > 65535 bytes instead of silently truncating
 - **S-20**: Default features changed to `[]` — pyo3 is opt-in, not pulled by default for Rust consumers
-- **S-01b**: Clock drift rejection on sync — entries with implausibly far-future Lamport clocks are rejected (MAX_CLOCK_DRIFT = 1,000,000)
+- **S-01b**: Clock drift rejection on sync — entries with physical_ms exceeding local physical_ms + 1,000,000 ms are rejected (MAX_CLOCK_DRIFT = 1,000,000)
 
 ### Changed
+- **R-01: Hybrid Logical Clocks** — BREAKING: Replace LamportClock with HybridClock. Entries now carry wall-clock time (physical_ms) and logical counter. LWW conflicts resolved by real-time ordering. All entry hashes change — v0.1 stores incompatible.
 - **D-026: Open properties** — Unknown properties are now accepted without validation. Unknown subtypes are accepted with type-level validation only. The ontology defines the minimum, not the maximum. Previously, any property or subtype not declared in the ontology was rejected with `ValidationError`.
 
 ## [0.1.0] - 2026-03-21

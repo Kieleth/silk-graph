@@ -36,7 +36,7 @@ cargo bench
 
 ## Architecture
 
-Silk's architecture is documented in [DESIGN.md](DESIGN.md). Decisions are numbered D-001 through D-028. New features that change the architecture should propose a new decision number.
+Silk's architecture is documented in [DESIGN.md](DESIGN.md). Decisions are numbered D-001 through D-028. New features that change the architecture should propose a new decision number. Roadmap features (R-001 through R-008) are tracked in [ROADMAP.md](ROADMAP.md).
 
 To run tests with signing support:
 ```bash

@@ -232,7 +232,7 @@ For the full architectural overview — research foundations (Merkle-CRDTs, Delt
 Write (add_node, add_edge, update_property)
   │
   ▼
-Entry { hash(BLAKE3), op, clock(Lamport), author, parents }
+Entry { hash(BLAKE3), op, clock(HLC), author, parents }
   │
   ▼
 OpLog (append-only Merkle-DAG, content-addressed)
@@ -329,7 +329,7 @@ Silk's architecture is driven by 28 explicit design decisions (D-001 through D-0
 | Hash function | BLAKE3 | Fastest cryptographic hash, 128-bit security |
 | Serialization | MessagePack | Compact binary, faster than JSON, schema-free |
 | Storage | redb | Embedded, transactional, pure Rust, no C dependencies |
-| Clock | Lamport | Sufficient for causality ordering without wall-clock sync |
+| Clock | Hybrid Logical (R-01) | Wall-clock time + logical counter. Real-time LWW ordering. |
 | Conflict resolution | Per-property LWW | Non-conflicting concurrent writes both win |
 | Sync | Delta-state + Bloom | Minimize transfer: only send what the peer lacks |
 | Schema | Open properties (D-026) | Ontology is the floor, not the ceiling — unknown properties accepted |
@@ -434,7 +434,8 @@ Methods like `get_node()` and `get_edge()` return plain dicts. Here's what's ins
     "op": "add_node",           # str — add_node | add_edge | update_property |
                                 #        remove_node | remove_edge | define_ontology
     "author": "node-a",        # str — instance that created this entry
-    "clock_time": 42,          # int — Lamport clock value
+    "physical_ms": 1710000000000,  # int — wall-clock milliseconds since epoch
+    "logical": 0,                   # int — counter within same millisecond
     "local": True,             # bool — True if local write, False if from sync
     # op-specific fields (present depending on op):
     "node_id": "alice",        # add_node, remove_node
@@ -671,7 +672,7 @@ phone.update_property("n1", "body", "Updated from phone")
 phone.update_property("n1", "priority", "high")
 
 # Sync — per-property LWW resolves the conflict
-# "body" goes to whichever write happened later (Lamport clock)
+# "body" goes to whichever write happened later (wall-clock time)
 # "priority" is non-conflicting — preserved on both sides
 ```
 

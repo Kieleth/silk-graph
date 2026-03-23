@@ -10,7 +10,7 @@ Silk is designed for **trusted peer networks** — devices and services you cont
 - **Duplicate entries** — idempotent skip, replay-safe
 - **Missing parents** — rejected with MissingParent error
 - **Clock overflow** — saturating arithmetic prevents u64 wrap-around (S-01)
-- **Clock drift rejection** — entries with clock times exceeding local clock + 1,000,000 are rejected on sync, preventing the "Byzantine clock" attack where a malicious peer wins all LWW conflicts (S-01b)
+- **Clock drift rejection** — entries with physical_ms exceeding local physical_ms + 1,000,000 ms are rejected on sync, preventing the "Byzantine clock" attack where a malicious peer wins all LWW conflicts (S-01b)
 - **Bloom filter crashes** — malformed dimensions validated after deserialization (S-05)
 - **Message size limits** — sync payloads capped at 64 MB / 100K entries (S-03)
 - **Schema enforcement on sync** — ontology validation on merge path, invalid entries skipped (S-04)

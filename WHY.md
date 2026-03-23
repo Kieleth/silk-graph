@@ -25,7 +25,7 @@ Silk validates every write against an ontology defined at store creation. Node t
 
 ### Conflict-free
 
-Silk uses a Merkle-CRDT: every mutation is a content-addressed entry in a DAG, with Lamport clocks for causal ordering. Concurrent writes to different properties on the same node both survive — per-property last-writer-wins. Concurrent add + remove → add wins. Two stores that exchange sync messages in both directions are mathematically guaranteed to converge to the same graph state. No coordinator, no consensus protocol, no leader election.
+Silk uses a Merkle-CRDT: every mutation is a content-addressed entry in a DAG, with hybrid logical clocks (R-01) for real-time causal ordering. Concurrent writes to different properties on the same node both survive — per-property last-writer-wins. Concurrent add + remove → add wins. Two stores that exchange sync messages in both directions are mathematically guaranteed to converge to the same graph state. No coordinator, no consensus protocol, no leader election.
 
 ### Offline-first
 
@@ -114,7 +114,7 @@ Write (add_node, add_edge, update_property, remove_node, remove_edge)
 Ontology Validation
   |  reject invalid writes here, before they enter the DAG
   v
-Entry { hash: BLAKE3(content), op, clock: Lamport, author, parents: [head_hashes] }
+Entry { hash: BLAKE3(content), op, clock: HLC, author, parents: [head_hashes] }
   |
   v
 OpLog (append-only Merkle-DAG, content-addressed, immutable)

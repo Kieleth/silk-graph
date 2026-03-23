@@ -31,21 +31,22 @@ All messages are serialized as [MessagePack](https://msgpack.org/) using `rmp_se
 
 A 32-byte BLAKE3 hash, represented as `[u8; 32]`. In MessagePack: a `bin 32` (binary data, 32 bytes). In hex display: 64 lowercase hex characters.
 
-### LamportClock
+### HybridClock (R-01)
 
 ```
 {
-    "id": string,    // Instance identifier (e.g., "node-a")
-    "time": uint64   // Monotonically increasing logical time
+    "id": string,          // Instance identifier (e.g., "node-a")
+    "physical_ms": uint64, // Wall-clock time in milliseconds since Unix epoch
+    "logical": uint32      // Counter for events within same millisecond
 }
 ```
 
-MessagePack: a 2-element map with string keys.
+MessagePack: a 3-element map with string keys.
 
 **Rules:**
-- Incremented before each local write
-- On merge: `local.time = max(local.time, remote.time) + 1`
-- Ties broken by instance ID: lexicographically lower ID wins
+- On local event (`tick`): physical = max(old_physical, wall_clock). If physical advanced → logical = 0. Else → logical += 1.
+- On merge: physical = max(local, remote, wall_clock). If physical advanced past both → logical = 0. If tied with one side → logical = max(tied) + 1.
+- Total order: (physical_ms, logical, id). Higher physical wins. Same → higher logical wins. Both equal → lower id wins.
 
 ### Value (property values)
 
@@ -105,7 +106,7 @@ The atomic unit of the Merkle-DAG. Content-addressed: `hash = BLAKE3(msgpack(sig
     "payload": GraphOp,           // The graph mutation
     "next":    [[u8; 32], ...],   // Causal predecessors (DAG heads at write time)
     "refs":    [[u8; 32], ...],   // Skip-list references (O(log n) traversal)
-    "clock":   LamportClock,      // Logical clock at creation
+    "clock":   HybridClock,       // Hybrid clock at creation (R-01)
     "author":  string,            // Instance ID that created this entry
     "signature": Option<Vec<u8>>  // D-027: ed25519 signature over hash (64 bytes), None for unsigned
 }
@@ -120,7 +121,7 @@ struct SignableContent {
     payload: GraphOp,
     next: Vec<Hash>,
     refs: Vec<Hash>,
-    clock: LamportClock,
+    clock: HybridClock,
     author: String,
 }
 ```
@@ -168,7 +169,8 @@ Sent by the initiating peer. Advertises its state.
 {
     "heads":      [[u8; 32], ...],   // Current DAG head hashes
     "bloom":      BloomFilter,        // Bloom filter of all entry hashes
-    "clock_time": uint64              // Current Lamport clock time
+    "physical_ms": uint64,            // Current wall-clock time (ms)
+    "logical":     uint32             // Current logical counter
 }
 ```
 
@@ -277,7 +279,7 @@ A (existing)                    C (new)
 ### Conflict Resolution
 
 - **Add-wins**: If one peer removes a node and another adds an edge to it, the add wins after sync
-- **Per-property LWW**: Concurrent updates to the same property are resolved by Lamport clock comparison. Higher clock time wins. Equal times: lexicographically lower instance ID wins.
+- **Per-property LWW**: Concurrent updates to the same property are resolved by Hybrid Logical Clock comparison. Higher physical_ms wins. Same physical_ms: higher logical wins. Both equal: lexicographically lower instance ID wins.
 - **Non-conflicting concurrent writes**: Two peers updating different properties on the same node both succeed — neither is lost
 
 ## Version Compatibility
