@@ -48,7 +48,8 @@ jobs:
       - name: Build and install
         run: |
           pip install maturin pytest
-          maturin develop --release --features python
+          maturin build --release --features python --out dist
+          pip install dist/*.whl
 
       - name: Run Python tests
         run: pytest pytests/ -v
