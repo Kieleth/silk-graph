@@ -278,6 +278,20 @@ class GraphStore:
         """Record that a sync with this peer completed."""
         ...
 
+    # -- Time-Travel (R-06) --
+
+    def as_of(self, physical_ms: int, logical: int = 0) -> "GraphSnapshot":
+        """R-06: Create a read-only snapshot of the graph at a historical time.
+
+        Args:
+            physical_ms: Wall-clock cutoff in milliseconds.
+            logical: Logical clock component (default 0).
+
+        Returns:
+            A read-only GraphSnapshot with the graph state at the given time.
+        """
+        ...
+
     # -- Quarantine (R-02) --
 
     def get_quarantined(self) -> list[str]:
@@ -321,6 +335,83 @@ class GraphStore:
 
         Genesis entries (DefineOntology) are always accepted regardless of this setting.
         """
+        ...
+
+
+class GraphSnapshot:
+    """R-06: Read-only snapshot of the graph at a historical point in time.
+
+    Created by `GraphStore.as_of(physical_ms, logical)`.
+    Exposes query and algorithm methods but no mutations.
+    """
+
+    def cutoff_clock(self) -> tuple[int, int]:
+        """The cutoff clock used to create this snapshot: (physical_ms, logical)."""
+        ...
+    def instance_id(self) -> str:
+        """Instance identifier of the store that created this snapshot."""
+        ...
+
+    # -- Graph queries --
+
+    def get_node(self, node_id: str) -> dict[str, Any] | None:
+        """Get a node by ID. Returns dict or None."""
+        ...
+    def get_edge(self, edge_id: str) -> dict[str, Any] | None:
+        """Get an edge by ID. Returns dict or None."""
+        ...
+    def query_nodes_by_type(self, node_type: str) -> list[dict[str, Any]]:
+        """Query all live nodes of a given type."""
+        ...
+    def query_nodes_by_subtype(self, subtype: str) -> list[dict[str, Any]]:
+        """Query all live nodes of a given subtype."""
+        ...
+    def query_nodes_by_property(self, key: str, value: Any) -> list[dict[str, Any]]:
+        """Query nodes by a property value."""
+        ...
+    def all_nodes(self) -> list[dict[str, Any]]:
+        """All live nodes at this point in time."""
+        ...
+    def all_edges(self) -> list[dict[str, Any]]:
+        """All live edges at this point in time."""
+        ...
+    def outgoing_edges(self, node_id: str) -> list[dict[str, Any]]:
+        """Outgoing edges from a node."""
+        ...
+    def incoming_edges(self, node_id: str) -> list[dict[str, Any]]:
+        """Incoming edges to a node."""
+        ...
+    def neighbors(self, node_id: str) -> list[str]:
+        """Neighbor node IDs (via outgoing edges)."""
+        ...
+
+    # -- Engine (graph algorithms) --
+
+    def bfs(
+        self,
+        start: str,
+        max_depth: int | None = None,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        """BFS traversal from a start node. Returns list of node IDs."""
+        ...
+    def shortest_path(self, start: str, end: str) -> list[str] | None:
+        """Shortest path between two nodes. Returns list of node IDs or None."""
+        ...
+    def impact_analysis(self, node_id: str, max_depth: int | None = None) -> list[str]:
+        """Impact analysis: what depends on this node? Returns list of node IDs."""
+        ...
+    def subgraph(self, start: str, hops: int) -> dict[str, list[str]]:
+        """Subgraph extraction: nodes and edges within N hops."""
+        ...
+    def pattern_match(self, type_sequence: list[str]) -> list[list[str]]:
+        """Find chains matching a sequence of node types."""
+        ...
+    def topological_sort(self) -> list[str] | None:
+        """Topological sort. Returns list of node IDs or None if cycle detected."""
+        ...
+    def has_cycle(self) -> bool:
+        """Cycle detection. Returns true if graph has a cycle."""
         ...
 
 

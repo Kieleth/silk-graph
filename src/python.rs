@@ -744,6 +744,38 @@ impl PyGraphStore {
         self.subscribers.retain(|(id, _)| *id != sub_id);
     }
 
+    // -- Time-Travel (R-06) --
+
+    /// R-06: Create a read-only snapshot of the graph at a historical time.
+    #[pyo3(signature = (physical_ms, logical=0))]
+    fn as_of(&self, physical_ms: u64, logical: u32) -> PyResult<PyGraphSnapshot> {
+        let entries = self.backend.oplog().entries_as_of(physical_ms, logical);
+
+        // Get ontology from genesis (first entry is always DefineOntology)
+        let all = self.backend.oplog().entries_since(None);
+        let genesis = all
+            .first()
+            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no entries in oplog"))?;
+        let ontology = match &genesis.payload {
+            GraphOp::DefineOntology { ontology } => ontology.clone(),
+            _ => {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                    "first entry is not DefineOntology",
+                ))
+            }
+        };
+
+        let mut graph = MaterializedGraph::new(ontology);
+        let refs: Vec<&Entry> = entries.iter().copied().collect();
+        graph.rebuild(&refs);
+
+        Ok(PyGraphSnapshot {
+            graph,
+            cutoff_clock: (physical_ms, logical),
+            instance_id: self.instance_id.clone(),
+        })
+    }
+
     // -- Quarantine (R-02) --
 
     /// Get the list of quarantined entry hashes (hex-encoded).
@@ -1411,11 +1443,190 @@ fn obs_to_pydict(py: Python<'_>, obs: &crate::obslog::Observation) -> PyResult<P
 }
 
 // ---------------------------------------------------------------------------
+// PyGraphSnapshot — R-06: read-only historical graph snapshot
+// ---------------------------------------------------------------------------
+
+/// R-06: Read-only snapshot of the graph at a historical point in time.
+/// Created by `GraphStore.as_of(physical_ms, logical)`.
+#[pyclass]
+pub struct PyGraphSnapshot {
+    graph: MaterializedGraph,
+    cutoff_clock: (u64, u32),
+    instance_id: String,
+}
+
+#[pymethods]
+impl PyGraphSnapshot {
+    /// The cutoff clock used to create this snapshot: (physical_ms, logical).
+    fn cutoff_clock(&self) -> (u64, u32) {
+        self.cutoff_clock
+    }
+
+    /// Instance identifier of the store that created this snapshot.
+    fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+
+    // -- Graph queries (read-only, same pattern as PyGraphStore) --
+
+    /// Get a node by ID. Returns dict or None.
+    fn get_node(&self, py: Python<'_>, node_id: &str) -> PyResult<Option<PyObject>> {
+        Ok(self
+            .graph
+            .get_node(node_id)
+            .map(|n| node_to_pydict(py, n).unwrap()))
+    }
+
+    /// Get an edge by ID. Returns dict or None.
+    fn get_edge(&self, py: Python<'_>, edge_id: &str) -> PyResult<Option<PyObject>> {
+        Ok(self
+            .graph
+            .get_edge(edge_id)
+            .map(|e| edge_to_pydict(py, e).unwrap()))
+    }
+
+    /// Query nodes by type. Returns list of node dicts.
+    fn query_nodes_by_type(&self, py: Python<'_>, node_type: &str) -> PyResult<Vec<PyObject>> {
+        self.graph
+            .nodes_by_type(node_type)
+            .iter()
+            .map(|n| node_to_pydict(py, n))
+            .collect()
+    }
+
+    /// Query nodes by subtype. Returns list of node dicts.
+    fn query_nodes_by_subtype(&self, py: Python<'_>, subtype: &str) -> PyResult<Vec<PyObject>> {
+        self.graph
+            .nodes_by_subtype(subtype)
+            .iter()
+            .map(|n| node_to_pydict(py, n))
+            .collect()
+    }
+
+    /// Query nodes by property value. Returns list of node dicts.
+    fn query_nodes_by_property(
+        &self,
+        py: Python<'_>,
+        key: &str,
+        value: &Bound<'_, pyo3::PyAny>,
+    ) -> PyResult<Vec<PyObject>> {
+        let val = py_to_value(value)?;
+        self.graph
+            .nodes_by_property(key, &val)
+            .iter()
+            .map(|n| node_to_pydict(py, n))
+            .collect()
+    }
+
+    /// All live nodes. Returns list of node dicts.
+    fn all_nodes(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        self.graph
+            .all_nodes()
+            .iter()
+            .map(|n| node_to_pydict(py, n))
+            .collect()
+    }
+
+    /// All live edges. Returns list of edge dicts.
+    fn all_edges(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        self.graph
+            .all_edges()
+            .iter()
+            .map(|e| edge_to_pydict(py, e))
+            .collect()
+    }
+
+    /// Outgoing edges from a node. Returns list of edge dicts.
+    fn outgoing_edges(&self, py: Python<'_>, node_id: &str) -> PyResult<Vec<PyObject>> {
+        self.graph
+            .outgoing_edges(node_id)
+            .iter()
+            .map(|e| edge_to_pydict(py, e))
+            .collect()
+    }
+
+    /// Incoming edges to a node. Returns list of edge dicts.
+    fn incoming_edges(&self, py: Python<'_>, node_id: &str) -> PyResult<Vec<PyObject>> {
+        self.graph
+            .incoming_edges(node_id)
+            .iter()
+            .map(|e| edge_to_pydict(py, e))
+            .collect()
+    }
+
+    /// Neighbor node IDs (via outgoing edges).
+    fn neighbors(&self, node_id: &str) -> Vec<String> {
+        self.graph
+            .neighbors(node_id)
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    // -- Engine methods --
+
+    /// BFS traversal from a start node. Returns list of node IDs.
+    #[pyo3(signature = (start, max_depth=None, edge_type=None))]
+    fn bfs(&self, start: &str, max_depth: Option<usize>, edge_type: Option<&str>) -> Vec<String> {
+        engine::bfs(&self.graph, start, max_depth, edge_type)
+    }
+
+    /// Shortest path between two nodes. Returns list of node IDs or None.
+    fn shortest_path(&self, start: &str, end: &str) -> Option<Vec<String>> {
+        engine::shortest_path(&self.graph, start, end)
+    }
+
+    /// Impact analysis: what depends on this node? Returns list of node IDs.
+    #[pyo3(signature = (node_id, max_depth=None))]
+    fn impact_analysis(&self, node_id: &str, max_depth: Option<usize>) -> Vec<String> {
+        engine::impact_analysis(&self.graph, node_id, max_depth)
+    }
+
+    /// Subgraph extraction: nodes and edges within N hops.
+    fn subgraph(&self, py: Python<'_>, start: &str, hops: usize) -> PyResult<PyObject> {
+        let (nodes, edges) = engine::subgraph(&self.graph, start, hops);
+        let dict = PyDict::new(py);
+        dict.set_item("nodes", nodes)?;
+        dict.set_item("edges", edges)?;
+        Ok(dict.into())
+    }
+
+    /// Pattern match: find chains matching a sequence of node types.
+    #[pyo3(signature = (type_sequence, max_results=1000))]
+    fn pattern_match(
+        &self,
+        py: Python<'_>,
+        type_sequence: Vec<String>,
+        max_results: usize,
+    ) -> PyResult<PyObject> {
+        let refs: Vec<&str> = type_sequence.iter().map(|s| s.as_str()).collect();
+        let chains = engine::pattern_match(&self.graph, &refs, max_results);
+        let list = PyList::empty(py);
+        for chain in chains {
+            let py_chain = PyList::new(py, &chain)?;
+            list.append(py_chain)?;
+        }
+        Ok(list.into())
+    }
+
+    /// Topological sort. Returns list of node IDs or None if cycle detected.
+    fn topological_sort(&self) -> Option<Vec<String>> {
+        engine::topological_sort(&self.graph)
+    }
+
+    /// Cycle detection. Returns true if graph has a cycle.
+    fn has_cycle(&self) -> bool {
+        engine::has_cycle(&self.graph)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module registration
 // ---------------------------------------------------------------------------
 
 pub fn register(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<PyGraphStore>()?;
+    m.add_class::<PyGraphSnapshot>()?;
     m.add_class::<PyObservationLog>()?;
     Ok(())
 }

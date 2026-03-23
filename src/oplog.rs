@@ -184,6 +184,19 @@ impl OpLog {
         result
     }
 
+    /// R-06: Get all entries with clock <= cutoff, in topological order.
+    /// Returns a historical snapshot of the state at the given time.
+    pub fn entries_as_of(&self, cutoff_physical: u64, cutoff_logical: u32) -> Vec<&Entry> {
+        let cutoff = (cutoff_physical, cutoff_logical);
+        let filtered: HashSet<Hash> = self
+            .entries
+            .iter()
+            .filter(|(_, e)| e.clock.as_tuple() <= cutoff)
+            .map(|(h, _)| *h)
+            .collect();
+        self.topo_sort(&filtered)
+    }
+
     /// BFS backwards through `next` links from the given starting hashes.
     /// Returns the set of all reachable hashes (including the starting ones).
     fn reachable_from(&self, starts: &[Hash]) -> HashSet<Hash> {

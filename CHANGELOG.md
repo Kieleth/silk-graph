@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **R-06: Time-Travel Queries** — `store.as_of(physical_ms, logical)` returns a read-only `GraphSnapshot` with the graph state at any historical time. All query and graph algorithm methods available. New `GraphSnapshot` class exported from Python.
+
 ## [0.1.2] - 2026-03-23
 
 ### Added

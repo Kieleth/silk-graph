@@ -238,7 +238,9 @@ Scalability beyond ~20 peers.
 
 ---
 
-## R-06: The Notebook Remembers, But You Can't Look Back
+## R-06: The Notebook Remembers, But You Can't Look Back ✓
+
+> **Status: COMPLETE** — `store.as_of(physical_ms, logical)` returns a read-only `GraphSnapshot` with the graph state at any historical time. All query and algorithm methods available. O(n log n) per query.
 
 Your notebook has every page ever written, in order. You could look up "what did we know yesterday at 3pm." The information is right there in the pages.
 
