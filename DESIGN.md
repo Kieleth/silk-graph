@@ -344,7 +344,8 @@ def callback(event: dict) -> None:
         "op":         str,          # "add_node" | "add_edge" | "update_property"
                                     # | "remove_node" | "remove_edge"
         "author":     str,          # instance ID of the writer
-        "clock_time": int,          # Lamport time
+        "physical_ms": int,         # wall-clock milliseconds (R-01 HLC)
+        "logical":     int,         # logical counter within millisecond
         "local":      bool,         # True = local write, False = received via merge
 
         # Op-specific fields (from the Entry payload):
@@ -486,7 +487,7 @@ store.ontology_json()    # full ontology as JSON string
 
 # DAG structure
 store.heads()            # current DAG head hashes
-store.get(hash)          # entry by hash: {payload, next, clock_time, author, ...}
+store.get(hash)          # entry by hash: {payload, next, clock: {physical_ms, logical, id}, author, ...}
 store.len()              # total entries including genesis
 
 # Future (S-2+): Queries, sync, persistence
@@ -760,7 +761,7 @@ test_subscription.py:                                                    ✅ IMP
   ✓ subscription_fires_on_add_edge      callback invoked on add_edge
   ✓ subscription_fires_on_remove_node   callback invoked on remove_node
   ✓ subscription_fires_on_remove_edge   callback invoked on remove_edge
-  ✓ event_fields_add_node               dict has op, node_id, node_type, author, clock_time
+  ✓ event_fields_add_node               dict has op, node_id, node_type, author, physical_ms, logical
   ✓ event_fields_update_property        dict has entity_id, key, value
   ✓ event_fields_add_edge               dict has edge_id, edge_type, source_id, target_id
   ✓ event_local_true_for_local_write    local=True for direct writes
