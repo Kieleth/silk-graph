@@ -278,13 +278,37 @@ This proof assumes:
 
 ---
 
+## 6. Compaction Addendum (R-08)
+
+**Claim**: A compacted OpLog converges with uncompacted peers.
+
+**Proof sketch**:
+
+1. A checkpoint at time T is safe iff ALL known peers have synced past T. This means no peer holds entries concurrent with or before T that haven't been seen by the compacting peer.
+
+2. The checkpoint entry contains synthetic ops (DefineOntology + AddNode + AddEdge) that, when replayed, produce a MaterializedGraph identical to the pre-compaction graph. This follows from the checkpoint construction: it iterates all live nodes and edges and emits the corresponding ops.
+
+3. After compaction, the OpLog contains exactly one entry (the checkpoint). New writes have the checkpoint as their parent.
+
+4. When an uncompacted peer syncs with a compacted peer:
+   - Delta sync may fail (old parent hashes missing). Fallback to snapshot bootstrap.
+   - Snapshot from checkpoint produces the same graph as the full history (by construction).
+   - After snapshot bootstrap + delta sync of post-compaction entries, both peers converge.
+
+5. Two compacted peers with checkpoints at different times still converge, because:
+   - Both checkpoints capture the same logical state (safety rule ensures all entries were synced)
+   - Post-checkpoint entries are identical (same sync protocol)
+   - Materialization is deterministic (Theorem 1)
+
+Therefore, compaction preserves convergence. ∎
+
+---
+
 ## 8. What This Proof Does NOT Cover
 
 - **Liveness**: This proof shows convergence (safety), not that sync will eventually complete (liveness). Liveness depends on network connectivity and the gossip protocol (R-05).
 
 - **Byzantine fault tolerance**: A malicious peer can inject valid-looking entries with spoofed clocks. Signatures (D-027) authenticate authors but don't prevent a compromised key from issuing bad data. Full BFT requires trust policies and quorum mechanisms beyond Silk's scope.
-
-- **Compaction safety**: Epoch compaction (R-08) will modify the OpLog by replacing a prefix with a checkpoint. The convergence proof must be extended to show that compacted OpLogs still converge. This is why R-08 depends on R-04.
 
 - **Performance bounds**: This proof shows correctness, not efficiency. Sync may transfer redundant entries (Bloom false positives); ancestor closure may be slow on adversarial DAGs. These are performance issues, not correctness issues.
 

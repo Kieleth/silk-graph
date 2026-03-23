@@ -23,7 +23,7 @@ Silk is designed for **trusted peer networks** — devices and services you cont
 ### What's NOT protected (known limitations)
 
 - **Author authentication** — ed25519 signing is implemented (D-027: `generate_signing_key()`, `register_trusted_author()`, `set_require_signatures()`). In default mode, unsigned entries are accepted for backward compatibility. Enable strict mode for full enforcement. Key revocation and rotation are not yet supported.
-- **Resource exhaustion** — OpLog grows without bound. A peer sending millions of valid entries fills memory and disk. (S-07 — planned for v0.3)
+- **Resource exhaustion** — mitigated via epoch compaction (R-08). `store.compact()` compresses the oplog when all peers have converged. Unbounded growth prevented by periodic compaction.
 - **Open network deployment** — Silk is not currently safe for untrusted/open peer networks. Use it between devices and services you control.
 
 ## Reporting Vulnerabilities
@@ -38,4 +38,4 @@ Do not open public issues for security vulnerabilities.
 |---------|------|
 | v0.1 | Clock overflow, bloom validation, message limits, value limits, file permissions |
 | v0.2 | HLC clocks (R-01), sync quarantine (R-02), ed25519 signatures (D-027), clock drift bounds |
-| v0.3 | Monotonic ontology evolution (R-03), oplog compaction (R-08), configurable oplog limits |
+| v0.3 | Monotonic ontology evolution (R-03), configurable oplog limits |

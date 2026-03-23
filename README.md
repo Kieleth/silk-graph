@@ -141,6 +141,7 @@ store.merge_sync_payload(&payload)?;
 - **Evolvable schema** — extend the ontology at runtime with new types, properties, and subtypes via `extend_ontology()`. Only additive changes — no migrations, no store recreation. (R-03)
 - **Scalable sync** — gossip-based peer selection (R-05). Instead of syncing with all N peers, select ceil(ln(N)+1) random targets per round. Scales from 2 peers to 10,000+.
 - **Time-travel queries** — `store.as_of(physical_ms)` returns a read-only `GraphSnapshot` at any historical time. All query and algorithm methods available. Datomic-style "the database is a value." (R-06)
+- **Epoch compaction** — `store.compact()` compresses the entire oplog into a single checkpoint entry. Bounds memory and disk growth for long-running systems. (R-08)
 
 ## When to Use Silk
 
@@ -172,9 +173,11 @@ Silk is designed for **trusted peer networks** — your own devices, your own te
 - Hash integrity verification on every entry
 - Author authentication — ed25519 signatures via `generate_signing_key()`, `register_trusted_author()`, `set_require_signatures()`. Enable strict mode to reject unsigned entries. Key revocation not yet supported.
 
+**What Silk provides today (cont.):**
+- **Oplog compaction** — `store.compact()` (R-08) compresses the oplog into a single checkpoint. Call when all peers have converged.
+
 **What Silk does NOT provide (yet):**
 - **Byzantine fault tolerance** — a malicious peer with network access can spoof clocks within drift bounds to win LWW conflicts. Signatures + trust policies will mitigate this.
-- **Oplog compaction** — the append-only log grows without bound. Planned: causal stability checkpointing (D-028)
 
 If you're syncing between devices you control, Silk is safe. If you're building an open network where anonymous peers connect, enable strict mode and register trusted authors.
 
@@ -323,7 +326,7 @@ Edge density scales linearly with traversal cost — no surprise, but now measur
 
 Higher overlap = more Bloom filter cross-checking. The fast path is low-overlap (first sync). Incremental syncs on already-converged peers use the 10% delta path (611 µs, see above).
 
-Run the examples yourself: `python examples/offline_first.py`. See all seven scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
+Run the examples yourself: `python examples/offline_first.py`. See all eight scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
 
 ## Design Decisions
 
@@ -343,6 +346,7 @@ Silk's architecture is driven by 28 design decisions (D-001–D-028) plus 8 road
 | Convergence | Formal proof (R-04) | Three theorems proving determinism, idempotence, convergence |
 | Peer selection | Gossip (R-05) | Logarithmic fan-out: ceil(ln(N)+1) per round, scales to 10K+ peers |
 | Time-travel | as_of() replay (R-06) | Query graph state at any historical time — Datomic-inspired |
+| Compaction | Epoch checkpoints (R-08) | Compress oplog to single entry — bounds growth for production |
 
 ## Python API Reference
 
@@ -449,6 +453,14 @@ class MyEngine:
         return [...]
 
 Query(store, engine=MyEngine()).raw("FIND servers WHERE status=active")
+```
+
+### Compaction (R-08)
+
+```python
+# Compaction (R-08)
+store.compact()                                             # compress oplog → checkpoint, returns hex hash
+checkpoint_bytes = store.create_checkpoint()                # inspect checkpoint without compacting
 ```
 
 ### ObservationLog
@@ -607,6 +619,16 @@ For fleets with many peers, use gossip-based sync (R-05):
 - `store.select_sync_targets()` each tick — returns ceil(ln(N)+1) targets
 - 10 peers → 4 targets/tick, 1000 → 8, 10000 → 10
 - Full convergence in O(log N) rounds
+
+### Bounded Growth via Compaction
+
+For long-running systems, use `store.compact()` (R-08) to bound oplog size:
+- Compresses entire history into a single checkpoint entry
+- All live nodes, edges, and ontology extensions preserved
+- Tombstoned entities excluded (clean slate)
+- Oplog goes from N entries to 1
+
+Safety: only call `compact()` when all known peers have synced to current state. A compacted store can bootstrap new peers via `snapshot()`.
 
 ## Tutorial: Build a Distributed Note-Taking App
 
@@ -793,7 +815,7 @@ cargo bench
 | [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |
 | [QUERY_EXTENSIONS.md](https://github.com/Kieleth/silk-graph/blob/main/QUERY_EXTENSIONS.md) | How to extend the query model — QueryEngine protocol, examples, rationale |
 | [CONTRIBUTING.md](https://github.com/Kieleth/silk-graph/blob/main/CONTRIBUTING.md) | Development setup, PR guidelines |
-| [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology, signing, time-travel, queries) |
+| [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology, signing, time-travel, queries, compaction) |
 
 ## License
 

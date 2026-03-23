@@ -113,6 +113,17 @@ Serialized with `#[serde(tag = "op")]` — an `"op"` field discriminates the var
 
 Only additive changes allowed: add types, add properties, add subtypes, relax required->optional. Cannot remove types, remove properties, or tighten constraints.
 
+**checkpoint** (R-08 — epoch compaction):
+```json
+{"op": "checkpoint", "ops": [
+  {"op": "define_ontology", "ontology": {...}},
+  {"op": "add_node", "node_id": "n1", "node_type": "entity", ...},
+  {"op": "add_edge", "edge_id": "e1", "edge_type": "LINKS", ...}
+], "compacted_at_physical_ms": 1710000000000, "compacted_at_logical": 5}
+```
+
+Contains synthetic ops that reconstruct the full graph state when replayed. After compaction, this becomes the new genesis (next=[]). The `ops` list includes DefineOntology (with all extensions merged), then AddNode for each live node, then AddEdge for each live edge. Tombstoned entities are excluded.
+
 ### Entry
 
 The atomic unit of the Merkle-DAG. Content-addressed: `hash = BLAKE3(msgpack(signable_content))`.

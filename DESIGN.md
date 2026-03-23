@@ -1368,9 +1368,9 @@ Any Silk consumer could use ObservationLog for time-series data, audit trails, o
 
 **What this doesn't solve**: key revocation, key rotation, multi-device identity. These require a higher-level identity layer above Silk.
 
-## D-028: Oplog Compaction (Planned — post-v0.3)
+## D-028: Oplog Compaction
 
-**Status**: Design exploration, not yet decided.
+**Status**: Implemented via R-08 epoch compaction.
 
 **Problem**: The oplog is append-only with no pruning. Every tombstone, every superseded property value, every intermediate state is retained forever. At scale (months of active editing on large graphs), this causes unbounded memory and disk growth.
 
