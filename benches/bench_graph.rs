@@ -3,6 +3,7 @@ use silk::{
     EdgeTypeDef, Entry, GraphOp, LamportClock, MaterializedGraph, NodeTypeDef, Ontology, OpLog,
 };
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 fn lcg_next(state: &mut u64) -> u64 {
     *state = state
@@ -284,6 +285,41 @@ fn pattern_match_bench(c: &mut Criterion) {
     group.finish();
 }
 
+/// Measures BFS and shortest_path on a fixed 1,000-node graph with varying
+/// edge counts. Reveals how edge density affects traversal cost — sparse graphs
+/// (1K edges) vs dense graphs (50K edges, ~50 edges/node average).
+fn edge_density_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("edge_density");
+    group.measurement_time(Duration::from_secs(5));
+
+    for n_edges in [1_000, 10_000, 50_000] {
+        let graph = build_graph(1_000, n_edges);
+
+        group.bench_with_input(
+            BenchmarkId::new("bfs/edges", n_edges),
+            &graph,
+            |b, graph| {
+                b.iter(|| {
+                    let result = silk::engine::bfs(graph, "n0", None, None);
+                    black_box(result.len());
+                })
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("shortest_path/edges", n_edges),
+            &graph,
+            |b, graph| {
+                b.iter(|| {
+                    let result = silk::engine::shortest_path(graph, "n0", "n500");
+                    black_box(result);
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     add_node_throughput,
@@ -292,5 +328,6 @@ criterion_group!(
     shortest_path_bench,
     impact_analysis_bench,
     pattern_match_bench,
+    edge_density_bench,
 );
 criterion_main!(benches);

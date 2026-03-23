@@ -1343,4 +1343,51 @@ Any Silk consumer could use ObservationLog for time-series data, audit trails, o
 
 ---
 
+## D-027: Author Authentication via ed25519 Signatures (Planned — v0.3)
+
+**Status**: Design complete, not yet implemented.
+
+**Problem**: The `author` field in Entry is a self-declared string. Any peer can forge entries claiming any author identity. Without cryptographic authentication, Silk cannot provide provenance tracking, access control, or trust models. This limits the system to trusted peer networks.
+
+**Design**:
+- Each Silk instance holds an ed25519 keypair (generated on first boot or provided)
+- `Entry` gains a `signature: Option<[u8; 64]>` field — signature over SignableContent
+- `author` becomes the hex-encoded public key (32 bytes → 64 hex chars)
+- Local writes: sign with the instance's private key
+- Remote merge: verify signature before accepting. Invalid signatures → entry rejected.
+- Key distribution: out of band (same trust model as ontology distribution)
+
+**Wire format impact**: Breaking change. Entry struct gains a new field. Requires major version bump (v0.3.0). Old entries without signatures can be accepted via a migration flag.
+
+**What this unlocks**:
+- Provenance: "who created this entry?" is cryptographically verifiable
+- Trust policies: accept entries only from known public keys
+- Access control: per-author write permissions on node types
+- Audit trails: every graph mutation is attributed and non-repudiable
+
+**What this doesn't solve**: key revocation, key rotation, multi-device identity. These require a higher-level identity layer above Silk.
+
+## D-028: Oplog Compaction (Planned — post-v0.3)
+
+**Status**: Design exploration, not yet decided.
+
+**Problem**: The oplog is append-only with no pruning. Every tombstone, every superseded property value, every intermediate state is retained forever. At scale (months of active editing on large graphs), this causes unbounded memory and disk growth.
+
+**Design options under consideration**:
+
+1. **Causal stability checkpointing**: An entry is "causally stable" when all peers have observed it (all peers' clocks are past its timestamp). Causally stable entries can be replaced with a compacted state snapshot. Requires knowing the set of active peers — hard in open networks, tractable in trusted networks.
+
+2. **State-based snapshots**: Periodically create a synthetic "checkpoint" entry that captures the current materialized state of a subgraph. Entries prior to the checkpoint that are fully superseded can be pruned. The checkpoint becomes the new "virtual genesis" for that subgraph.
+
+3. **Tombstone reaping**: After all peers have observed a remove_node/remove_edge entry AND the causal predecessors, the tombstone and the original add entry can both be pruned. Requires tombstone TTLs or explicit peer acknowledgment.
+
+**Constraints**:
+- Compaction must preserve hash chain integrity (entries reference parents by hash)
+- Compaction must work correctly with in-flight syncs (a peer syncing from a pre-compaction state must still converge)
+- If D-027 (signatures) is implemented, compacted entries must preserve or re-sign the compacted state
+
+**Decision deferred**: Compaction is hard to get right in a CRDT system. Wrong compaction can violate convergence guarantees. Implementation should follow D-027 (signatures) because provenance tracking is needed to make safe compaction decisions.
+
+---
+
 *Research conducted: 2026-03-14. Based on Merkle-CRDTs (Sanjuán et al., 2020), MAPE-K (Kephart & Chess, 2003), DIKW (Zeleny 1987, Ackoff 1989), and analysis of OrbitDB, Automerge, cr-sqlite, TerminusDB, Ditto implementations. Subscription research: 2026-03-16, based on SQLite, RocksDB, Y.js, Automerge, OrbitDB, Neo4j CDC. Subtypes research: 2026-03-16, based on Google KG, Wikidata, BFO (ISO/IEC 21838-2), Neo4j, categorial grammar (Ajdukiewicz/Lambek), graph grammars (Rozenberg/Ehrig).*

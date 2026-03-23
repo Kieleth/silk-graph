@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **S-12**: Value size limits — strings capped at 1 MB, lists/maps at 10K items
 - **S-13**: ObservationLog rejects source names > 65535 bytes instead of silently truncating
 - **S-20**: Default features changed to `[]` — pyo3 is opt-in, not pulled by default for Rust consumers
+- **S-01b**: Clock drift rejection on sync — entries with implausibly far-future Lamport clocks are rejected (MAX_CLOCK_DRIFT = 1,000,000)
 
 ### Changed
 - **D-026: Open properties** — Unknown properties are now accepted without validation. Unknown subtypes are accepted with type-level validation only. The ontology defines the minimum, not the maximum. Previously, any property or subtype not declared in the ontology was rejected with `ValidationError`.

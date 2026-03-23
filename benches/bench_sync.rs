@@ -291,6 +291,111 @@ fn sync_payload_serialization(c: &mut Criterion) {
     group.finish();
 }
 
+/// Measures sync cost with varying overlap percentages between two peers.
+/// Peer A has 1,000 nodes. Peer B shares X% of A's entries and has its own
+/// unique entries to fill to 1,000 total. Tests: 1%, 10%, 50%, 90% overlap.
+/// This reveals how the bloom filter performs across the overlap spectrum.
+fn sync_divergence(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sync_divergence");
+    group.measurement_time(std::time::Duration::from_secs(5));
+
+    let n = 1_000usize;
+    let author_a = "peer-a";
+    let author_b = "peer-b";
+
+    // Build peer A's full oplog and collect entries.
+    let genesis = Entry::new(
+        GraphOp::DefineOntology {
+            ontology: make_ontology(),
+        },
+        vec![],
+        vec![],
+        LamportClock::new(author_a),
+        author_a,
+    );
+    let mut oplog_a = OpLog::new(genesis.clone());
+    let mut heads_a = vec![genesis.hash];
+    let mut entries_a = Vec::new();
+    for i in 0..n {
+        let entry = Entry::new(
+            GraphOp::AddNode {
+                node_id: format!("a{i}"),
+                node_type: "entity".into(),
+                subtype: None,
+                label: format!("A-{i}"),
+                properties: BTreeMap::new(),
+            },
+            heads_a.clone(),
+            vec![],
+            LamportClock {
+                id: author_a.into(),
+                time: (i + 1) as u64,
+            },
+            author_a,
+        );
+        let hash = entry.hash;
+        entries_a.push(entry.clone());
+        oplog_a.append(entry).unwrap();
+        heads_a = vec![hash];
+    }
+
+    for overlap_pct in [1u32, 10, 50, 90] {
+        let shared = (n as u32 * overlap_pct / 100) as usize;
+        let unique_b = n - shared;
+
+        // Build peer B: shared entries from A + unique entries from B.
+        let mut oplog_b = OpLog::new(genesis.clone());
+        for entry in &entries_a[..shared] {
+            oplog_b.append(entry.clone()).unwrap();
+        }
+        let mut heads_b = if shared > 0 {
+            vec![entries_a[shared - 1].hash]
+        } else {
+            vec![genesis.hash]
+        };
+        for i in 0..unique_b {
+            let entry = Entry::new(
+                GraphOp::AddNode {
+                    node_id: format!("b{i}"),
+                    node_type: "entity".into(),
+                    subtype: None,
+                    label: format!("B-{i}"),
+                    properties: BTreeMap::new(),
+                },
+                heads_b.clone(),
+                vec![],
+                LamportClock {
+                    id: author_b.into(),
+                    time: (shared + i + 1) as u64,
+                },
+                author_b,
+            );
+            let hash = entry.hash;
+            oplog_b.append(entry).unwrap();
+            heads_b = vec![hash];
+        }
+
+        group.bench_with_input(
+            BenchmarkId::new("overlap_pct", overlap_pct),
+            &overlap_pct,
+            |b, _| {
+                b.iter(|| {
+                    // A → B: what does A have that B doesn't?
+                    let offer_b = SyncOffer::from_oplog(&oplog_b, (shared + unique_b) as u64);
+                    let payload_a_to_b = entries_missing(&oplog_a, &offer_b);
+
+                    // B → A: what does B have that A doesn't?
+                    let offer_a = SyncOffer::from_oplog(&oplog_a, n as u64);
+                    let payload_b_to_a = entries_missing(&oplog_b, &offer_a);
+
+                    black_box((payload_a_to_b.entries.len(), payload_b_to_a.entries.len()));
+                })
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     sync_offer_generation,
@@ -298,5 +403,6 @@ criterion_group!(
     sync_incremental,
     sync_partition_heal,
     sync_payload_serialization,
+    sync_divergence,
 );
 criterion_main!(benches);

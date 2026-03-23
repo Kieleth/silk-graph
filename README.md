@@ -154,6 +154,26 @@ store.merge_sync_payload(&payload)?;
 - Document storage — use MongoDB or CouchDB
 - Blob storage — use S3
 
+## Trust Model
+
+Silk is designed for **trusted peer networks** — your own devices, your own team, your own infrastructure. All peers share the same ontology and are assumed non-malicious.
+
+**What Silk provides today:**
+- Schema enforcement on all code paths (including sync, since v0.1.1)
+- Clock overflow protection (saturating arithmetic)
+- Clock drift rejection (entries with implausibly far-future clocks are rejected)
+- Message size limits on sync payloads
+- Hash integrity verification on every entry
+
+**What Silk does NOT provide (yet):**
+- **Author authentication** — `author` is a self-declared string, not cryptographically signed. Any peer can claim any identity. Planned: ed25519 signatures (D-027, v0.3)
+- **Byzantine fault tolerance** — a malicious peer with network access can spoof clocks within drift bounds to win LWW conflicts. Signatures + trust policies will mitigate this.
+- **Oplog compaction** — the append-only log grows without bound. Planned: causal stability checkpointing (D-028)
+
+If you're syncing between devices you control, Silk is safe. If you're building an open network where anonymous peers connect — wait for v0.3 (signatures).
+
+See [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) for the full threat model.
+
 ## Schema Philosophy: Open Properties (D-026)
 
 Silk's ontology defines the **minimum**, not the maximum. You declare node types, edge types, required properties, and type constraints. Silk enforces those. But your application can store any additional properties without changing the ontology.
@@ -256,6 +276,15 @@ Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, releas
 | Impact analysis (reverse BFS) | 108 ns | 105 ns |
 | Pattern match (2-type chain) | 555 µs | 8.1 ms |
 
+### Edge Density (1,000 nodes, varying edge count)
+
+| Algorithm | 1K edges | 10K edges | 50K edges |
+|-----------|----------|-----------|-----------|
+| BFS | 248 ns | 2.5 µs | 12.3 µs |
+| Shortest path | 264 ns | 3.2 µs | 14.8 µs |
+
+Edge density scales linearly with traversal cost — no surprise, but now measured.
+
 ### Sync Protocol
 
 | Scenario | Time |
@@ -276,6 +305,17 @@ Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, releas
 | Three-peer partition heal | 3 x 200 | 6.6 ms |
 | Concurrent property writes | 1 node | 0.06 ms |
 | 10-peer ring convergence | 10 x 100 | 51.8 ms (3 rounds) |
+
+### Sync by Divergence (1,000 nodes per peer, bidirectional)
+
+| Overlap | Time |
+|---------|------|
+| 1% (nearly disjoint) | 2.3 ms |
+| 10% | 8.0 ms |
+| 50% | 27.7 ms |
+| 90% (nearly converged) | 42.4 ms |
+
+Higher overlap = more Bloom filter cross-checking. The fast path is low-overlap (first sync). Incremental syncs on already-converged peers use the 10% delta path (611 µs, see above).
 
 Run the examples yourself: `python examples/offline_first.py`. See all four scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
 

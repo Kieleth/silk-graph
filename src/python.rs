@@ -678,20 +678,45 @@ impl PyGraphStore {
         }
     }
 
+    /// Maximum clock drift allowed from a remote peer.
+    /// Entries with clock times exceeding local_clock + MAX_CLOCK_DRIFT are rejected.
+    /// Prevents the "Byzantine clock" attack where a malicious peer sets clock to
+    /// u64::MAX to permanently win all LWW conflicts.
+    const MAX_CLOCK_DRIFT: u64 = 1_000_000;
+
     /// Merge a vec of entries into the store, updating the materialized graph.
     fn merge_entries_vec(&mut self, entries: &[Entry]) -> PyResult<usize> {
+        let local_time = self.clock.time;
+
         // S-04: Filter entries through ontology validation before merge.
+        // Clock drift: reject entries with implausibly far-future clocks.
         let valid_entries: Vec<Entry> = entries
             .iter()
-            .filter(|e| match self.validate_entry_payload(e) {
-                Ok(()) => true,
-                Err(reason) => {
+            .filter(|e| {
+                // Clock drift check (skip for genesis/DefineOntology entries)
+                if !matches!(e.payload, GraphOp::DefineOntology { .. })
+                    && e.clock.time > local_time.saturating_add(Self::MAX_CLOCK_DRIFT)
+                {
                     eprintln!(
-                        "silk: skipping sync entry {}: ontology validation failed: {}",
+                        "silk: rejecting sync entry {}: clock {} exceeds local {} + drift {}",
                         hex::encode(e.hash),
-                        reason
+                        e.clock.time,
+                        local_time,
+                        Self::MAX_CLOCK_DRIFT
                     );
-                    false
+                    return false;
+                }
+                // Ontology validation
+                match self.validate_entry_payload(e) {
+                    Ok(()) => true,
+                    Err(reason) => {
+                        eprintln!(
+                            "silk: skipping sync entry {}: ontology validation failed: {}",
+                            hex::encode(e.hash),
+                            reason
+                        );
+                        false
+                    }
                 }
             })
             .cloned()
