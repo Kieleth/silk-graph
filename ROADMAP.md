@@ -206,7 +206,9 @@ R-08 (compaction needs to know what invariants are safe to preserve).
 
 ---
 
-## R-05: You Don't Need to Talk to Everyone
+## R-05: You Don't Need to Talk to Everyone ✓
+
+> **Status: COMPLETE** — `gossip.rs` module with `PeerRegistry`. Python API: `register_peer()`, `select_sync_targets()`, `record_sync()`. Fan-out: `ceil(ln(N) + 1)` per round.
 
 Right now, every time you want to sync, you meet up with every single friend. If you have 10 friends, that's 10 meetings. If you have 100 friends, that's 100 meetings. If you have 1,000... you get it.
 

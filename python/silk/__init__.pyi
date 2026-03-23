@@ -260,6 +260,24 @@ class GraphStore:
         """Remove a previously registered subscription by ID."""
         ...
 
+    # -- Gossip Peer Selection (R-05) --
+
+    def register_peer(self, peer_id: str, address: str) -> None:
+        """Register a peer for gossip sync (e.g., 'tcp://10.0.0.2:7701')."""
+        ...
+    def unregister_peer(self, peer_id: str) -> bool:
+        """Remove a peer. Returns True if it existed."""
+        ...
+    def list_peers(self) -> list[dict[str, Any]]:
+        """List peers: [{"peer_id": str, "address": str, "last_seen_ms": int}, ...]"""
+        ...
+    def select_sync_targets(self) -> list[str]:
+        """Select sync targets for this round. Returns ceil(ln(N)+1) peer IDs."""
+        ...
+    def record_sync(self, peer_id: str) -> None:
+        """Record that a sync with this peer completed."""
+        ...
+
     # -- Quarantine (R-02) --
 
     def get_quarantined(self) -> list[str]:

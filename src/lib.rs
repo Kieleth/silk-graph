@@ -2,6 +2,7 @@ pub mod bloom;
 pub mod clock;
 pub mod engine;
 pub mod entry;
+pub mod gossip;
 pub mod graph;
 pub mod obslog;
 pub mod ontology;
@@ -15,6 +16,7 @@ pub mod sync;
 pub use bloom::BloomFilter;
 pub use clock::LamportClock;
 pub use entry::{Entry, GraphOp, Hash, Value};
+pub use gossip::PeerRegistry;
 pub use graph::{Edge, MaterializedGraph, Node};
 pub use obslog::{ObsLogError, Observation, ObservationLog};
 pub use ontology::{

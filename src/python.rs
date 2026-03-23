@@ -44,6 +44,8 @@ pub struct PyGraphStore {
     /// D-027: reject unsigned entries on merge when true.
     #[cfg(feature = "signing")]
     require_signatures: bool,
+    /// R-05: Gossip peer registry for logarithmic sync target selection.
+    gossip: crate::gossip::PeerRegistry,
 }
 
 enum Backend {
@@ -152,6 +154,7 @@ impl PyGraphStore {
             key_registry: HashMap::new(),
             #[cfg(feature = "signing")]
             require_signatures: false,
+            gossip: crate::gossip::PeerRegistry::new(),
         })
     }
 
@@ -217,6 +220,7 @@ impl PyGraphStore {
             key_registry: HashMap::new(),
             #[cfg(feature = "signing")]
             require_signatures: false,
+            gossip: crate::gossip::PeerRegistry::new(),
         })
     }
 
@@ -696,6 +700,7 @@ impl PyGraphStore {
             key_registry: HashMap::new(),
             #[cfg(feature = "signing")]
             require_signatures: false,
+            gossip: crate::gossip::PeerRegistry::new(),
         })
     }
 
@@ -726,6 +731,41 @@ impl PyGraphStore {
             .iter()
             .map(|h| hex::encode(h))
             .collect()
+    }
+
+    // -- Gossip Peer Selection (R-05) --
+
+    /// Register a peer for gossip sync.
+    fn register_peer(&mut self, peer_id: String, address: String) {
+        self.gossip.register(peer_id, address);
+    }
+
+    /// Unregister a peer.
+    fn unregister_peer(&mut self, peer_id: &str) -> bool {
+        self.gossip.unregister(peer_id)
+    }
+
+    /// List all registered peers.
+    fn list_peers(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let list = pyo3::types::PyList::empty(py);
+        for peer in self.gossip.list() {
+            let dict = pyo3::types::PyDict::new(py);
+            dict.set_item("peer_id", &peer.peer_id)?;
+            dict.set_item("address", &peer.address)?;
+            dict.set_item("last_seen_ms", peer.last_seen_ms)?;
+            list.append(dict)?;
+        }
+        Ok(list.into())
+    }
+
+    /// Select sync targets for this round (ceil(ln(N) + 1) random peers).
+    fn select_sync_targets(&self) -> Vec<String> {
+        self.gossip.select_sync_targets()
+    }
+
+    /// Record that a sync with a peer completed.
+    fn record_sync(&mut self, peer_id: &str) {
+        self.gossip.record_sync(peer_id);
     }
 
     // -- Signing (D-027) --
