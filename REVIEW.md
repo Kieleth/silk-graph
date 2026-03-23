@@ -1,8 +1,9 @@
 # Silk-Graph: Deep Review (Post R-01 through R-08)
 
-> Independent review of silk-graph at v0.1.3 through the lens of distributed systems
+> Independent review of silk-graph, through the lens of distributed systems
 > research, graph database theory, and competitive landscape.
-> 7,892 LOC, 13 Rust modules, ~140 Rust tests, 154 Python tests, 8 examples.
+>
+> **Review status (v0.1.4):** All correctness bugs fixed. Structural limitations acknowledged as design decisions.
 
 ---
 
@@ -44,73 +45,35 @@ Zero `unsafe` blocks. PyO3 bindings with full type stubs. Transport-agnostic syn
 
 ## II. Cracks in the CRDT Theory
 
-### 5. Incremental Materialization Diverges on Concurrent Schema Conflicts
+### 5. ~~Incremental Materialization Diverges on Concurrent Schema Conflicts~~
 
-**Severity: Correctness — Theorem 1 violation**
+**FIXED in v0.1.4.** `merge_entries_vec()` now detects `ExtendOntology` or `Checkpoint` entries in the sync batch and triggers a full `rebuild()` instead of incremental apply. Deterministic topological order ensures identical quarantine sets across all peers, regardless of delivery order.
 
-`merge_entries_vec()` (`python.rs:1117-1156`) only applies NEW entries incrementally, not replaying old ones. When two peers independently create conflicting `ExtendOntology` entries (same type name, different definitions), each peer processes its own extension first and quarantines the other's.
+**Original severity:** Correctness — Theorem 1 violation.
+**Reference:** Balegas et al. (2015) — "Putting Consistency Back into Eventual Consistency."
 
-**Scenario:**
-- Peer A: `ExtendOntology { "container": {image: required} }` (EA)
-- Peer B: `ExtendOntology { "container": {runtime: required} }` (EB)
-- Bidirectional sync: both now have {EA, EB}
-- A quarantines EB (applied EA first locally). B quarantines EA (applied EB first locally).
-- Identical entry sets, DIFFERENT materialized graphs.
+### 6. ~~Checkpoint Discards Per-Property Clock Metadata~~
 
-`rebuild()` (`graph.rs:189-197`) clears quarantine and replays in deterministic topo order — this WOULD produce identical results. But `merge_entries_vec()` never calls `rebuild()`.
+**FIXED in v0.1.4.** `GraphOp::Checkpoint` now carries an `op_clocks: Vec<(u64, u32)>` field — one (physical_ms, logical) pair per synthetic op. `build_checkpoint_ops()` extracts the max per-property clock for each entity. During replay, `graph.apply()` uses these per-op clocks instead of the checkpoint's single clock. Future LWW comparisons use the correct original granularity.
 
-**Reference:** Balegas et al. (2015) — "Putting Consistency Back into Eventual Consistency": for invariant-preserving CRDTs, the result must be independent of delivery order.
+**Original severity:** Correctness — future LWW divergence.
+**Reference:** Almeida, Shoker & Baquero (2018), Section 5.3.
 
-**Fix:** Trigger `rebuild()` when `ExtendOntology` is quarantined during sync, OR implement deterministic LWW resolution for conflicting type definitions (higher HLC wins, applied both locally and during sync).
+### 7. ~~Compacted-to-Non-Compacted Sync Doubles the Oplog~~
 
-### 6. Checkpoint Discards Per-Property Clock Metadata
+**FIXED in v0.1.4.** `oplog.append()` now detects incoming `Checkpoint` entries with `next=[]` and calls `replace_with_checkpoint()` instead of creating a second root. When a non-compacted peer receives a checkpoint, it replaces its entire oplog — no data duplication, no second root.
 
-**Severity: Correctness — future LWW divergence**
+**Original severity:** Protocol gap.
 
-Checkpoint synthetic ops all use the checkpoint's single clock (`graph.rs:100-106`):
-```rust
-let synthetic = Entry::new(
-    op.clone(), vec![], vec![],
-    entry.clock.clone(),  // checkpoint's clock for ALL ops
-    &entry.author,
-);
-```
+### 8. ~~HLC Tiebreaker Is Reversed and Undocumented~~
 
-Original per-property LWW clocks (which tracked *who* last updated *each* property) are replaced by one timestamp. After compaction, a write at time T where `original_clock < T < checkpoint_clock` will win on a non-compacted peer (T > original_clock) but lose on the compacted peer (T < checkpoint_clock).
+**FIXED in v0.1.4.** PROTOCOL.md now explicitly documents: "Both equal → **lower** id wins (lexicographic, deterministic). Note: this means instance names create an implicit priority hierarchy. Both orderings (lower-wins, higher-wins) are valid per Shapiro et al. (2011); Silk chose lower-wins."
 
-**Reference:** Almeida, Shoker & Baquero (2018), Section 5.3: "State-based GC must preserve the causal metadata required for correct future merges."
+**Original severity:** Documentation gap. The ordering was always deterministic and correct; it just wasn't documented.
 
-**Fix:** Extend Checkpoint format to carry original per-property clock metadata.
+### 9. ~~Gossip RNG Thundering Herd~~
 
-### 7. Compacted-to-Non-Compacted Sync Doubles the Oplog
-
-**Severity: Protocol gap**
-
-After compaction, peer A has one entry (checkpoint, `next=[]`). Syncing with non-compacted peer B:
-1. B receives checkpoint (accepts it — empty `next` passes parent check)
-2. B now has BOTH original entries AND checkpoint — data exists twice
-3. B's oplog has two root entries with `next=[]` (genesis and checkpoint)
-4. When B syncs with C, it sends everything including the redundant checkpoint
-5. Oplog grows with every mixed-compaction sync
-
-No protocol mechanism exists for a checkpoint to replace originals on the receiver.
-
-### 8. HLC Tiebreaker Is Reversed and Undocumented
-
-From `clock.rs`:
-```rust
-.then_with(|| other.id.cmp(&self.id)) // lower id wins
-```
-
-Lower instance ID wins ties. This is opposite to most CRDT implementations. Users naming instances "aaa-primary" vs "zzz-secondary" unintentionally create a priority hierarchy. Not documented in PROOF.md or PROTOCOL.md.
-
-**Reference:** Shapiro et al. (2011) — tiebreaker must be total and deterministic. Both orderings are valid. The choice should be documented.
-
-### 9. Gossip RNG Thundering Herd
-
-Seed is `now_ms()` only. NTP-synchronized peers calling `select_sync_targets()` within the same millisecond select identical targets — creating a "thundering herd" on popular targets while ignoring others.
-
-**Fix:** `seed = now_ms() ^ hash(instance_id)`.
+**FIXED in v0.1.4.** `PeerRegistry` now takes an instance ID at construction (`with_instance_id()`). The RNG seed is `now_ms() ^ fnv(instance_id)`. NTP-synchronized peers select different targets.
 
 ---
 
@@ -136,9 +99,9 @@ Cannot express: cardinality constraints, range constraints, inverse properties, 
 
 **Reference:** Horrocks, Patel-Schneider & van Harmelen (2003) — "From SHIQ and RDF to OWL."
 
-### 13. Edge Source/Target Type Validation Skipped on Sync
+### 13. ~~Edge Source/Target Type Validation Skipped on Sync~~
 
-Only edge type existence is checked (`graph.rs:152`). Source/target type constraints are not validated. A synced edge can violate `source_types`/`target_types` constraints defined in the ontology.
+**FIXED in v0.1.4.** `graph.apply()` for `AddEdge` now calls `ontology.validate_edge()` when both source and target nodes are materialized. If either endpoint is missing (out-of-order sync), validation is deferred to `rebuild()`. Invalid edges are quarantined.
 
 ---
 
@@ -156,9 +119,9 @@ Every peer holds the entire graph. No mechanism for "sync only nodes of type X" 
 
 Ditto has subscriptions. PowerSync has sync rules. Electric SQL has shapes.
 
-### 16. Convergence Proof Doesn't Cover Compaction
+### 16. ~~Convergence Proof Doesn't Cover Compaction~~
 
-PROOF.md Theorem 3 proves convergence for two peers exchanging entries. It doesn't prove compacted-to-non-compacted peers converge correctly.
+**FIXED in v0.1.4.** PROOF.md Section 6 (Compaction Addendum) now proves that compacted OpLogs converge with uncompacted peers. The proof covers: checkpoint safety rule, checkpoint construction correctness, snapshot fallback for mixed-compaction sync, and multi-peer compaction at different times.
 
 ---
 
@@ -220,11 +183,11 @@ The `QueryEngine` extension protocol is the escape hatch. But shipping with only
 5. Transport-agnostic sync (pure functions over bytes)
 6. Monotonic ontology evolution (add-only schema CRDT)
 
-### Fixable Cracks (Correctness)
-1. Concurrent schema conflicts diverge materialized graphs (Theorem 1 violation)
-2. Checkpoint discards per-property clocks (future LWW divergence)
-3. Mixed-compaction sync doubles the oplog (no replacement protocol)
-4. Edge source/target validation skipped on sync
+### ~~Fixable Cracks (Correctness)~~ — All Fixed in v0.1.4
+1. ~~Concurrent schema conflicts~~ → full rebuild on schema changes
+2. ~~Checkpoint per-property clocks~~ → op_clocks field preserves metadata
+3. ~~Mixed-compaction sync~~ → checkpoint replaces oplog on merge
+4. ~~Edge source/target validation~~ → validate_edge when endpoints exist
 
 ### Structural Limitations (Design Decisions)
 5. No partial sync (mobile/IoT blocked)
