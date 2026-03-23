@@ -106,7 +106,8 @@ The atomic unit of the Merkle-DAG. Content-addressed: `hash = BLAKE3(msgpack(sig
     "next":    [[u8; 32], ...],   // Causal predecessors (DAG heads at write time)
     "refs":    [[u8; 32], ...],   // Skip-list references (O(log n) traversal)
     "clock":   LamportClock,      // Logical clock at creation
-    "author":  string             // Instance ID that created this entry
+    "author":  string,            // Instance ID that created this entry
+    "signature": Option<Vec<u8>>  // D-027: ed25519 signature over hash (64 bytes), None for unsigned
 }
 ```
 
@@ -127,6 +128,35 @@ struct SignableContent {
 Serialized to MessagePack bytes, then hashed: `hash = BLAKE3(msgpack(signable_content))`.
 
 **To verify an entry**: recompute `BLAKE3(msgpack({payload, next, refs, clock, author}))` and compare to the `hash` field.
+
+## Signature Verification (D-027)
+
+Entries may carry an ed25519 signature over the `hash` field. The signature covers the BLAKE3 hash (which already covers payload, next, refs, clock, and author).
+
+### Signing flow
+
+1. Compute `hash = BLAKE3(msgpack(SignableContent))` (same as unsigned)
+2. `signature = ed25519_sign(signing_key, hash)` (64 bytes)
+3. Entry includes `signature: Some(sig_bytes)`
+
+### Verification flow
+
+On merge, for each incoming entry:
+1. `verify_hash()` — recompute BLAKE3, reject if mismatch
+2. If `signature` is present:
+   - Look up `author` in the trust registry → get public key
+   - `ed25519_verify(public_key, entry.hash, signature)` → reject if invalid
+   - If author not in registry → reject (in strict mode) or accept with warning
+3. If `signature` is absent:
+   - In strict mode (`require_signatures=true`): reject (except genesis entries)
+   - In default mode: accept (backward compatibility)
+
+### Backward Compatibility
+
+- Old entries (pre-D-027) have `signature: null` (via `#[serde(default)]`)
+- New entries include the signature field
+- Both coexist in the same oplog and sync correctly
+- Strict mode is opt-in — default accepts unsigned entries
 
 ## Protocol Messages
 
@@ -253,5 +283,7 @@ A (existing)                    C (new)
 ## Version Compatibility
 
 The current protocol has no version field in messages. Any change to the Entry format, GraphOp variants, or Bloom filter structure is a breaking change requiring a major version bump of the library.
+
+D-027 adds an optional `signature` field to Entry. This is backward compatible — old entries deserialize with `signature: null`.
 
 Future versions may add a protocol version field to SyncOffer for negotiation.

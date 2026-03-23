@@ -137,6 +137,7 @@ store.merge_sync_payload(&payload)?;
 - **Real-time subscriptions** — register callbacks that fire on every graph mutation (local or merged from sync).
 - **Observation log** — append-only, TTL-pruned time-series store for metrics alongside the graph. Same redb backend.
 - **Zero runtime dependencies** — no Postgres, no Redis, no network required. Silk is a library, not a service.
+- **Author authentication** — ed25519 signatures on every entry. Auto-sign on write, verify on merge. Trust registry for known peers. Strict mode rejects unsigned entries. (D-027)
 
 ## When to Use Silk
 
@@ -164,13 +165,13 @@ Silk is designed for **trusted peer networks** — your own devices, your own te
 - Clock drift rejection (entries with implausibly far-future clocks are rejected)
 - Message size limits on sync payloads
 - Hash integrity verification on every entry
+- Author authentication — ed25519 signatures via `generate_signing_key()`, `register_trusted_author()`, `set_require_signatures()`. Enable strict mode to reject unsigned entries. Key revocation not yet supported.
 
 **What Silk does NOT provide (yet):**
-- **Author authentication** — `author` is a self-declared string, not cryptographically signed. Any peer can claim any identity. Planned: ed25519 signatures (D-027, v0.3)
 - **Byzantine fault tolerance** — a malicious peer with network access can spoof clocks within drift bounds to win LWW conflicts. Signatures + trust policies will mitigate this.
 - **Oplog compaction** — the append-only log grows without bound. Planned: causal stability checkpointing (D-028)
 
-If you're syncing between devices you control, Silk is safe. If you're building an open network where anonymous peers connect — wait for v0.3 (signatures).
+If you're syncing between devices you control, Silk is safe. If you're building an open network where anonymous peers connect, enable strict mode and register trusted authors.
 
 See [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) for the full threat model.
 
@@ -225,7 +226,7 @@ This means your application can evolve its data model without touching the ontol
 
 ## Architecture
 
-For the full architectural overview — research foundations (Merkle-CRDTs, Delta-state CRDTs, MAPE-K), design principles, and 26 design decisions — see [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md).
+For the full architectural overview — research foundations (Merkle-CRDTs, Delta-state CRDTs, MAPE-K), design principles, and 28 design decisions — see [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md).
 
 ```
 Write (add_node, add_edge, update_property)
@@ -321,7 +322,7 @@ Run the examples yourself: `python examples/offline_first.py`. See all four scen
 
 ## Design Decisions
 
-Silk's architecture is driven by 26 explicit design decisions (D-001 through D-026), documented in full in [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md). Key choices:
+Silk's architecture is driven by 28 explicit design decisions (D-001 through D-028), documented in full in [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md). Key choices:
 
 | Decision | Choice | Why |
 |----------|--------|-----|
@@ -376,6 +377,13 @@ snapshot = store.snapshot()                    # bytes (full state)
 # Subscriptions
 sub_id = store.subscribe(callback)  # callback(event_dict)
 store.unsubscribe(sub_id)
+
+# Signing (D-027)
+pub_key = store.generate_signing_key()                    # generate keypair, returns hex public key
+store.set_signing_key(hex_private_key)                     # load existing key
+pub_key = store.get_public_key()                           # hex public key or None
+store.register_trusted_author(author_id, hex_public_key)   # trust a peer
+store.set_require_signatures(True)                         # reject unsigned entries on merge
 ```
 
 ### ObservationLog
@@ -703,7 +711,7 @@ cargo bench
 |----------|---------------|
 | [README.md](https://github.com/Kieleth/silk-graph/blob/main/README.md) | Quick start, features, API reference, tutorial |
 | [WHY.md](https://github.com/Kieleth/silk-graph/blob/main/WHY.md) | Why Silk exists, what makes it different, benchmark analysis |
-| [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md) | Research foundations, 26 design decisions (D-001–D-026), architecture |
+| [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md) | Research foundations, 28 design decisions (D-001–D-028), architecture |
 | [PROTOCOL.md](https://github.com/Kieleth/silk-graph/blob/main/PROTOCOL.md) | Sync wire format specification — for implementing peers in other languages |
 | [CHANGELOG.md](https://github.com/Kieleth/silk-graph/blob/main/CHANGELOG.md) | Release history |
 | [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |

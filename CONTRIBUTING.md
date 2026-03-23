@@ -36,7 +36,12 @@ cargo bench
 
 ## Architecture
 
-Silk's architecture is documented in [DESIGN.md](DESIGN.md). Decisions are numbered D-001 through D-025. New features that change the architecture should propose a new decision number.
+Silk's architecture is documented in [DESIGN.md](DESIGN.md). Decisions are numbered D-001 through D-028. New features that change the architecture should propose a new decision number.
+
+To run tests with signing support:
+```bash
+cargo test --features signing
+```
 
 ## License
 

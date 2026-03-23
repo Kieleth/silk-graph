@@ -1343,9 +1343,9 @@ Any Silk consumer could use ObservationLog for time-series data, audit trails, o
 
 ---
 
-## D-027: Author Authentication via ed25519 Signatures (Planned — v0.3)
+## D-027: Author Authentication via ed25519 Signatures
 
-**Status**: Design complete, not yet implemented.
+**Status**: Implemented.
 
 **Problem**: The `author` field in Entry is a self-declared string. Any peer can forge entries claiming any author identity. Without cryptographic authentication, Silk cannot provide provenance tracking, access control, or trust models. This limits the system to trusted peer networks.
 

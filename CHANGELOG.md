@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **D-027: Author authentication** — ed25519 signatures on entries. `generate_signing_key()`, `set_signing_key()`, `get_public_key()`, `register_trusted_author()`, `set_require_signatures()`. Auto-sign on write, verify on merge. Strict mode rejects unsigned entries. Backward compatible — unsigned entries accepted by default.
+
 ### Security
 - **S-01**: Lamport clock uses `saturating_add` — prevents overflow wrap-around at u64::MAX
 - **S-03**: Sync message size limits — 64 MB max bytes, 100K max entries per payload

@@ -246,6 +246,40 @@ class GraphStore:
         """Remove a previously registered subscription by ID."""
         ...
 
+    # -- Signing (D-027) --
+
+    def generate_signing_key(self) -> str:
+        """Generate a new ed25519 keypair. Stores the private key internally.
+
+        Returns:
+            Hex-encoded public key (64 characters, 32 bytes).
+        """
+        ...
+    def set_signing_key(self, hex_private_key: str) -> None:
+        """Load an existing ed25519 private key.
+
+        Args:
+            hex_private_key: 64 hex characters (32 bytes).
+        """
+        ...
+    def get_public_key(self) -> str | None:
+        """Get the instance's public key as hex, or None if no key is set."""
+        ...
+    def register_trusted_author(self, author_id: str, hex_public_key: str) -> None:
+        """Register a trusted author's public key for signature verification.
+
+        Args:
+            author_id: The author string used in entries.
+            hex_public_key: 64 hex characters (32 bytes).
+        """
+        ...
+    def set_require_signatures(self, enabled: bool) -> None:
+        """Toggle strict mode. When enabled, unsigned entries are rejected on merge.
+
+        Genesis entries (DefineOntology) are always accepted regardless of this setting.
+        """
+        ...
+
 
 class ObservationLog:
     """Append-only, TTL-pruned observation store (D-025, SA-014).
