@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs"
 requires-python = ">=3.11"
 license = {file = "LICENSE.md"}
+authors = [{name = "Kieleth", email = "kieleth@gmail.com"}]
 keywords = ["crdt", "graph", "distributed", "merkle", "conflict-free", "knowledge-graph"]
 classifiers = [
     "Development Status :: 4 - Beta",
