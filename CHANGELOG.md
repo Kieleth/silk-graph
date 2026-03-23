@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **R-07: Query Builder** — Fluent `Query` class for Python-native graph queries. Chain `.nodes()`, `.where()`, `.follow()`, `.collect()`. Works with both `GraphStore` and `GraphSnapshot`. `QueryEngine` protocol for plugging in Datalog/SPARQL/custom engines.
+
 ## [0.1.3] - 2026-03-23
 
 ### Added

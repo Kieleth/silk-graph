@@ -273,7 +273,9 @@ R-07 (Datalog benefits from temporal queries).
 
 ---
 
-## R-07: Show Me, Don't Make Me Look
+## R-07: Show Me, Don't Make Me Look ✓
+
+> **Status: COMPLETE (foundation)** — Fluent `Query` builder + `QueryEngine` extension protocol. Covers 90% of use cases via Python-native API. Datalog/SPARQL can be plugged in via `QueryEngine` without changing Silk core. `from silk import Query, QueryEngine`.
 
 Right now, asking a question about the graph is like asking a librarian "who are you connected to? Now who is that person connected to? Now filter by..." — step by step, in code.
 
