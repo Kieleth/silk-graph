@@ -683,6 +683,19 @@ impl PyGraphStore {
         self.subscribers.retain(|(id, _)| *id != sub_id);
     }
 
+    // -- Quarantine (R-02) --
+
+    /// Get the list of quarantined entry hashes (hex-encoded).
+    /// Quarantined entries are in the oplog (for CRDT convergence) but
+    /// invisible in the materialized graph (failed ontology validation).
+    fn get_quarantined(&self) -> Vec<String> {
+        self.graph
+            .quarantined
+            .iter()
+            .map(|h| hex::encode(h))
+            .collect()
+    }
+
     // -- Signing (D-027) --
 
     /// Generate a new random ed25519 keypair, store the private key, return hex public key.
@@ -785,8 +798,8 @@ impl PyGraphStore {
     fn merge_entries_vec(&mut self, entries: &[Entry]) -> PyResult<usize> {
         let local_physical = self.clock.physical_ms;
 
-        // S-04: Filter entries through ontology validation before merge.
-        // Clock drift: reject entries with implausibly far-future clocks.
+        // R-02: Ontology validation moved to graph.apply() (quarantine model).
+        // Only security checks remain here: clock drift + signature verification.
         let valid_entries: Vec<Entry> = entries
             .iter()
             .filter(|e| {
@@ -802,18 +815,6 @@ impl PyGraphStore {
                         Self::MAX_CLOCK_DRIFT
                     );
                     return false;
-                }
-                // Ontology validation
-                match self.validate_entry_payload(e) {
-                    Ok(()) => {}
-                    Err(reason) => {
-                        eprintln!(
-                            "silk: skipping sync entry {}: ontology validation failed: {}",
-                            hex::encode(e.hash),
-                            reason
-                        );
-                        return false;
-                    }
                 }
                 // D-027: Signature verification (skip for genesis/DefineOntology entries)
                 #[cfg(feature = "signing")]

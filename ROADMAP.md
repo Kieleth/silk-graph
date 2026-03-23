@@ -73,7 +73,9 @@ R-03, R-04, R-05, R-06, R-08 — everything.
 
 ---
 
-## R-02: The Bouncer Left the Back Door Open
+## R-02: The Bouncer Left the Back Door Open ✓
+
+> **Status: COMPLETE** — Quarantine implemented in `graph.rs::apply()`. Invalid entries accepted into oplog, hidden from materialized graph. Python API: `get_quarantined()`.
 
 Silk has rules about what's allowed. "Cats must have a name. Dogs must have an owner." When *you* write in your notebook, Silk checks the rules. Good.
 

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::clock::LamportClock;
-use crate::entry::{Entry, GraphOp, Value};
+use crate::entry::{Entry, GraphOp, Hash, Value};
 use crate::ontology::Ontology;
 
 /// A materialized node in the graph.
@@ -66,6 +66,10 @@ pub struct MaterializedGraph {
     pub by_type: HashMap<String, HashSet<String>>,
     /// The ontology (for validation during materialization)
     pub ontology: Ontology,
+    /// R-02: entries that failed ontology validation during apply().
+    /// These entries exist in the oplog (for CRDT convergence) but are
+    /// invisible in the materialized graph. Grow-only set — monotonic, safe.
+    pub quarantined: HashSet<Hash>,
 }
 
 impl MaterializedGraph {
@@ -78,10 +82,16 @@ impl MaterializedGraph {
             incoming: HashMap::new(),
             by_type: HashMap::new(),
             ontology,
+            quarantined: HashSet::new(),
         }
     }
 
     /// Apply a single entry to the graph (incremental materialization).
+    ///
+    /// R-02: Validates AddNode/AddEdge payloads against the ontology.
+    /// Invalid entries are quarantined (added to `self.quarantined`) and
+    /// skipped for materialization. They remain in the oplog for CRDT
+    /// convergence — quarantine is a graph-layer concern, not an oplog concern.
     pub fn apply(&mut self, entry: &Entry) {
         match &entry.payload {
             GraphOp::DefineOntology { .. } => {
@@ -94,6 +104,14 @@ impl MaterializedGraph {
                 label,
                 properties,
             } => {
+                // R-02: validate against ontology, quarantine if invalid
+                if let Err(_e) =
+                    self.ontology
+                        .validate_node(node_type, subtype.as_deref(), properties)
+                {
+                    self.quarantined.insert(entry.hash);
+                    return;
+                }
                 self.apply_add_node(
                     node_id,
                     node_type,
@@ -110,6 +128,13 @@ impl MaterializedGraph {
                 target_id,
                 properties,
             } => {
+                // R-02: validate edge type exists. Full source/target type
+                // validation is skipped — during sync, source/target nodes
+                // may not be materialized yet (out-of-order batch).
+                if !self.ontology.edge_types.contains_key(edge_type.as_str()) {
+                    self.quarantined.insert(entry.hash);
+                    return;
+                }
                 self.apply_add_edge(
                     edge_id,
                     edge_type,
@@ -149,6 +174,7 @@ impl MaterializedGraph {
         self.outgoing.clear();
         self.incoming.clear();
         self.by_type.clear();
+        self.quarantined.clear();
         self.apply_all(entries);
     }
 

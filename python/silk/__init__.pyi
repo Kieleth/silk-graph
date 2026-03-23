@@ -251,6 +251,17 @@ class GraphStore:
         """Remove a previously registered subscription by ID."""
         ...
 
+    # -- Quarantine (R-02) --
+
+    def get_quarantined(self) -> list[str]:
+        """Get hex hashes of quarantined entries.
+
+        Quarantined entries are in the oplog (for CRDT convergence) but
+        invisible in the materialized graph (failed ontology validation).
+        The quarantine set is grow-only — entries never leave.
+        """
+        ...
+
     # -- Signing (D-027) --
 
     def generate_signing_key(self) -> str:
