@@ -720,6 +720,7 @@ cargo bench
 | [README.md](https://github.com/Kieleth/silk-graph/blob/main/README.md) | Quick start, features, API reference, tutorial |
 | [WHY.md](https://github.com/Kieleth/silk-graph/blob/main/WHY.md) | Why Silk exists, what makes it different, benchmark analysis |
 | [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md) | Research foundations, 28 design decisions (D-001–D-028), architecture |
+| [PROOF.md](https://github.com/Kieleth/silk-graph/blob/main/PROOF.md) | Convergence proof — three theorems, six invariants, quarantine + ontology addenda |
 | [PROTOCOL.md](https://github.com/Kieleth/silk-graph/blob/main/PROTOCOL.md) | Sync wire format specification — for implementing peers in other languages |
 | [CHANGELOG.md](https://github.com/Kieleth/silk-graph/blob/main/CHANGELOG.md) | Release history |
 | [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |

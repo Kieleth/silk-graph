@@ -159,7 +159,9 @@ R-04, R-08.
 
 ---
 
-## R-04: "Trust Me" Isn't a Proof
+## R-04: "Trust Me" Isn't a Proof ✓
+
+> **Status: COMPLETE** — `PROOF.md` documents three convergence theorems, six invariants, and addenda for quarantine and ontology evolution. Semi-formal, code-referenced, structured for mechanical verification.
 
 Silk says "if you and your friend trade pages, you'll end up with the same story. It's math." But there's no actual math written down. There are tests that check it thousands of times. But checking isn't proving. "I flipped the coin 10,000 times and it never landed on its edge" doesn't prove it can't.
 
