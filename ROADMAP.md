@@ -269,7 +269,7 @@ R-01 (HLC gives timestamps meaning).
 
 ### Unblocks
 
-R-07 (Datalog benefits from temporal queries).
+R-07 (Query Builder benefits from temporal queries — `Query(snapshot)` works on historical snapshots).
 
 ---
 
