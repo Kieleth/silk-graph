@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-03-23
+
 ### Added
 - **D-027: Author authentication** — ed25519 signatures on entries. `generate_signing_key()`, `set_signing_key()`, `get_public_key()`, `register_trusted_author()`, `set_require_signatures()`. Auto-sign on write, verify on merge. Strict mode rejects unsigned entries. Backward compatible — unsigned entries accepted by default.
 - **R-02: Sync Quarantine** — Invalid entries from sync are now accepted into the oplog (preserving CRDT convergence) but quarantined from the materialized graph. `get_quarantined()` returns hex hashes of quarantined entries. Grow-only set — monotonic, safe. Local writes still reject immediately.
