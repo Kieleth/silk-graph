@@ -48,7 +48,7 @@ jobs:
       - name: Build and install
         run: |
           pip install maturin pytest
-          maturin develop --release
+          maturin develop --release --features python
 
       - name: Run Python tests
         run: pytest pytests/ -v
