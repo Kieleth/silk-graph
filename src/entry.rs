@@ -24,7 +24,7 @@ pub enum Value {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op")]
 pub enum GraphOp {
-    /// Genesis entry — defines the immutable ontology for this graph.
+    /// Genesis entry — defines the initial ontology (extendable via R-03 ExtendOntology).
     /// Must be the first entry in the DAG (next = []).
     #[serde(rename = "define_ontology")]
     DefineOntology { ontology: Ontology },

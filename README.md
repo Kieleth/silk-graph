@@ -138,6 +138,7 @@ store.merge_sync_payload(&payload)?;
 - **Observation log** — append-only, TTL-pruned time-series store for metrics alongside the graph. Same redb backend.
 - **Zero runtime dependencies** — no Postgres, no Redis, no network required. Silk is a library, not a service.
 - **Author authentication** — ed25519 signatures on every entry. Auto-sign on write, verify on merge. Trust registry for known peers. Strict mode rejects unsigned entries. (D-027)
+- **Evolvable schema** — extend the ontology at runtime with new types, properties, and subtypes via `extend_ontology()`. Only additive changes — no migrations, no store recreation. (R-03)
 
 ## When to Use Silk
 
@@ -148,6 +149,7 @@ store.merge_sync_payload(&payload)?;
 - Knowledge graphs with schema enforcement
 - Multi-device sync (phone, laptop, server — all converge)
 - Systems that need an audit trail (every change is a Merkle-DAG entry)
+- Systems with evolving schemas (extend ontology without migrations — R-03)
 
 **Not the right tool:**
 - High-throughput analytics — use DuckDB or ClickHouse
@@ -157,7 +159,7 @@ store.merge_sync_payload(&payload)?;
 
 ## Trust Model
 
-Silk is designed for **trusted peer networks** — your own devices, your own team, your own infrastructure. All peers share the same ontology and are assumed non-malicious.
+Silk is designed for **trusted peer networks** — your own devices, your own team, your own infrastructure. All peers share the same genesis ontology and can extend it monotonically (R-03). Peers are assumed non-malicious.
 
 **What Silk provides today:**
 - Schema enforcement on all code paths (including sync, since v0.1.1)
@@ -318,7 +320,7 @@ Edge density scales linearly with traversal cost — no surprise, but now measur
 
 Higher overlap = more Bloom filter cross-checking. The fast path is low-overlap (first sync). Incremental syncs on already-converged peers use the 10% delta path (611 µs, see above).
 
-Run the examples yourself: `python examples/offline_first.py`. See all four scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
+Run the examples yourself: `python examples/offline_first.py`. See all five scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
 
 ## Design Decisions
 
@@ -333,6 +335,8 @@ Silk's architecture is driven by 28 explicit design decisions (D-001 through D-0
 | Conflict resolution | Per-property LWW | Non-conflicting concurrent writes both win |
 | Sync | Delta-state + Bloom | Minimize transfer: only send what the peer lacks |
 | Schema | Open properties (D-026) | Ontology is the floor, not the ceiling — unknown properties accepted |
+| Sync validation | Quarantine (R-02) | Invalid entries in oplog but hidden from graph |
+| Schema evolution | Monotonic (R-03) | Add types/properties only, never remove |
 
 ## Python API Reference
 

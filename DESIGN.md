@@ -65,7 +65,7 @@ For new peers joining the fleet, Automerge sends the entire document as a compre
 
 ## Ontology-First Design
 
-Silk is domain-agnostic. It has no built-in node types or edge types. Instead, every graph store begins with a **genesis entry** that defines an immutable **ontology** — the vocabulary and rules for that graph. The ontology must be defined before any data can be written, and it cannot be changed after genesis.
+Silk is domain-agnostic. It has no built-in node types or edge types. Instead, every graph store begins with a **genesis entry** that defines an initial **ontology** (extendable via R-03 monotonic evolution) — the vocabulary and rules for that graph. The ontology must be defined before any data can be written.
 
 The ontology defines:
 - **Node types** — with optional property schemas (name, type, required)
@@ -89,7 +89,7 @@ Silk (engine)                    Your App (domain ontology)
                                 └──────────────────────────┘
 ```
 
-The ontology is immutable by design. Like the rules in Conway's Game of Life — simple, fixed rules create complex emergent behavior. Changing the rules mid-game invalidates all prior state. If you need a different ontology, you need a different graph.
+The genesis ontology is fixed. Silk supports monotonic schema evolution (R-03): add new types, properties, subtypes, and relax constraints via `ExtendOntology` entries. You cannot remove types or tighten constraints — that would invalidate existing data.
 
 ### Ontology Structure
 
@@ -520,7 +520,7 @@ silk/
 │   ├── crdt.rs                 # Conflict resolution: LWW, add-wins, tombstones
 │   ├── sync.rs                 # Sync protocol: delta detection, bloom filters
 │   ├── store.rs                # Persistence layer (redb)
-│   ├── clock.rs                # Lamport clock
+│   ├── clock.rs                # Hybrid Logical Clock (R-01)
 │   ├── bloom.rs                # Bloom filter for sync negotiation
 │   └── python.rs               # #[pymodule] + #[pyclass] wrappers (behind "python" feature)
 │
@@ -844,7 +844,7 @@ docker/scenarios/byzantine.yml:
   - 3 containers: A, B, evil
   - evil sends entries with invalid signatures
   - evil sends entries with corrupted hashes
-  - evil sends entries with impossible Lamport clocks
+  - evil sends entries with impossible HLC timestamps
   - Verify: A and B reject all bad entries
   - Verify: A and B remain consistent
 

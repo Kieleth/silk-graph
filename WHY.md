@@ -21,7 +21,7 @@ Silk is that tool.
 
 ### Schema-enforced
 
-Silk validates every write against an ontology defined at store creation. Node types, edge types, source/target constraints, required properties, property types — all checked before the entry hits the DAG. Invalid writes are rejected, not silently stored. The ontology defines the minimum (required properties, type constraints); unknown properties are accepted (open-world, D-026). Your schema evolves without migrations.
+Silk validates every write against an ontology defined at store creation. Node types, edge types, source/target constraints, required properties, property types — all checked before the entry hits the DAG. Invalid writes are rejected, not silently stored. The ontology defines the minimum (required properties, type constraints); unknown properties are accepted (open-world, D-026). Your schema evolves without migrations. Plus, the ontology can grow at runtime — `extend_ontology()` (R-03) adds new types, properties, and subtypes without store recreation.
 
 ### Conflict-free
 

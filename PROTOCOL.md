@@ -96,6 +96,23 @@ Serialized with `#[serde(tag = "op")]` — an `"op"` field discriminates the var
 {"op": "remove_edge", "edge_id": "e1"}
 ```
 
+**extend_ontology** (R-03 — monotonic schema evolution):
+```json
+{"op": "extend_ontology", "extension": {
+  "node_types": {"service": {"properties": {"url": {"value_type": "string"}}}},
+  "edge_types": {},
+  "node_type_updates": {
+    "entity": {
+      "add_properties": {"region": {"value_type": "string", "required": false}},
+      "relax_properties": ["status"],
+      "add_subtypes": {}
+    }
+  }
+}}
+```
+
+Only additive changes allowed: add types, add properties, add subtypes, relax required->optional. Cannot remove types, remove properties, or tighten constraints.
+
 ### Entry
 
 The atomic unit of the Merkle-DAG. Content-addressed: `hash = BLAKE3(msgpack(signable_content))`.
@@ -281,6 +298,16 @@ A (existing)                    C (new)
 - **Add-wins**: If one peer removes a node and another adds an edge to it, the add wins after sync
 - **Per-property LWW**: Concurrent updates to the same property are resolved by Hybrid Logical Clock comparison. Higher physical_ms wins. Same physical_ms: higher logical wins. Both equal: lexicographically lower instance ID wins.
 - **Non-conflicting concurrent writes**: Two peers updating different properties on the same node both succeed — neither is lost
+
+## Quarantine (R-02)
+
+Invalid entries (failing ontology validation) are accepted into the oplog for CRDT convergence but quarantined from the materialized graph. Quarantine is local policy — the oplog is identical across all peers.
+
+- Entry arrives -> hash verified -> appended to oplog (always)
+- During materialization: validate payload against current ontology
+- If invalid -> hash added to `quarantined` set, entry skipped for materialization
+- Quarantine is grow-only (monotonic). Entries never leave quarantine.
+- Queries (`get_node`, `all_nodes`, etc.) never return quarantined data
 
 ## Version Compatibility
 
