@@ -14,7 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-14, macos-13, windows-latest]
+        os: [ubuntu-latest, macos-14, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write  # Trusted Publishers (OIDC) — no API token needed
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -48,14 +48,18 @@ jobs:
   publish-crates:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish --token ${{ secrets.CARGO_TOKEN }}
+      - name: Publish
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_TOKEN }}
 
   github-release:
     name: Create GitHub Release
-    needs: [publish-pypi, publish-crates]
+    needs: [publish-pypi]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
