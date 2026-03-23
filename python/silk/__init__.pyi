@@ -337,6 +337,26 @@ class GraphStore:
         """
         ...
 
+    # -- Epoch Compaction (R-08) --
+
+    def create_checkpoint(self) -> bytes:
+        """R-08: Create a checkpoint entry from the current graph state.
+
+        Returns the checkpoint as bytes (for inspection), does NOT compact yet.
+        The checkpoint contains synthetic ops that reconstruct the full graph.
+        """
+        ...
+    def compact(self) -> str:
+        """R-08: Compact the oplog. Creates a checkpoint of current state,
+        replaces entire oplog with the checkpoint entry.
+        Returns the hex hash of the checkpoint entry.
+
+        SAFETY: Only call when ALL peers have synced to current state.
+        After compaction, the oplog contains a single checkpoint entry
+        that serves as the new genesis.
+        """
+        ...
+
 
 class GraphSnapshot:
     """R-06: Read-only snapshot of the graph at a historical point in time.

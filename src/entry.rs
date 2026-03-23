@@ -60,6 +60,18 @@ pub enum GraphOp {
     /// R-03: Extend the ontology with new types/properties (monotonic only).
     #[serde(rename = "extend_ontology")]
     ExtendOntology { extension: OntologyExtension },
+    /// R-08: Checkpoint entry — summarizes all prior state.
+    /// Contains synthetic ops that reconstruct the full graph when replayed.
+    /// After compaction, this becomes the new genesis (next=[]).
+    #[serde(rename = "checkpoint")]
+    Checkpoint {
+        /// Synthetic ops that reconstruct the graph state
+        ops: Vec<GraphOp>,
+        /// Physical timestamp when compaction was performed
+        compacted_at_physical_ms: u64,
+        /// Logical timestamp when compaction was performed
+        compacted_at_logical: u32,
+    },
 }
 
 /// A 32-byte BLAKE3 hash, used as the content address for entries.
@@ -431,6 +443,22 @@ mod tests {
                     edge_types: BTreeMap::new(),
                     node_type_updates: BTreeMap::new(),
                 },
+            },
+            GraphOp::Checkpoint {
+                ops: vec![
+                    GraphOp::DefineOntology {
+                        ontology: sample_ontology(),
+                    },
+                    GraphOp::AddNode {
+                        node_id: "n1".into(),
+                        node_type: "entity".into(),
+                        subtype: None,
+                        label: "Node 1".into(),
+                        properties: BTreeMap::new(),
+                    },
+                ],
+                compacted_at_physical_ms: 1000,
+                compacted_at_logical: 5,
             },
         ];
         for op in ops {

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **R-07: Query Builder** — Fluent `Query` class for Python-native graph queries. Chain `.nodes()`, `.where()`, `.follow()`, `.collect()`. Works with both `GraphStore` and `GraphSnapshot`. `QueryEngine` protocol for plugging in Datalog/SPARQL/custom engines.
+- **R-08: Epoch Compaction** — `store.compact()` compresses the entire oplog into a single checkpoint entry. Preserves all live nodes, edges, and ontology extensions. Tombstoned entities excluded. Works with persistent stores. `create_checkpoint()` for inspection without compacting.
 
 ## [0.1.3] - 2026-03-23
 

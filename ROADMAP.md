@@ -345,7 +345,9 @@ Declarative querying — transforms usability for knowledge graph workloads.
 
 ---
 
-## R-08: The Notebook Gets Too Thick
+## R-08: The Notebook Gets Too Thick ✓
+
+> **Status: COMPLETE** — `store.compact()` creates a checkpoint entry from the current graph state, replaces the entire oplog. `create_checkpoint()` for inspection without compacting. Preserves nodes, edges, ontology extensions. Works with persistent stores, snapshots, and queries.
 
 You never erase pages. Never. That's the rule. It's what makes everything work — everyone can check everyone's pages, no one loses information.
 

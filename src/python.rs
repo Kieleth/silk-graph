@@ -145,6 +145,16 @@ impl PyGraphStore {
                         GraphOp::RemoveNode { node_id } => {
                             node_types.remove(node_id);
                         }
+                        GraphOp::Checkpoint { ops, .. } => {
+                            for op in ops {
+                                if let GraphOp::AddNode {
+                                    node_id, node_type, ..
+                                } = op
+                                {
+                                    node_types.insert(node_id.clone(), node_type.clone());
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -187,20 +197,13 @@ impl PyGraphStore {
         let store = Store::open(&PathBuf::from(&path), None)
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
-        // Extract ontology from genesis entry.
+        // Extract ontology from genesis entry (DefineOntology or Checkpoint).
         let oplog = &store.oplog;
         let all = oplog.entries_since(None);
         let genesis = all
             .first()
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("store has no entries"))?;
-        let ontology = match &genesis.payload {
-            GraphOp::DefineOntology { ontology } => ontology.clone(),
-            _ => {
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "first entry is not DefineOntology",
-                ))
-            }
-        };
+        let ontology = extract_ontology_from_genesis(genesis)?;
 
         // Reconstruct node_types from replaying ops.
         let mut node_types = HashMap::new();
@@ -213,6 +216,16 @@ impl PyGraphStore {
                 }
                 GraphOp::RemoveNode { node_id } => {
                     node_types.remove(node_id);
+                }
+                GraphOp::Checkpoint { ops, .. } => {
+                    for op in ops {
+                        if let GraphOp::AddNode {
+                            node_id, node_type, ..
+                        } = op
+                        {
+                            node_types.insert(node_id.clone(), node_type.clone());
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -655,16 +668,9 @@ impl PyGraphStore {
             ));
         }
 
-        // Extract ontology from genesis.
+        // Extract ontology from genesis (DefineOntology or Checkpoint).
         let genesis = &snap.entries[0];
-        let ontology = match &genesis.payload {
-            GraphOp::DefineOntology { ontology } => ontology.clone(),
-            _ => {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "first entry in snapshot is not DefineOntology",
-                ))
-            }
-        };
+        let ontology = extract_ontology_from_genesis(genesis)?;
 
         // Build op log from genesis.
         let mut oplog = crate::oplog::OpLog::new(genesis.clone());
@@ -688,6 +694,16 @@ impl PyGraphStore {
                 }
                 GraphOp::RemoveNode { node_id } => {
                     node_types.remove(node_id);
+                }
+                GraphOp::Checkpoint { ops, .. } => {
+                    for op in ops {
+                        if let GraphOp::AddNode {
+                            node_id, node_type, ..
+                        } = op
+                        {
+                            node_types.insert(node_id.clone(), node_type.clone());
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -751,19 +767,12 @@ impl PyGraphStore {
     fn as_of(&self, physical_ms: u64, logical: u32) -> PyResult<PyGraphSnapshot> {
         let entries = self.backend.oplog().entries_as_of(physical_ms, logical);
 
-        // Get ontology from genesis (first entry is always DefineOntology)
+        // Get ontology from genesis (DefineOntology or Checkpoint)
         let all = self.backend.oplog().entries_since(None);
         let genesis = all
             .first()
             .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no entries in oplog"))?;
-        let ontology = match &genesis.payload {
-            GraphOp::DefineOntology { ontology } => ontology.clone(),
-            _ => {
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "first entry is not DefineOntology",
-                ))
-            }
-        };
+        let ontology = extract_ontology_from_genesis(genesis)?;
 
         let mut graph = MaterializedGraph::new(ontology);
         let refs: Vec<&Entry> = entries.iter().copied().collect();
@@ -886,9 +895,99 @@ impl PyGraphStore {
     fn set_require_signatures(&mut self, enabled: bool) {
         self.require_signatures = enabled;
     }
+
+    // -- Epoch Compaction (R-08) --
+
+    /// R-08: Create a checkpoint entry from the current graph state.
+    /// Returns the checkpoint as bytes (for inspection), does NOT compact yet.
+    fn create_checkpoint(&self) -> PyResult<Vec<u8>> {
+        let ops = self.build_checkpoint_ops();
+        let (phys, log) = self.clock.as_tuple();
+        let checkpoint_op = GraphOp::Checkpoint {
+            ops,
+            compacted_at_physical_ms: phys,
+            compacted_at_logical: log,
+        };
+        let entry = self.create_entry(
+            checkpoint_op,
+            vec![],
+            vec![],
+            self.clock.clone(),
+            &self.instance_id,
+        );
+        Ok(entry.to_bytes())
+    }
+
+    /// R-08: Compact the oplog. Creates a checkpoint of current state,
+    /// replaces entire oplog with the checkpoint entry.
+    /// Returns the hex hash of the checkpoint entry.
+    /// SAFETY: Only call when ALL peers have synced to current state.
+    fn compact(&mut self) -> PyResult<String> {
+        let ops = self.build_checkpoint_ops();
+        self.clock.tick();
+        let (phys, log) = self.clock.as_tuple();
+        let checkpoint = self.create_entry(
+            GraphOp::Checkpoint {
+                ops,
+                compacted_at_physical_ms: phys,
+                compacted_at_logical: log,
+            },
+            vec![], // new genesis — no predecessors
+            vec![],
+            self.clock.clone(),
+            &self.instance_id,
+        );
+        let hash_hex = hex::encode(checkpoint.hash);
+
+        match &mut self.backend {
+            Backend::Memory(oplog) => oplog.replace_with_checkpoint(checkpoint),
+            Backend::Persistent(store) => {
+                store
+                    .replace_with_checkpoint(checkpoint)
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+            }
+        }
+
+        Ok(hash_hex)
+    }
 }
 
 impl PyGraphStore {
+    /// R-08: Build synthetic ops that reconstruct the current graph state.
+    /// Order: DefineOntology (with all extensions merged), AddNode for each live node, AddEdge for each live edge.
+    fn build_checkpoint_ops(&self) -> Vec<GraphOp> {
+        let mut ops = Vec::new();
+
+        // 1. Ontology (with all extensions merged)
+        ops.push(GraphOp::DefineOntology {
+            ontology: self.ontology.clone(),
+        });
+
+        // 2. All live nodes
+        for node in self.graph.all_nodes() {
+            ops.push(GraphOp::AddNode {
+                node_id: node.node_id.clone(),
+                node_type: node.node_type.clone(),
+                subtype: node.subtype.clone(),
+                label: node.label.clone(),
+                properties: node.properties.clone(),
+            });
+        }
+
+        // 3. All live edges
+        for edge in self.graph.all_edges() {
+            ops.push(GraphOp::AddEdge {
+                edge_id: edge.edge_id.clone(),
+                edge_type: edge.edge_type.clone(),
+                source_id: edge.source_id.clone(),
+                target_id: edge.target_id.clone(),
+                properties: edge.properties.clone(),
+            });
+        }
+
+        ops
+    }
+
     /// Validate an entry's payload against the ontology (used by graph.apply() for R-02 quarantine).
     /// Returns Ok(()) if valid (or not applicable), Err(reason) if invalid.
     fn validate_entry_payload(&self, entry: &Entry) -> Result<(), String> {
@@ -1032,6 +1131,22 @@ impl PyGraphStore {
                             // R-03: sync local ontology (best-effort, quarantined if invalid)
                             let _ = self.ontology.merge_extension(extension);
                         }
+                        GraphOp::Checkpoint { ops, .. } => {
+                            // R-08: process synthetic ops for node_types and ontology
+                            for op in ops {
+                                match op {
+                                    GraphOp::DefineOntology { ontology } => {
+                                        self.ontology = ontology.clone();
+                                    }
+                                    GraphOp::AddNode {
+                                        node_id, node_type, ..
+                                    } => {
+                                        self.node_types.insert(node_id.clone(), node_type.clone());
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                         _ => {}
                     }
                     self.clock.merge(&entry.clock);
@@ -1161,6 +1276,9 @@ impl PyGraphStore {
             GraphOp::ExtendOntology { .. } => {
                 let _ = dict.set_item("op", "extend_ontology");
             }
+            GraphOp::Checkpoint { .. } => {
+                let _ = dict.set_item("op", "checkpoint");
+            }
         }
         dict.into()
     }
@@ -1169,6 +1287,27 @@ impl PyGraphStore {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// R-08: Extract ontology from a genesis entry, which may be DefineOntology or Checkpoint.
+fn extract_ontology_from_genesis(entry: &Entry) -> PyResult<Ontology> {
+    match &entry.payload {
+        GraphOp::DefineOntology { ontology } => Ok(ontology.clone()),
+        GraphOp::Checkpoint { ops, .. } => {
+            // First synthetic op in a checkpoint is always DefineOntology
+            for op in ops {
+                if let GraphOp::DefineOntology { ontology } = op {
+                    return Ok(ontology.clone());
+                }
+            }
+            Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "checkpoint contains no DefineOntology op",
+            ))
+        }
+        _ => Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "first entry is not DefineOntology or Checkpoint",
+        )),
+    }
+}
 
 fn parse_hex_hash(hex_str: &str) -> PyResult<Hash> {
     let bytes = hex::decode(hex_str)

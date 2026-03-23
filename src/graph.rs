@@ -94,6 +94,19 @@ impl MaterializedGraph {
     /// convergence — quarantine is a graph-layer concern, not an oplog concern.
     pub fn apply(&mut self, entry: &Entry) {
         match &entry.payload {
+            GraphOp::Checkpoint { ops, .. } => {
+                // R-08: Replay synthetic ops to restore graph state
+                for op in ops {
+                    let synthetic = Entry::new(
+                        op.clone(),
+                        vec![],
+                        vec![],
+                        entry.clock.clone(),
+                        &entry.author,
+                    );
+                    self.apply(&synthetic);
+                }
+            }
             GraphOp::DefineOntology { .. } => {
                 // Genesis — nothing to materialize.
             }

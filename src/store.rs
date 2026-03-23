@@ -133,6 +133,50 @@ impl Store {
         Ok(inserted)
     }
 
+    /// R-08: Replace entire store with a single checkpoint entry.
+    pub fn replace_with_checkpoint(&mut self, checkpoint: Entry) -> Result<(), StoreError> {
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| StoreError::Io(e.to_string()))?;
+        {
+            let mut table = txn
+                .open_table(ENTRIES_TABLE)
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+            // Collect all existing keys
+            let keys: Vec<Vec<u8>> = table
+                .iter()
+                .map_err(|e| StoreError::Io(e.to_string()))?
+                .filter_map(|r| r.ok().map(|(k, _)| k.value().to_vec()))
+                .collect();
+            for key in keys {
+                table
+                    .remove(key.as_slice())
+                    .map_err(|e| StoreError::Io(e.to_string()))?;
+            }
+            // Insert checkpoint
+            let entry_bytes = checkpoint.to_bytes();
+            table
+                .insert(checkpoint.hash.as_slice(), entry_bytes.as_slice())
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+        }
+        {
+            let mut meta = txn
+                .open_table(META_TABLE)
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+            let heads_bytes = rmp_serde::to_vec(&vec![checkpoint.hash])
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+            meta.insert("heads", heads_bytes.as_slice())
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+        }
+        txn.commit().map_err(|e| StoreError::Io(e.to_string()))?;
+
+        // Update in-memory oplog
+        self.oplog.replace_with_checkpoint(checkpoint);
+
+        Ok(())
+    }
+
     /// Persist a single entry to redb.
     fn persist_entry(&self, entry: &Entry) -> Result<(), StoreError> {
         let txn = self

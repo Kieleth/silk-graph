@@ -197,6 +197,19 @@ impl OpLog {
         self.topo_sort(&filtered)
     }
 
+    /// R-08: Replace entire oplog with a single checkpoint entry.
+    /// All previous entries are removed. The checkpoint becomes the sole entry.
+    /// SAFETY: Only call after verifying ALL peers have synced past all current entries.
+    pub fn replace_with_checkpoint(&mut self, checkpoint: Entry) {
+        self.entries.clear();
+        self.heads.clear();
+        self.children.clear();
+        let hash = checkpoint.hash;
+        self.entries.insert(hash, checkpoint);
+        self.heads.insert(hash);
+        self.len = 1;
+    }
+
     /// BFS backwards through `next` links from the given starting hashes.
     /// Returns the set of all reachable hashes (including the starting ones).
     fn reachable_from(&self, starts: &[Hash]) -> HashSet<Hash> {
