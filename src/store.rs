@@ -28,6 +28,13 @@ impl Store {
     pub fn open(path: &Path, genesis: Option<Entry>) -> Result<Self, StoreError> {
         let db = Database::create(path).map_err(|e| StoreError::Io(e.to_string()))?;
 
+        // S-09: restrict file permissions to owner-only on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+
         // Ensure tables exist.
         {
             let txn = db

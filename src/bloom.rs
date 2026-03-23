@@ -20,6 +20,28 @@ pub struct BloomFilter {
 }
 
 impl BloomFilter {
+    /// S-05: Validate bloom filter dimensions after deserialization.
+    /// Prevents panics from malformed sync offers (division by zero, out of bounds).
+    pub fn validate(&self) -> Result<(), String> {
+        if self.num_bits == 0 {
+            return Err("bloom filter num_bits must be > 0".into());
+        }
+        if self.bits.len() * 64 < self.num_bits {
+            return Err(format!(
+                "bloom filter bits array too small: {} words for {} bits",
+                self.bits.len(),
+                self.num_bits
+            ));
+        }
+        if self.num_hashes == 0 || self.num_hashes > 32 {
+            return Err(format!(
+                "bloom filter num_hashes {} out of range [1, 32]",
+                self.num_hashes
+            ));
+        }
+        Ok(())
+    }
+
     /// Create a new Bloom filter sized for `expected_items` with the given
     /// false positive rate.
     ///

@@ -23,14 +23,16 @@ impl LamportClock {
     }
 
     /// Increment the clock for a local event. Returns the new time.
+    /// S-01: uses saturating_add to prevent overflow at u64::MAX.
     pub fn tick(&mut self) -> u64 {
-        self.time += 1;
+        self.time = self.time.saturating_add(1);
         self.time
     }
 
     /// Merge with a remote clock: local = max(local, remote) + 1.
+    /// S-01: uses saturating_add to prevent overflow at u64::MAX.
     pub fn merge(&mut self, remote_time: u64) -> u64 {
-        self.time = self.time.max(remote_time) + 1;
+        self.time = self.time.max(remote_time).saturating_add(1);
         self.time
     }
 
@@ -112,5 +114,36 @@ mod tests {
         let bytes = rmp_serde::to_vec(&clock).unwrap();
         let decoded: LamportClock = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(clock, decoded);
+    }
+
+    // S-01: clock overflow protection
+    #[test]
+    fn tick_saturates_at_max() {
+        let mut clock = LamportClock {
+            id: "node-a".into(),
+            time: u64::MAX,
+        };
+        let t = clock.tick();
+        assert_eq!(t, u64::MAX); // saturates, doesn't wrap to 0
+    }
+
+    #[test]
+    fn merge_saturates_at_max() {
+        let mut clock = LamportClock {
+            id: "node-a".into(),
+            time: 0,
+        };
+        let t = clock.merge(u64::MAX);
+        assert_eq!(t, u64::MAX); // max + 1 saturates to max
+    }
+
+    #[test]
+    fn tick_near_max_saturates() {
+        let mut clock = LamportClock {
+            id: "node-a".into(),
+            time: u64::MAX - 1,
+        };
+        assert_eq!(clock.tick(), u64::MAX);
+        assert_eq!(clock.tick(), u64::MAX); // stays at max
     }
 }

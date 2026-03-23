@@ -22,14 +22,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 redb = "2"
-pyo3 = { version = "0.23", features = ["extension-module"], optional = true }
+pyo3 = { version = ">=0.23.4, <0.24", features = ["extension-module"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"
 
 [features]
-default = ["python"]
+default = []  # S-20: python is opt-in, not default
 python = ["dep:pyo3"]
 
 [[bench]]

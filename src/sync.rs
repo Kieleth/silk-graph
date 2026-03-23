@@ -5,6 +5,11 @@ use crate::bloom::BloomFilter;
 use crate::entry::{Entry, Hash};
 use crate::oplog::OpLog;
 
+/// S-03: Maximum byte size for sync messages (64 MB).
+const MAX_SYNC_BYTES: usize = 64 * 1024 * 1024;
+/// S-03: Maximum entries in a single sync payload or snapshot.
+const MAX_ENTRIES_PER_MESSAGE: usize = 100_000;
+
 /// A sync offer — sent by a peer to advertise its state.
 ///
 /// Contains the peer's current DAG heads and a bloom filter of all
@@ -69,8 +74,21 @@ impl SyncOffer {
     }
 
     /// Deserialize from MessagePack bytes.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error> {
-        rmp_serde::from_slice(bytes)
+    /// S-03: validates byte length. S-05: validates bloom filter dimensions.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > MAX_SYNC_BYTES {
+            return Err(format!(
+                "sync offer too large: {} bytes (max {MAX_SYNC_BYTES})",
+                bytes.len()
+            ));
+        }
+        let offer: Self =
+            rmp_serde::from_slice(bytes).map_err(|e| format!("invalid sync offer: {e}"))?;
+        offer
+            .bloom
+            .validate()
+            .map_err(|e| format!("invalid bloom filter in sync offer: {e}"))?;
+        Ok(offer)
     }
 }
 
@@ -81,8 +99,23 @@ impl SyncPayload {
     }
 
     /// Deserialize from MessagePack bytes.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error> {
-        rmp_serde::from_slice(bytes)
+    /// S-03: validates byte length and entry count.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > MAX_SYNC_BYTES {
+            return Err(format!(
+                "sync payload too large: {} bytes (max {MAX_SYNC_BYTES})",
+                bytes.len()
+            ));
+        }
+        let payload: Self =
+            rmp_serde::from_slice(bytes).map_err(|e| format!("invalid sync payload: {e}"))?;
+        if payload.entries.len() > MAX_ENTRIES_PER_MESSAGE {
+            return Err(format!(
+                "too many entries in payload: {} (max {MAX_ENTRIES_PER_MESSAGE})",
+                payload.entries.len()
+            ));
+        }
+        Ok(payload)
     }
 }
 
@@ -99,8 +132,23 @@ impl Snapshot {
     }
 
     /// Deserialize from MessagePack bytes.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error> {
-        rmp_serde::from_slice(bytes)
+    /// S-03: validates byte length and entry count.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() > MAX_SYNC_BYTES {
+            return Err(format!(
+                "snapshot too large: {} bytes (max {MAX_SYNC_BYTES})",
+                bytes.len()
+            ));
+        }
+        let snap: Self =
+            rmp_serde::from_slice(bytes).map_err(|e| format!("invalid snapshot: {e}"))?;
+        if snap.entries.len() > MAX_ENTRIES_PER_MESSAGE {
+            return Err(format!(
+                "too many entries in snapshot: {} (max {MAX_ENTRIES_PER_MESSAGE})",
+                snap.entries.len()
+            ));
+        }
+        Ok(snap)
     }
 }
 

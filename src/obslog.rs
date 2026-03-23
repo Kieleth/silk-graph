@@ -38,13 +38,21 @@ struct ObsValue {
 
 /// Compound key: source + timestamp_ms, encoded for lexicographic ordering.
 /// Format: [source_len(2 bytes)][source bytes][timestamp_ms(8 bytes BE)]
-fn encode_key(source: &str, timestamp_ms: u64) -> Vec<u8> {
+/// S-13: returns error instead of silently truncating source names > 65535 bytes.
+fn encode_key(source: &str, timestamp_ms: u64) -> Result<Vec<u8>, ObsLogError> {
     let src = source.as_bytes();
+    if src.len() > u16::MAX as usize {
+        return Err(ObsLogError::Io(format!(
+            "source name too long: {} bytes (max {})",
+            src.len(),
+            u16::MAX
+        )));
+    }
     let mut key = Vec::with_capacity(2 + src.len() + 8);
     key.extend_from_slice(&(src.len() as u16).to_be_bytes());
     key.extend_from_slice(src);
     key.extend_from_slice(&timestamp_ms.to_be_bytes());
-    key
+    Ok(key)
 }
 
 /// Decode source and timestamp from a compound key.
@@ -97,6 +105,13 @@ impl ObservationLog {
     pub fn open(path: &Path, max_age_secs: u64) -> Result<Self, ObsLogError> {
         let db = Database::create(path).map_err(|e| ObsLogError::Io(e.to_string()))?;
 
+        // S-09: restrict file permissions to owner-only on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+
         // Ensure tables exist.
         {
             let txn = db
@@ -124,7 +139,7 @@ impl ObservationLog {
         metadata: BTreeMap<String, String>,
     ) -> Result<(), ObsLogError> {
         let ts = now_ms();
-        let key = encode_key(source, ts);
+        let key = encode_key(source, ts)?;
         let obs = ObsValue { value, metadata };
         let val = rmp_serde::to_vec(&obs).map_err(|e| ObsLogError::Serialization(e.to_string()))?;
 
@@ -160,7 +175,7 @@ impl ObservationLog {
                 .map_err(|e| ObsLogError::Io(e.to_string()))?;
             for (i, (source, value, metadata)) in observations.iter().enumerate() {
                 // Offset each by 1ms to ensure unique keys within batch
-                let key = encode_key(source, ts + i as u64);
+                let key = encode_key(source, ts + i as u64)?;
                 let obs = ObsValue {
                     value: *value,
                     metadata: metadata.clone(),
@@ -178,8 +193,8 @@ impl ObservationLog {
 
     /// Query observations for a source since a given timestamp.
     pub fn query(&self, source: &str, since_ts_ms: u64) -> Result<Vec<Observation>, ObsLogError> {
-        let start = encode_key(source, since_ts_ms);
-        let end = encode_key(source, u64::MAX);
+        let start = encode_key(source, since_ts_ms)?;
+        let end = encode_key(source, u64::MAX)?;
 
         let txn = self
             .db
@@ -217,8 +232,8 @@ impl ObservationLog {
 
     /// Get the most recent observation for a source.
     pub fn query_latest(&self, source: &str) -> Result<Option<Observation>, ObsLogError> {
-        let start = encode_key(source, 0);
-        let end = encode_key(source, u64::MAX);
+        let start = encode_key(source, 0)?;
+        let end = encode_key(source, u64::MAX)?;
 
         let txn = self
             .db

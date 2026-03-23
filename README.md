@@ -666,6 +666,7 @@ cargo bench
 | [DESIGN.md](DESIGN.md) | Research foundations, 26 design decisions (D-001–D-026), architecture |
 | [PROTOCOL.md](PROTOCOL.md) | Sync wire format specification — for implementing peers in other languages |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [SECURITY.md](SECURITY.md) | Threat model, known limitations, vulnerability reporting |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, PR guidelines |
 | [`examples/`](examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology) |
 

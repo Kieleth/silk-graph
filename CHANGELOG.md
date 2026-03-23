@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **S-01**: Lamport clock uses `saturating_add` — prevents overflow wrap-around at u64::MAX
+- **S-03**: Sync message size limits — 64 MB max bytes, 100K max entries per payload
+- **S-04**: Ontology validation on sync merge — invalid entries from remote peers are skipped, not silently accepted
+- **S-05**: Bloom filter dimension validation — rejects malformed bloom filters that would cause panics
+- **S-06**: pyo3 version pinned to >=0.23.4 (RUSTSEC-2025-0020)
+- **S-09**: redb databases created with 0600 permissions on Unix (owner-only)
+- **S-10**: Value nesting depth limit (64 levels) — prevents stack overflow from deeply nested structures
+- **S-12**: Value size limits — strings capped at 1 MB, lists/maps at 10K items
+- **S-13**: ObservationLog rejects source names > 65535 bytes instead of silently truncating
+- **S-20**: Default features changed to `[]` — pyo3 is opt-in, not pulled by default for Rust consumers
+
 ### Changed
 - **D-026: Open properties** — Unknown properties are now accepted without validation. Unknown subtypes are accepted with type-level validation only. The ontology defines the minimum, not the maximum. Previously, any property or subtype not declared in the ontology was rejected with `ValidationError`.
 

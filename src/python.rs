@@ -651,8 +651,52 @@ impl PyGraphStore {
 }
 
 impl PyGraphStore {
+    /// S-04: Validate an entry's payload against the ontology.
+    /// Returns Ok(()) if valid (or not applicable), Err(reason) if invalid.
+    fn validate_entry_payload(&self, entry: &Entry) -> Result<(), String> {
+        match &entry.payload {
+            GraphOp::AddNode {
+                node_type,
+                subtype,
+                properties,
+                ..
+            } => self
+                .ontology
+                .validate_node(node_type, subtype.as_deref(), properties)
+                .map_err(|e| e.to_string()),
+            GraphOp::AddEdge { edge_type, .. } => {
+                // Full edge validation requires source/target node types which
+                // may not be available yet during sync. Just check edge_type exists.
+                if self.ontology.edge_types.contains_key(edge_type) {
+                    Ok(())
+                } else {
+                    Err(format!("unknown edge type '{edge_type}'"))
+                }
+            }
+            // UpdateProperty, RemoveNode, RemoveEdge, DefineOntology: no validation needed.
+            _ => Ok(()),
+        }
+    }
+
     /// Merge a vec of entries into the store, updating the materialized graph.
     fn merge_entries_vec(&mut self, entries: &[Entry]) -> PyResult<usize> {
+        // S-04: Filter entries through ontology validation before merge.
+        let valid_entries: Vec<Entry> = entries
+            .iter()
+            .filter(|e| match self.validate_entry_payload(e) {
+                Ok(()) => true,
+                Err(reason) => {
+                    eprintln!(
+                        "silk: skipping sync entry {}: ontology validation failed: {}",
+                        hex::encode(e.hash),
+                        reason
+                    );
+                    false
+                }
+            })
+            .cloned()
+            .collect();
+
         // Collect existing hashes before merge so we can identify new entries.
         let existing: HashSet<Hash> = self
             .backend
@@ -664,10 +708,10 @@ impl PyGraphStore {
 
         // Merge into oplog (and redb for persistent backend).
         let inserted = match &mut self.backend {
-            Backend::Memory(oplog) => crate::sync::merge_entries(oplog, entries)
+            Backend::Memory(oplog) => crate::sync::merge_entries(oplog, &valid_entries)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?,
             Backend::Persistent(store) => store
-                .merge(entries)
+                .merge(&valid_entries)
                 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?,
         };
 
@@ -831,7 +875,23 @@ fn convert_props(dict: Option<&Bound<'_, PyDict>>) -> PyResult<BTreeMap<String, 
     Ok(map)
 }
 
+// S-10: max nesting depth for py_to_value / value_to_py to prevent stack overflow.
+const MAX_VALUE_DEPTH: usize = 64;
+// S-12: size limits for values coming from Python.
+const MAX_STRING_BYTES: usize = 1_048_576; // 1 MB
+const MAX_LIST_ITEMS: usize = 10_000;
+const MAX_MAP_ENTRIES: usize = 10_000;
+
 fn py_to_value(obj: &Bound<'_, pyo3::PyAny>) -> PyResult<Value> {
+    py_to_value_depth(obj, 0)
+}
+
+fn py_to_value_depth(obj: &Bound<'_, pyo3::PyAny>, depth: usize) -> PyResult<Value> {
+    if depth >= MAX_VALUE_DEPTH {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "value nesting exceeds maximum depth of {MAX_VALUE_DEPTH}"
+        )));
+    }
     if obj.is_none() {
         Ok(Value::Null)
     } else if let Ok(b) = obj.extract::<bool>() {
@@ -841,15 +901,36 @@ fn py_to_value(obj: &Bound<'_, pyo3::PyAny>) -> PyResult<Value> {
     } else if let Ok(f) = obj.extract::<f64>() {
         Ok(Value::Float(f))
     } else if let Ok(s) = obj.extract::<String>() {
+        if s.len() > MAX_STRING_BYTES {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "string exceeds maximum size of {MAX_STRING_BYTES} bytes (got {})",
+                s.len()
+            )));
+        }
         Ok(Value::String(s))
     } else if let Ok(list) = obj.downcast::<pyo3::types::PyList>() {
-        let items: PyResult<Vec<Value>> = list.iter().map(|item| py_to_value(&item)).collect();
+        if list.len() > MAX_LIST_ITEMS {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "list exceeds maximum of {MAX_LIST_ITEMS} items (got {})",
+                list.len()
+            )));
+        }
+        let items: PyResult<Vec<Value>> = list
+            .iter()
+            .map(|item| py_to_value_depth(&item, depth + 1))
+            .collect();
         Ok(Value::List(items?))
     } else if let Ok(dict) = obj.downcast::<PyDict>() {
+        if dict.len() > MAX_MAP_ENTRIES {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "map exceeds maximum of {MAX_MAP_ENTRIES} entries (got {})",
+                dict.len()
+            )));
+        }
         let mut map = BTreeMap::new();
         for (k, v) in dict.iter() {
             let key: String = k.extract()?;
-            map.insert(key, py_to_value(&v)?);
+            map.insert(key, py_to_value_depth(&v, depth + 1)?);
         }
         Ok(Value::Map(map))
     } else {
@@ -894,6 +975,15 @@ fn value_map_to_pydict(py: Python<'_>, map: &BTreeMap<String, Value>) -> PyResul
 }
 
 fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
+    value_to_py_depth(py, val, 0)
+}
+
+fn value_to_py_depth(py: Python<'_>, val: &Value, depth: usize) -> PyResult<PyObject> {
+    if depth >= MAX_VALUE_DEPTH {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "value nesting exceeds maximum depth of {MAX_VALUE_DEPTH}"
+        )));
+    }
     use pyo3::ToPyObject;
     match val {
         Value::Null => Ok(py.None()),
@@ -902,12 +992,20 @@ fn value_to_py(py: Python<'_>, val: &Value) -> PyResult<PyObject> {
         Value::Float(f) => Ok(f.to_object(py)),
         Value::String(s) => Ok(s.to_object(py)),
         Value::List(items) => {
-            let py_items: Vec<PyObject> =
-                items.iter().map(|v| value_to_py(py, v).unwrap()).collect();
-            let list = PyList::new(py, &py_items)?;
+            let py_items: PyResult<Vec<PyObject>> = items
+                .iter()
+                .map(|v| value_to_py_depth(py, v, depth + 1))
+                .collect();
+            let list = PyList::new(py, &py_items?)?;
             Ok(list.into())
         }
-        Value::Map(m) => value_map_to_pydict(py, m),
+        Value::Map(m) => {
+            let dict = PyDict::new(py);
+            for (k, v) in m {
+                dict.set_item(k, value_to_py_depth(py, v, depth + 1)?)?;
+            }
+            Ok(dict.into())
+        }
     }
 }
 
