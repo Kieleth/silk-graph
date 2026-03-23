@@ -21,8 +21,10 @@ pub struct SyncOffer {
     pub heads: Vec<Hash>,
     /// Bloom filter containing all entry hashes the peer has.
     pub bloom: BloomFilter,
-    /// Current Lamport time of the offering peer.
-    pub clock_time: u64,
+    /// Physical time (ms) of the offering peer's clock.
+    pub physical_ms: u64,
+    /// Logical counter of the offering peer's clock.
+    pub logical: u32,
 }
 
 /// A sync response — entries the recipient should merge.
@@ -52,7 +54,7 @@ impl SyncOffer {
     /// Build a sync offer from an op log.
     ///
     /// Constructs a bloom filter of all entry hashes and captures current heads.
-    pub fn from_oplog(oplog: &OpLog, clock_time: u64) -> Self {
+    pub fn from_oplog(oplog: &OpLog, physical_ms: u64, logical: u32) -> Self {
         let all = oplog.entries_since(None);
         // Use a minimum of 128 expected items so the bloom filter has enough
         // bits to avoid false positives with very small entry sets.
@@ -64,7 +66,8 @@ impl SyncOffer {
         Self {
             heads: oplog.heads(),
             bloom,
-            clock_time,
+            physical_ms,
+            logical,
         }
     }
 
@@ -351,10 +354,7 @@ mod tests {
             op,
             next,
             vec![],
-            LamportClock {
-                id: author.into(),
-                time: clock_time,
-            },
+            LamportClock::with_values(author, clock_time, 0),
             author,
         )
     }
@@ -368,23 +368,25 @@ mod tests {
         let e1 = make_entry(add_node_op("n1"), vec![g.hash], 2, "inst-a");
         log.append(e1.clone()).unwrap();
 
-        let offer = SyncOffer::from_oplog(&log, 2);
+        let offer = SyncOffer::from_oplog(&log, 2, 0);
         assert_eq!(offer.heads, vec![e1.hash]);
         assert!(offer.bloom.contains(&g.hash));
         assert!(offer.bloom.contains(&e1.hash));
-        assert_eq!(offer.clock_time, 2);
+        assert_eq!(offer.physical_ms, 2);
+        assert_eq!(offer.logical, 0);
     }
 
     #[test]
     fn sync_offer_serialization_roundtrip() {
         let g = genesis("inst-a");
         let log = OpLog::new(g.clone());
-        let offer = SyncOffer::from_oplog(&log, 1);
+        let offer = SyncOffer::from_oplog(&log, 1, 0);
 
         let bytes = offer.to_bytes();
         let restored = SyncOffer::from_bytes(&bytes).unwrap();
         assert_eq!(restored.heads, offer.heads);
-        assert_eq!(restored.clock_time, offer.clock_time);
+        assert_eq!(restored.physical_ms, offer.physical_ms);
+        assert_eq!(restored.logical, offer.logical);
         assert!(restored.bloom.contains(&g.hash));
     }
 
@@ -406,7 +408,7 @@ mod tests {
         let mut log_b = OpLog::new(g.clone());
         log_b.append(e1.clone()).unwrap();
 
-        let offer_b = SyncOffer::from_oplog(&log_b, 2);
+        let offer_b = SyncOffer::from_oplog(&log_b, 2, 0);
         let payload = entries_missing(&log_a, &offer_b);
 
         assert_eq!(payload.entries.len(), 1);
@@ -425,7 +427,7 @@ mod tests {
         let mut log_b = OpLog::new(g.clone());
         log_b.append(e1.clone()).unwrap();
 
-        let offer_b = SyncOffer::from_oplog(&log_b, 2);
+        let offer_b = SyncOffer::from_oplog(&log_b, 2, 0);
         let payload = entries_missing(&log_a, &offer_b);
 
         assert!(payload.entries.is_empty());
@@ -444,7 +446,7 @@ mod tests {
         let mut log_b = OpLog::new(g.clone());
         log_b.append(e1.clone()).unwrap();
 
-        let offer_b = SyncOffer::from_oplog(&log_b, 2);
+        let offer_b = SyncOffer::from_oplog(&log_b, 2, 0);
         let payload = entries_missing(&log_a, &offer_b);
 
         // A may send genesis because it can't verify B has it (B's head n1
@@ -469,7 +471,7 @@ mod tests {
         let mut log_b = OpLog::new(g.clone());
         log_b.append(e1.clone()).unwrap();
 
-        let offer_b = SyncOffer::from_oplog(&log_b, 2);
+        let offer_b = SyncOffer::from_oplog(&log_b, 2, 0);
         let payload = entries_missing(&log_a, &offer_b);
 
         // Only n2 should be sent (genesis and n1 are in B's bloom).
@@ -599,7 +601,7 @@ mod tests {
         let mut log_b = OpLog::new(g.clone());
 
         // Step 1: B generates offer.
-        let offer_b = SyncOffer::from_oplog(&log_b, 1);
+        let offer_b = SyncOffer::from_oplog(&log_b, 1, 0);
 
         // Step 2: A computes what B is missing.
         let payload = entries_missing(&log_a, &offer_b);
@@ -628,12 +630,12 @@ mod tests {
         log_b.append(b1.clone()).unwrap();
 
         // Sync A → B.
-        let offer_b = SyncOffer::from_oplog(&log_b, 2);
+        let offer_b = SyncOffer::from_oplog(&log_b, 2, 0);
         let payload_a_to_b = entries_missing(&log_a, &offer_b);
         merge_entries(&mut log_b, &payload_a_to_b.entries).unwrap();
 
         // Sync B → A.
-        let offer_a = SyncOffer::from_oplog(&log_a, 2);
+        let offer_a = SyncOffer::from_oplog(&log_a, 2, 0);
         let payload_b_to_a = entries_missing(&log_b, &offer_a);
         merge_entries(&mut log_a, &payload_b_to_a.entries).unwrap();
 
@@ -672,7 +674,8 @@ mod tests {
         let fake_offer = SyncOffer {
             heads: vec![e1.hash], // remote doesn't actually have e2
             bloom,
-            clock_time: 2,
+            physical_ms: 2,
+            logical: 0,
         };
 
         let payload = entries_missing(&log_a, &fake_offer);
@@ -708,7 +711,8 @@ mod tests {
         let fake_offer = SyncOffer {
             heads: vec![g.hash],
             bloom,
-            clock_time: 1,
+            physical_ms: 1,
+            logical: 0,
         };
 
         let payload = entries_missing(&log_a, &fake_offer);
@@ -738,13 +742,13 @@ mod tests {
         let mut log_b = OpLog::new(g.clone());
 
         // Sync once.
-        let offer_b = SyncOffer::from_oplog(&log_b, 1);
+        let offer_b = SyncOffer::from_oplog(&log_b, 1, 0);
         let payload = entries_missing(&log_a, &offer_b);
         merge_entries(&mut log_b, &payload.entries).unwrap();
         assert_eq!(log_b.len(), 2);
 
         // Sync again — should be a no-op.
-        let offer_b2 = SyncOffer::from_oplog(&log_b, 2);
+        let offer_b2 = SyncOffer::from_oplog(&log_b, 2, 0);
         let payload2 = entries_missing(&log_a, &offer_b2);
         assert!(payload2.entries.is_empty());
         let merged2 = merge_entries(&mut log_b, &payload2.entries).unwrap();

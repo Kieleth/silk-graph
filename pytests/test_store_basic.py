@@ -78,7 +78,8 @@ class TestGenesis:
         store = GraphStore("node-a", DEVOPS_ONTOLOGY)
         assert store.len() == 1  # genesis entry
         assert len(store.heads()) == 1
-        assert store.clock_time() == 1
+        ct = store.clock_time()
+        assert isinstance(ct, tuple) and len(ct) == 2  # (physical_ms, logical)
 
     def test_genesis_contains_ontology(self):
         store = GraphStore("node-a", DEVOPS_ONTOLOGY)

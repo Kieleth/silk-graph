@@ -12,14 +12,14 @@ pub struct Node {
     pub subtype: Option<String>,
     pub label: String,
     pub properties: BTreeMap<String, Value>,
-    /// Per-property Lamport clocks for LWW conflict resolution.
+    /// Per-property clocks for LWW conflict resolution.
     /// Each property key tracks the clock of its last write, so
     /// concurrent updates to different properties don't conflict.
     pub property_clocks: HashMap<String, LamportClock>,
-    /// Lamport clock of the entry that last modified this node.
+    /// Clock of the entry that last modified this node.
     /// Used for add-wins semantics and label LWW.
     pub last_clock: LamportClock,
-    /// Lamport clock of the most recent AddNode for this node.
+    /// Clock of the most recent AddNode for this node.
     /// Used for add-wins semantics: remove only wins if its clock
     /// is strictly greater than last_add_clock.
     pub last_add_clock: LamportClock,
@@ -35,10 +35,10 @@ pub struct Edge {
     pub source_id: String,
     pub target_id: String,
     pub properties: BTreeMap<String, Value>,
-    /// Per-property Lamport clocks for LWW conflict resolution.
+    /// Per-property clocks for LWW conflict resolution.
     pub property_clocks: HashMap<String, LamportClock>,
     pub last_clock: LamportClock,
-    /// Lamport clock of the most recent AddEdge for this edge.
+    /// Clock of the most recent AddEdge for this edge.
     pub last_add_clock: LamportClock,
     pub tombstoned: bool,
 }
@@ -435,10 +435,9 @@ impl MaterializedGraph {
 }
 
 /// LWW comparison: returns true if `new_clock` wins over `existing_clock`.
-/// Higher Lamport time wins. On tie, higher instance ID wins (deterministic).
+/// Uses HybridClock total ordering: (physical_ms, logical, id).
 fn clock_wins(new_clock: &LamportClock, existing_clock: &LamportClock) -> bool {
-    new_clock.time > existing_clock.time
-        || (new_clock.time == existing_clock.time && new_clock.id > existing_clock.id)
+    new_clock.cmp_order(existing_clock) == std::cmp::Ordering::Greater
 }
 
 #[cfg(test)]
@@ -495,10 +494,7 @@ mod tests {
             op,
             vec![],
             vec![],
-            LamportClock {
-                id: author.into(),
-                time: clock_time,
-            },
+            LamportClock::with_values(author, clock_time, 0),
             author,
         )
     }
@@ -994,7 +990,7 @@ mod tests {
             1,
             "inst-a",
         ));
-        // Both at time 5, inst-b > inst-a lexicographically.
+        // Both at physical_ms=5, logical=0. Lower id wins → "inst-a" wins.
         g.apply(&make_entry(
             GraphOp::UpdateProperty {
                 entity_id: "s1".into(),
@@ -1013,9 +1009,10 @@ mod tests {
             5,
             "inst-b",
         ));
+        // inst-a has lower id → wins the tiebreak → value stays Int(1).
         assert_eq!(
             g.get_node("s1").unwrap().properties.get("x"),
-            Some(&Value::Int(2))
+            Some(&Value::Int(1))
         );
     }
 

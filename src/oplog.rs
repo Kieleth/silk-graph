@@ -142,7 +142,10 @@ impl OpLog {
         sorted_queue.sort_by(|a, b| {
             let ea = &self.entries[a];
             let eb = &self.entries[b];
-            ea.clock.time.cmp(&eb.clock.time).then_with(|| a.cmp(b))
+            ea.clock
+                .as_tuple()
+                .cmp(&eb.clock.as_tuple())
+                .then_with(|| a.cmp(b))
         });
         queue = sorted_queue.into();
 
@@ -167,7 +170,10 @@ impl OpLog {
                 ready.sort_by(|a, b| {
                     let ea = &self.entries[a];
                     let eb = &self.entries[b];
-                    ea.clock.time.cmp(&eb.clock.time).then_with(|| a.cmp(b))
+                    ea.clock
+                        .as_tuple()
+                        .cmp(&eb.clock.as_tuple())
+                        .then_with(|| a.cmp(b))
                 });
                 for r in ready {
                     queue.push_back(r);
@@ -280,10 +286,7 @@ mod tests {
             op,
             next,
             vec![],
-            LamportClock {
-                id: "test".into(),
-                time: clock_time,
-            },
+            LamportClock::with_values("test", clock_time, 0),
             "test",
         )
     }

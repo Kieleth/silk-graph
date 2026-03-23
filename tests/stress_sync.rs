@@ -81,7 +81,7 @@ impl Peer {
     }
 
     fn sync_push_to(src: &Peer, dst: &mut Peer) {
-        let offer = SyncOffer::from_oplog(&dst.oplog, dst.clock.time);
+        let offer = SyncOffer::from_oplog(&dst.oplog, dst.clock.physical_ms, dst.clock.logical);
         let payload = entries_missing(&src.oplog, &offer);
         if !payload.entries.is_empty() {
             let merged = merge_entries(&mut dst.oplog, &payload.entries).unwrap();
@@ -89,13 +89,9 @@ impl Peer {
                 let all = dst.oplog.entries_since(None);
                 let refs: Vec<&Entry> = all.iter().copied().collect();
                 dst.graph.rebuild(&refs);
-                let max_t = payload
-                    .entries
-                    .iter()
-                    .map(|e| e.clock.time)
-                    .max()
-                    .unwrap_or(0);
-                dst.clock.merge(max_t);
+                for entry in &payload.entries {
+                    dst.clock.merge(&entry.clock);
+                }
             }
         }
     }

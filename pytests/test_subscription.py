@@ -124,7 +124,8 @@ def test_event_fields_add_node(store):
     assert e["node_id"] == "s1"
     assert e["node_type"] == "entity"
     assert e["author"] == "test-instance"
-    assert isinstance(e["clock_time"], int) and e["clock_time"] > 0
+    assert isinstance(e["physical_ms"], int) and e["physical_ms"] > 0
+    assert isinstance(e["logical"], int)
     assert e["local"] is True
 
 

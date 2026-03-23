@@ -309,10 +309,7 @@ mod tests {
             op,
             next,
             vec![],
-            LamportClock {
-                id: "test".into(),
-                time: clock_time,
-            },
+            LamportClock::with_values("test", clock_time, 0),
             "test",
         )
     }

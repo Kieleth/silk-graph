@@ -125,7 +125,7 @@ impl PyGraphStore {
                 }
                 // Advance clock past any existing entries.
                 for entry in &all {
-                    clock.merge(entry.clock.time);
+                    clock.merge(&entry.clock);
                 }
                 Backend::Persistent(store)
             }
@@ -338,9 +338,9 @@ impl PyGraphStore {
         &self.instance_id
     }
 
-    /// Current Lamport time.
-    fn clock_time(&self) -> u64 {
-        self.clock.time
+    /// Current clock time as (physical_ms, logical) tuple.
+    fn clock_time(&self) -> (u64, u32) {
+        self.clock.as_tuple()
     }
 
     /// Return the ontology as a JSON string.
@@ -532,7 +532,11 @@ impl PyGraphStore {
     ///
     /// Send this to a peer so they can compute which entries you're missing.
     fn generate_sync_offer(&self) -> PyResult<Vec<u8>> {
-        let offer = crate::sync::SyncOffer::from_oplog(self.backend.oplog(), self.clock.time);
+        let offer = crate::sync::SyncOffer::from_oplog(
+            self.backend.oplog(),
+            self.clock.physical_ms,
+            self.clock.logical,
+        );
         Ok(offer.to_bytes())
     }
 
@@ -635,12 +639,15 @@ impl PyGraphStore {
         let refs: Vec<&Entry> = all.iter().copied().collect();
         graph.rebuild(&refs);
 
-        // Derive clock from the highest Lamport time in the snapshot.
-        let max_time = all.iter().map(|e| e.clock.time).max().unwrap_or(0);
-        let clock = LamportClock {
-            id: instance_id.clone(),
-            time: max_time,
-        };
+        // Derive clock from the highest physical time in the snapshot.
+        let max_physical = all.iter().map(|e| e.clock.physical_ms).max().unwrap_or(0);
+        let max_logical = all
+            .iter()
+            .filter(|e| e.clock.physical_ms == max_physical)
+            .map(|e| e.clock.logical)
+            .max()
+            .unwrap_or(0);
+        let clock = LamportClock::with_values(&instance_id, max_physical, max_logical);
 
         Ok(Self {
             backend: Backend::Memory(oplog),
@@ -776,7 +783,7 @@ impl PyGraphStore {
 
     /// Merge a vec of entries into the store, updating the materialized graph.
     fn merge_entries_vec(&mut self, entries: &[Entry]) -> PyResult<usize> {
-        let local_time = self.clock.time;
+        let local_physical = self.clock.physical_ms;
 
         // S-04: Filter entries through ontology validation before merge.
         // Clock drift: reject entries with implausibly far-future clocks.
@@ -785,13 +792,13 @@ impl PyGraphStore {
             .filter(|e| {
                 // Clock drift check (skip for genesis/DefineOntology entries)
                 if !matches!(e.payload, GraphOp::DefineOntology { .. })
-                    && e.clock.time > local_time.saturating_add(Self::MAX_CLOCK_DRIFT)
+                    && e.clock.physical_ms > local_physical.saturating_add(Self::MAX_CLOCK_DRIFT)
                 {
                     eprintln!(
-                        "silk: rejecting sync entry {}: clock {} exceeds local {} + drift {}",
+                        "silk: rejecting sync entry {}: physical_ms {} exceeds local {} + drift {}",
                         hex::encode(e.hash),
-                        e.clock.time,
-                        local_time,
+                        e.clock.physical_ms,
+                        local_physical,
                         Self::MAX_CLOCK_DRIFT
                     );
                     return false;
@@ -894,7 +901,7 @@ impl PyGraphStore {
                         }
                         _ => {}
                     }
-                    self.clock.merge(entry.clock.time);
+                    self.clock.merge(&entry.clock);
                     // D-023: notify subscribers (remote merge → local=false)
                     self.notify_subscribers(entry, false);
                 }
@@ -959,7 +966,8 @@ impl PyGraphStore {
         let dict = PyDict::new(py);
         let _ = dict.set_item("hash", hex::encode(entry.hash));
         let _ = dict.set_item("author", &entry.author);
-        let _ = dict.set_item("clock_time", entry.clock.time);
+        let _ = dict.set_item("physical_ms", entry.clock.physical_ms);
+        let _ = dict.set_item("logical", entry.clock.logical);
         let _ = dict.set_item("local", is_local);
 
         match &entry.payload {
@@ -1190,7 +1198,8 @@ fn entry_to_pydict(py: Python<'_>, entry: &Entry) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     dict.set_item("hash", hex::encode(entry.hash))?;
     dict.set_item("author", &entry.author)?;
-    dict.set_item("clock_time", entry.clock.time)?;
+    dict.set_item("physical_ms", entry.clock.physical_ms)?;
+    dict.set_item("logical", entry.clock.logical)?;
     dict.set_item("clock_id", &entry.clock.id)?;
     dict.set_item(
         "next",

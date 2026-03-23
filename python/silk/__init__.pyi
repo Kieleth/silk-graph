@@ -101,8 +101,12 @@ class GraphStore:
     def instance_id(self) -> str:
         """Instance identifier."""
         ...
-    def clock_time(self) -> int:
-        """Current Lamport time."""
+    def clock_time(self) -> tuple[int, int]:
+        """Current hybrid clock as (physical_ms, logical).
+
+        R-01: physical_ms is wall-clock time in milliseconds.
+        logical is a counter for events within the same millisecond.
+        """
         ...
     def ontology_json(self) -> str:
         """Return the ontology as a JSON string."""

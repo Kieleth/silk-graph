@@ -294,10 +294,7 @@ mod tests {
     }
 
     fn sample_clock() -> LamportClock {
-        LamportClock {
-            id: "inst-a".into(),
-            time: 1,
-        }
+        LamportClock::with_values("inst-a", 1, 0)
     }
 
     #[test]
@@ -332,7 +329,7 @@ mod tests {
     fn entry_hash_changes_with_different_clock() {
         let e1 = Entry::new(sample_op(), vec![], vec![], sample_clock(), "inst-a");
         let mut clock2 = sample_clock();
-        clock2.time = 99;
+        clock2.physical_ms = 99;
         let e2 = Entry::new(sample_op(), vec![], vec![], clock2, "inst-a");
         assert_ne!(e1.hash, e2.hash);
     }
@@ -386,10 +383,7 @@ mod tests {
             },
             vec![e1.hash],
             vec![],
-            LamportClock {
-                id: "inst-a".into(),
-                time: 2,
-            },
+            LamportClock::with_values("inst-a", 2, 0),
             "inst-a",
         );
         assert_eq!(e2.next, vec![e1.hash]);

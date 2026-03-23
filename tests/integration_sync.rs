@@ -166,21 +166,18 @@ impl Peer {
 
     /// One-way sync: push our entries to `other`.
     fn sync_to(&self, other: &mut Peer) {
-        let offer = SyncOffer::from_oplog(&other.oplog, other.clock.time);
+        let offer =
+            SyncOffer::from_oplog(&other.oplog, other.clock.physical_ms, other.clock.logical);
         let payload = entries_missing(&self.oplog, &offer);
         if !payload.entries.is_empty() {
             let merged = merge_entries(&mut other.oplog, &payload.entries).unwrap();
             // Rematerialize graph for new entries.
             if merged > 0 {
                 other.rebuild_graph();
-                // Merge clock.
-                let max_remote = payload
-                    .entries
-                    .iter()
-                    .map(|e| e.clock.time)
-                    .max()
-                    .unwrap_or(0);
-                other.clock.merge(max_remote);
+                // Merge clock with the highest remote entry clock.
+                for entry in &payload.entries {
+                    other.clock.merge(&entry.clock);
+                }
             }
         }
     }
@@ -188,35 +185,27 @@ impl Peer {
     /// Bidirectional sync between self and other.
     fn sync_bidi(a: &mut Peer, b: &mut Peer) {
         // A → B
-        let offer_b = SyncOffer::from_oplog(&b.oplog, b.clock.time);
+        let offer_b = SyncOffer::from_oplog(&b.oplog, b.clock.physical_ms, b.clock.logical);
         let payload_for_b = entries_missing(&a.oplog, &offer_b);
         if !payload_for_b.entries.is_empty() {
             let merged = merge_entries(&mut b.oplog, &payload_for_b.entries).unwrap();
             if merged > 0 {
                 b.rebuild_graph();
-                let max_t = payload_for_b
-                    .entries
-                    .iter()
-                    .map(|e| e.clock.time)
-                    .max()
-                    .unwrap_or(0);
-                b.clock.merge(max_t);
+                for entry in &payload_for_b.entries {
+                    b.clock.merge(&entry.clock);
+                }
             }
         }
         // B → A
-        let offer_a = SyncOffer::from_oplog(&a.oplog, a.clock.time);
+        let offer_a = SyncOffer::from_oplog(&a.oplog, a.clock.physical_ms, a.clock.logical);
         let payload_for_a = entries_missing(&b.oplog, &offer_a);
         if !payload_for_a.entries.is_empty() {
             let merged = merge_entries(&mut a.oplog, &payload_for_a.entries).unwrap();
             if merged > 0 {
                 a.rebuild_graph();
-                let max_t = payload_for_a
-                    .entries
-                    .iter()
-                    .map(|e| e.clock.time)
-                    .max()
-                    .unwrap_or(0);
-                a.clock.merge(max_t);
+                for entry in &payload_for_a.entries {
+                    a.clock.merge(&entry.clock);
+                }
             }
         }
     }
