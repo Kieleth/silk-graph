@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::clock::LamportClock;
-use crate::ontology::Ontology;
+use crate::ontology::{Ontology, OntologyExtension};
 
 /// Property value — supports the types needed for graph node/edge properties.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -57,6 +57,9 @@ pub enum GraphOp {
     RemoveNode { node_id: String },
     #[serde(rename = "remove_edge")]
     RemoveEdge { edge_id: String },
+    /// R-03: Extend the ontology with new types/properties (monotonic only).
+    #[serde(rename = "extend_ontology")]
+    ExtendOntology { extension: OntologyExtension },
 }
 
 /// A 32-byte BLAKE3 hash, used as the content address for entries.
@@ -414,6 +417,20 @@ mod tests {
             },
             GraphOp::RemoveEdge {
                 edge_id: "e1".into(),
+            },
+            GraphOp::ExtendOntology {
+                extension: crate::ontology::OntologyExtension {
+                    node_types: BTreeMap::from([(
+                        "metric".into(),
+                        NodeTypeDef {
+                            description: Some("A metric observation".into()),
+                            properties: BTreeMap::new(),
+                            subtypes: None,
+                        },
+                    )]),
+                    edge_types: BTreeMap::new(),
+                    node_type_updates: BTreeMap::new(),
+                },
             },
         ];
         for op in ops {

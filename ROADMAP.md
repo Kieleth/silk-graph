@@ -109,7 +109,9 @@ R-03, R-04, R-08.
 
 ---
 
-## R-03: The Rules Can Never Change
+## R-03: The Rules Can Never Change ✓
+
+> **Status: COMPLETE** — `GraphOp::ExtendOntology` variant implemented. Python API: `extend_ontology(json)`. Monotonicity validated (add-only). Concurrent extensions merge by union; conflicts quarantined (R-02).
 
 Right now, Silk's rules are set in stone at the very beginning. "The world has cats and dogs." That's it. Forever. If you discover birds exist, you need a whole new notebook.
 

@@ -97,6 +97,11 @@ impl MaterializedGraph {
             GraphOp::DefineOntology { .. } => {
                 // Genesis — nothing to materialize.
             }
+            GraphOp::ExtendOntology { extension } => {
+                if let Err(_e) = self.ontology.merge_extension(extension) {
+                    self.quarantined.insert(entry.hash);
+                }
+            }
             GraphOp::AddNode {
                 node_id,
                 node_type,

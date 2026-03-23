@@ -177,6 +177,86 @@ impl std::fmt::Display for ValidationError {
     }
 }
 
+/// An additive ontology extension — monotonic evolution only (R-03).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OntologyExtension {
+    /// New node types to add.
+    #[serde(default)]
+    pub node_types: BTreeMap<String, NodeTypeDef>,
+    /// New edge types to add.
+    #[serde(default)]
+    pub edge_types: BTreeMap<String, EdgeTypeDef>,
+    /// Updates to existing node types (add properties, subtypes, relax required).
+    #[serde(default)]
+    pub node_type_updates: BTreeMap<String, NodeTypeUpdate>,
+}
+
+/// Additive update to an existing node type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeTypeUpdate {
+    /// New optional properties to add.
+    #[serde(default)]
+    pub add_properties: BTreeMap<String, PropertyDef>,
+    /// Properties to relax from required to optional.
+    #[serde(default)]
+    pub relax_properties: Vec<String>,
+    /// New subtypes to add.
+    #[serde(default)]
+    pub add_subtypes: BTreeMap<String, SubtypeDef>,
+}
+
+/// Errors from monotonic ontology extension (R-03).
+#[derive(Debug, Clone, PartialEq)]
+pub enum MonotonicityError {
+    DuplicateNodeType(String),
+    DuplicateEdgeType(String),
+    UnknownNodeType(String),
+    DuplicateProperty {
+        type_name: String,
+        property: String,
+    },
+    UnknownProperty {
+        type_name: String,
+        property: String,
+    },
+    /// Wraps a ValidationError from validate_self() after merge.
+    ValidationFailed(ValidationError),
+}
+
+impl std::fmt::Display for MonotonicityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MonotonicityError::DuplicateNodeType(t) => {
+                write!(f, "node type '{t}' already exists")
+            }
+            MonotonicityError::DuplicateEdgeType(t) => {
+                write!(f, "edge type '{t}' already exists")
+            }
+            MonotonicityError::UnknownNodeType(t) => {
+                write!(f, "cannot update unknown node type '{t}'")
+            }
+            MonotonicityError::DuplicateProperty {
+                type_name,
+                property,
+            } => {
+                write!(f, "property '{property}' already exists on '{type_name}'")
+            }
+            MonotonicityError::UnknownProperty {
+                type_name,
+                property,
+            } => {
+                write!(
+                    f,
+                    "property '{property}' does not exist on '{type_name}' (cannot relax)"
+                )
+            }
+            MonotonicityError::ValidationFailed(e) => {
+                write!(f, "ontology validation failed after merge: {e}")
+            }
+        }
+    }
+}
+
 impl Ontology {
     /// Validate that a node type exists and its properties conform.
     ///
@@ -278,6 +358,106 @@ impl Ontology {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// R-03: Merge an additive extension into this ontology.
+    /// Only monotonic (additive) changes are allowed:
+    /// - New node types (must not already exist)
+    /// - New edge types (must not already exist)
+    /// - Updates to existing node types: add properties, relax required→optional, add subtypes
+    pub fn merge_extension(&mut self, ext: &OntologyExtension) -> Result<(), MonotonicityError> {
+        // Validate: new node types don't already exist
+        for name in ext.node_types.keys() {
+            if self.node_types.contains_key(name) {
+                return Err(MonotonicityError::DuplicateNodeType(name.clone()));
+            }
+        }
+
+        // Validate: new edge types don't already exist
+        for name in ext.edge_types.keys() {
+            if self.edge_types.contains_key(name) {
+                return Err(MonotonicityError::DuplicateEdgeType(name.clone()));
+            }
+        }
+
+        // Validate node_type_updates reference existing types
+        for (type_name, update) in &ext.node_type_updates {
+            let def = self
+                .node_types
+                .get(type_name)
+                .ok_or_else(|| MonotonicityError::UnknownNodeType(type_name.clone()))?;
+
+            // Validate: add_properties don't already exist
+            for prop_name in update.add_properties.keys() {
+                if def.properties.contains_key(prop_name) {
+                    return Err(MonotonicityError::DuplicateProperty {
+                        type_name: type_name.clone(),
+                        property: prop_name.clone(),
+                    });
+                }
+            }
+
+            // Validate: relax_properties exist and are currently required
+            for prop_name in &update.relax_properties {
+                match def.properties.get(prop_name) {
+                    Some(prop_def) if prop_def.required => {} // ok
+                    Some(_) => {} // already optional — idempotent, allow it
+                    None => {
+                        return Err(MonotonicityError::UnknownProperty {
+                            type_name: type_name.clone(),
+                            property: prop_name.clone(),
+                        });
+                    }
+                }
+            }
+
+            // Validate: add_subtypes don't already exist (if subtypes are defined)
+            if !update.add_subtypes.is_empty() {
+                if let Some(ref existing) = def.subtypes {
+                    for st_name in update.add_subtypes.keys() {
+                        if existing.contains_key(st_name) {
+                            return Err(MonotonicityError::DuplicateProperty {
+                                type_name: type_name.clone(),
+                                property: format!("subtype:{st_name}"),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply: extend node_types
+        self.node_types.extend(ext.node_types.clone());
+
+        // Apply: extend edge_types
+        self.edge_types.extend(ext.edge_types.clone());
+
+        // Apply: update existing node types
+        for (type_name, update) in &ext.node_type_updates {
+            let def = self.node_types.get_mut(type_name).unwrap(); // validated above
+
+            // Add new properties
+            def.properties.extend(update.add_properties.clone());
+
+            // Relax required → optional
+            for prop_name in &update.relax_properties {
+                if let Some(prop_def) = def.properties.get_mut(prop_name) {
+                    prop_def.required = false;
+                }
+            }
+
+            // Add subtypes
+            if !update.add_subtypes.is_empty() {
+                let subtypes = def.subtypes.get_or_insert_with(BTreeMap::new);
+                subtypes.extend(update.add_subtypes.clone());
+            }
+        }
+
+        // Validate the merged ontology is internally consistent
+        self.validate_self()
+            .map_err(MonotonicityError::ValidationFailed)?;
+
         Ok(())
     }
 }

@@ -78,7 +78,7 @@ impl PyGraphStore {
     #[new]
     #[pyo3(signature = (instance_id, ontology_json, path=None))]
     fn new(instance_id: String, ontology_json: &str, path: Option<String>) -> PyResult<Self> {
-        let ontology: Ontology = serde_json::from_str(ontology_json).map_err(|e| {
+        let mut ontology: Ontology = serde_json::from_str(ontology_json).map_err(|e| {
             pyo3::exceptions::PyValueError::new_err(format!("invalid ontology JSON: {e}"))
         })?;
 
@@ -127,6 +127,8 @@ impl PyGraphStore {
                 for entry in &all {
                     clock.merge(&entry.clock);
                 }
+                // R-03: sync ontology from graph (may have been extended).
+                ontology = graph.ontology.clone();
                 Backend::Persistent(store)
             }
             None => {
@@ -197,6 +199,8 @@ impl PyGraphStore {
         let mut graph = MaterializedGraph::new(ontology.clone());
         let refs: Vec<&Entry> = all.iter().copied().collect();
         graph.rebuild(&refs);
+        // R-03: sync ontology from graph (may have been extended).
+        let ontology = graph.ontology.clone();
 
         Ok(Self {
             backend: Backend::Persistent(store),
@@ -306,6 +310,32 @@ impl PyGraphStore {
     /// Append a RemoveEdge operation. Returns the hex hash.
     fn remove_edge(&mut self, edge_id: String) -> PyResult<String> {
         self.append(GraphOp::RemoveEdge { edge_id })
+    }
+
+    /// R-03: Extend the ontology with new types/properties.
+    /// Takes a JSON string matching OntologyExtension format.
+    /// Only additive changes allowed (monotonic).
+    fn extend_ontology(&mut self, extension_json: &str) -> PyResult<String> {
+        let extension: crate::ontology::OntologyExtension = serde_json::from_str(extension_json)
+            .map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid extension JSON: {e}"))
+            })?;
+
+        // Validate monotonicity against current ontology
+        let mut test_ontology = self.ontology.clone();
+        test_ontology
+            .merge_extension(&extension)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+        let op = GraphOp::ExtendOntology {
+            extension: extension.clone(),
+        };
+        let hex = self.append(op)?;
+        // Update local ontology to stay in sync with graph.ontology
+        self.ontology
+            .merge_extension(&extension)
+            .expect("already validated");
+        Ok(hex)
     }
 
     /// Get an entry by hex hash. Returns None if not found.
@@ -638,6 +668,8 @@ impl PyGraphStore {
         let mut graph = crate::graph::MaterializedGraph::new(ontology.clone());
         let refs: Vec<&Entry> = all.iter().copied().collect();
         graph.rebuild(&refs);
+        // R-03: sync ontology from graph (may have been extended).
+        let ontology = graph.ontology.clone();
 
         // Derive clock from the highest physical time in the snapshot.
         let max_physical = all.iter().map(|e| e.clock.physical_ms).max().unwrap_or(0);
@@ -900,6 +932,10 @@ impl PyGraphStore {
                         GraphOp::RemoveNode { node_id } => {
                             self.node_types.remove(node_id);
                         }
+                        GraphOp::ExtendOntology { extension } => {
+                            // R-03: sync local ontology (best-effort, quarantined if invalid)
+                            let _ = self.ontology.merge_extension(extension);
+                        }
                         _ => {}
                     }
                     self.clock.merge(&entry.clock);
@@ -1025,6 +1061,9 @@ impl PyGraphStore {
             }
             GraphOp::DefineOntology { .. } => {
                 let _ = dict.set_item("op", "define_ontology");
+            }
+            GraphOp::ExtendOntology { .. } => {
+                let _ = dict.set_item("op", "extend_ontology");
             }
         }
         dict.into()

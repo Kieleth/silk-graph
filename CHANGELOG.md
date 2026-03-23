@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **D-027: Author authentication** — ed25519 signatures on entries. `generate_signing_key()`, `set_signing_key()`, `get_public_key()`, `register_trusted_author()`, `set_require_signatures()`. Auto-sign on write, verify on merge. Strict mode rejects unsigned entries. Backward compatible — unsigned entries accepted by default.
 - **R-02: Sync Quarantine** — Invalid entries from sync are now accepted into the oplog (preserving CRDT convergence) but quarantined from the materialized graph. `get_quarantined()` returns hex hashes of quarantined entries. Grow-only set — monotonic, safe. Local writes still reject immediately.
+- **R-03: Monotonic Ontology Evolution** — `extend_ontology(json)` adds new node types, edge types, properties, and subtypes at runtime. Only additive changes allowed (monotonic). Concurrent extensions merge by union; conflicting same-name types quarantined (R-02). Extensions sync between peers and persist through snapshots.
 
 ### Security
 - **S-01**: HybridClock logical counter uses `saturating_add` — prevents overflow wrap-around at u64::MAX

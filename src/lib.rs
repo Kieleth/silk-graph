@@ -17,7 +17,10 @@ pub use clock::LamportClock;
 pub use entry::{Entry, GraphOp, Hash, Value};
 pub use graph::{Edge, MaterializedGraph, Node};
 pub use obslog::{ObsLogError, Observation, ObservationLog};
-pub use ontology::{EdgeTypeDef, NodeTypeDef, Ontology, PropertyDef, ValidationError, ValueType};
+pub use ontology::{
+    EdgeTypeDef, MonotonicityError, NodeTypeDef, NodeTypeUpdate, Ontology, OntologyExtension,
+    PropertyDef, ValidationError, ValueType,
+};
 pub use oplog::{OpLog, OpLogError};
 pub use store::{Store, StoreError};
 pub use sync::{Snapshot, SyncOffer, SyncPayload};

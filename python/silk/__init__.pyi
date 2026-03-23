@@ -86,6 +86,15 @@ class GraphStore:
     def remove_edge(self, edge_id: str) -> str:
         """Remove an edge. Returns hex hash."""
         ...
+    def extend_ontology(self, extension_json: str) -> str:
+        """R-03: Extend the ontology with new types, properties, or subtypes.
+
+        Only additive (monotonic) changes allowed. Returns hex hash of the entry.
+
+        Raises:
+            ValueError: If the extension violates monotonicity rules.
+        """
+        ...
 
     # -- DAG introspection --
 
