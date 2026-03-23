@@ -3,8 +3,6 @@ name: Benchmarks
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,17 +17,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run Criterion benchmarks
-        run: cargo bench --no-default-features -- --output-format bencher | tee bench-output.txt
+        run: cargo bench --no-default-features 2>&1 | tee bench-output.txt
 
-      - name: Store benchmark results
-        uses: benchmark-action/github-action-benchmark@v1
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
         with:
-          name: Silk Benchmarks
-          tool: 'cargo'
-          output-file-path: bench-output.txt
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: ${{ github.ref == 'refs/heads/main' }}
-          alert-threshold: '120%'
-          comment-on-alert: true
-          fail-on-alert: false
-          alert-comment-cc-users: '@Kieleth'
+          name: benchmark-results
+          path: |
+            bench-output.txt
+            target/criterion/
