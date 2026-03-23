@@ -80,9 +80,13 @@ pub struct Entry {
     pub clock: LamportClock,
     /// Author instance identifier
     pub author: String,
+    /// D-027: ed25519 signature over the hash bytes (64 bytes). None for unsigned (pre-v0.3) entries.
+    #[serde(default)]
+    pub signature: Option<Vec<u8>>,
 }
 
-/// The portion of an Entry that gets hashed and (eventually) signed.
+/// The portion of an Entry that gets hashed. Signature is NOT included
+/// (the signature covers the hash, not vice versa).
 #[derive(Serialize)]
 struct SignableContent<'a> {
     payload: &'a GraphOp,
@@ -93,7 +97,7 @@ struct SignableContent<'a> {
 }
 
 impl Entry {
-    /// Create a new entry with computed BLAKE3 hash.
+    /// Create a new unsigned entry with computed BLAKE3 hash.
     pub fn new(
         payload: GraphOp,
         next: Vec<Hash>,
@@ -110,7 +114,58 @@ impl Entry {
             refs,
             clock,
             author,
+            signature: None,
         }
+    }
+
+    /// D-027: Create a new signed entry. Computes hash, then signs it with ed25519.
+    #[cfg(feature = "signing")]
+    pub fn new_signed(
+        payload: GraphOp,
+        next: Vec<Hash>,
+        refs: Vec<Hash>,
+        clock: LamportClock,
+        author: impl Into<String>,
+        signing_key: &ed25519_dalek::SigningKey,
+    ) -> Self {
+        use ed25519_dalek::Signer;
+        let author = author.into();
+        let hash = Self::compute_hash(&payload, &next, &refs, &clock, &author);
+        let sig = signing_key.sign(&hash);
+        Self {
+            hash,
+            payload,
+            next,
+            refs,
+            clock,
+            author,
+            signature: Some(sig.to_bytes().to_vec()),
+        }
+    }
+
+    /// D-027: Verify the ed25519 signature on this entry against a public key.
+    /// Returns true if signature is valid, false if invalid.
+    /// Returns true if no signature is present (unsigned entry — backward compatible).
+    #[cfg(feature = "signing")]
+    pub fn verify_signature(&self, public_key: &ed25519_dalek::VerifyingKey) -> bool {
+        use ed25519_dalek::Verifier;
+        match &self.signature {
+            Some(sig_bytes) => {
+                if sig_bytes.len() != 64 {
+                    return false;
+                }
+                let mut sig_array = [0u8; 64];
+                sig_array.copy_from_slice(sig_bytes);
+                let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
+                public_key.verify(&self.hash, &sig).is_ok()
+            }
+            None => true, // unsigned entries accepted (migration mode)
+        }
+    }
+
+    /// Check whether this entry has a signature.
+    pub fn is_signed(&self) -> bool {
+        self.signature.is_some()
     }
 
     /// Compute the BLAKE3 hash of the signable content.
@@ -419,5 +474,95 @@ mod tests {
         let hex = entry.hash_hex();
         assert_eq!(hex.len(), 64);
         assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn unsigned_entry_has_no_signature() {
+        let entry = Entry::new(sample_op(), vec![], vec![], sample_clock(), "inst-a");
+        assert!(!entry.is_signed());
+        assert!(entry.signature.is_none());
+    }
+
+    #[test]
+    fn unsigned_entry_roundtrip_preserves_none_signature() {
+        let entry = Entry::new(sample_op(), vec![], vec![], sample_clock(), "inst-a");
+        let bytes = entry.to_bytes();
+        let decoded = Entry::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.signature, None);
+        assert!(decoded.verify_hash());
+    }
+
+    #[cfg(feature = "signing")]
+    mod signing_tests {
+        use super::*;
+
+        fn test_keypair() -> ed25519_dalek::SigningKey {
+            use rand::rngs::OsRng;
+            ed25519_dalek::SigningKey::generate(&mut OsRng)
+        }
+
+        #[test]
+        fn signed_entry_roundtrip() {
+            let key = test_keypair();
+            let entry =
+                Entry::new_signed(sample_op(), vec![], vec![], sample_clock(), "inst-a", &key);
+
+            assert!(entry.is_signed());
+            assert!(entry.verify_hash());
+
+            let public = key.verifying_key();
+            assert!(entry.verify_signature(&public));
+        }
+
+        #[test]
+        fn signed_entry_serialization_roundtrip() {
+            let key = test_keypair();
+            let entry =
+                Entry::new_signed(sample_op(), vec![], vec![], sample_clock(), "inst-a", &key);
+
+            let bytes = entry.to_bytes();
+            let decoded = Entry::from_bytes(&bytes).unwrap();
+
+            assert!(decoded.is_signed());
+            assert!(decoded.verify_hash());
+            assert!(decoded.verify_signature(&key.verifying_key()));
+        }
+
+        #[test]
+        fn wrong_key_fails_verification() {
+            let key1 = test_keypair();
+            let key2 = test_keypair();
+
+            let entry =
+                Entry::new_signed(sample_op(), vec![], vec![], sample_clock(), "inst-a", &key1);
+
+            // Correct key verifies
+            assert!(entry.verify_signature(&key1.verifying_key()));
+            // Wrong key fails
+            assert!(!entry.verify_signature(&key2.verifying_key()));
+        }
+
+        #[test]
+        fn tampered_hash_fails_both_checks() {
+            let key = test_keypair();
+            let mut entry =
+                Entry::new_signed(sample_op(), vec![], vec![], sample_clock(), "inst-a", &key);
+
+            // Tamper with the hash
+            entry.hash[0] ^= 0xFF;
+
+            assert!(!entry.verify_hash());
+            assert!(!entry.verify_signature(&key.verifying_key()));
+        }
+
+        #[test]
+        fn unsigned_entry_passes_signature_check() {
+            // D-027 backward compat: unsigned entries are accepted
+            let key = test_keypair();
+            let entry = Entry::new(sample_op(), vec![], vec![], sample_clock(), "inst-a");
+
+            assert!(!entry.is_signed());
+            assert!(entry.verify_signature(&key.verifying_key())); // returns true (no sig = ok)
+        }
     }
 }

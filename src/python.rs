@@ -35,6 +35,15 @@ pub struct PyGraphStore {
     subscribers: Vec<(u64, PyObject)>,
     /// Monotonic counter for subscriber IDs.
     next_sub_id: u64,
+    /// D-027: ed25519 signing key for auto-signing entries.
+    #[cfg(feature = "signing")]
+    signing_key: Option<ed25519_dalek::SigningKey>,
+    /// D-027: trusted author public keys (author_id → verifying key).
+    #[cfg(feature = "signing")]
+    key_registry: HashMap<String, ed25519_dalek::VerifyingKey>,
+    /// D-027: reject unsigned entries on merge when true.
+    #[cfg(feature = "signing")]
+    require_signatures: bool,
 }
 
 enum Backend {
@@ -135,6 +144,12 @@ impl PyGraphStore {
             ontology,
             subscribers: Vec::new(),
             next_sub_id: 0,
+            #[cfg(feature = "signing")]
+            signing_key: None,
+            #[cfg(feature = "signing")]
+            key_registry: HashMap::new(),
+            #[cfg(feature = "signing")]
+            require_signatures: false,
         })
     }
 
@@ -192,6 +207,12 @@ impl PyGraphStore {
             ontology,
             subscribers: Vec::new(),
             next_sub_id: 0,
+            #[cfg(feature = "signing")]
+            signing_key: None,
+            #[cfg(feature = "signing")]
+            key_registry: HashMap::new(),
+            #[cfg(feature = "signing")]
+            require_signatures: false,
         })
     }
 
@@ -630,6 +651,12 @@ impl PyGraphStore {
             ontology,
             subscribers: Vec::new(),
             next_sub_id: 0,
+            #[cfg(feature = "signing")]
+            signing_key: None,
+            #[cfg(feature = "signing")]
+            key_registry: HashMap::new(),
+            #[cfg(feature = "signing")]
+            require_signatures: false,
         })
     }
 
@@ -647,6 +674,69 @@ impl PyGraphStore {
     /// Remove a previously registered subscription by ID.
     fn unsubscribe(&mut self, sub_id: u64) {
         self.subscribers.retain(|(id, _)| *id != sub_id);
+    }
+
+    // -- Signing (D-027) --
+
+    /// Generate a new random ed25519 keypair, store the private key, return hex public key.
+    #[cfg(feature = "signing")]
+    fn generate_signing_key(&mut self) -> String {
+        use rand::rngs::OsRng;
+        let key = ed25519_dalek::SigningKey::generate(&mut OsRng);
+        let public_hex = hex::encode(key.verifying_key().as_bytes());
+        self.signing_key = Some(key);
+        public_hex
+    }
+
+    /// Load an existing private key from hex (64 hex chars = 32 bytes).
+    #[cfg(feature = "signing")]
+    fn set_signing_key(&mut self, hex_private_key: &str) -> PyResult<()> {
+        let bytes = hex::decode(hex_private_key)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid hex: {e}")))?;
+        if bytes.len() != 32 {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "signing key must be 32 bytes, got {}",
+                bytes.len()
+            )));
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        self.signing_key = Some(ed25519_dalek::SigningKey::from_bytes(&arr));
+        Ok(())
+    }
+
+    /// Get the public key as hex (64 hex chars), None if no key set.
+    #[cfg(feature = "signing")]
+    fn get_public_key(&self) -> Option<String> {
+        self.signing_key
+            .as_ref()
+            .map(|k| hex::encode(k.verifying_key().as_bytes()))
+    }
+
+    /// Register a trusted author's public key for signature verification.
+    #[cfg(feature = "signing")]
+    fn register_trusted_author(&mut self, author_id: String, hex_public_key: &str) -> PyResult<()> {
+        let bytes = hex::decode(hex_public_key)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid hex: {e}")))?;
+        if bytes.len() != 32 {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "public key must be 32 bytes, got {}",
+                bytes.len()
+            )));
+        }
+        let mut arr = [0u8; 32];
+        arr.copy_from_slice(&bytes);
+        let vk = ed25519_dalek::VerifyingKey::from_bytes(&arr).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid ed25519 public key: {e}"))
+        })?;
+        self.key_registry.insert(author_id, vk);
+        Ok(())
+    }
+
+    /// Toggle strict mode: reject unsigned entries on merge when enabled.
+    #[cfg(feature = "signing")]
+    fn set_require_signatures(&mut self, enabled: bool) {
+        self.require_signatures = enabled;
     }
 }
 
@@ -708,16 +798,60 @@ impl PyGraphStore {
                 }
                 // Ontology validation
                 match self.validate_entry_payload(e) {
-                    Ok(()) => true,
+                    Ok(()) => {}
                     Err(reason) => {
                         eprintln!(
                             "silk: skipping sync entry {}: ontology validation failed: {}",
                             hex::encode(e.hash),
                             reason
                         );
-                        false
+                        return false;
                     }
                 }
+                // D-027: Signature verification (skip for genesis/DefineOntology entries)
+                #[cfg(feature = "signing")]
+                {
+                    let is_genesis = matches!(e.payload, GraphOp::DefineOntology { .. });
+                    if self.require_signatures && !is_genesis {
+                        if !e.is_signed() {
+                            eprintln!(
+                                "silk: rejecting sync entry {}: unsigned (require_signatures=true)",
+                                hex::encode(e.hash),
+                            );
+                            return false;
+                        }
+                        if let Some(vk) = self.key_registry.get(&e.author) {
+                            if !e.verify_signature(vk) {
+                                eprintln!(
+                                    "silk: rejecting sync entry {}: signature verification failed for author '{}'",
+                                    hex::encode(e.hash),
+                                    e.author,
+                                );
+                                return false;
+                            }
+                        } else {
+                            eprintln!(
+                                "silk: rejecting sync entry {}: unknown author '{}' (not in key registry)",
+                                hex::encode(e.hash),
+                                e.author,
+                            );
+                            return false;
+                        }
+                    } else if e.is_signed() {
+                        // Best-effort: verify if author is in registry, skip if not
+                        if let Some(vk) = self.key_registry.get(&e.author) {
+                            if !e.verify_signature(vk) {
+                                eprintln!(
+                                    "silk: rejecting sync entry {}: signature verification failed for author '{}'",
+                                    hex::encode(e.hash),
+                                    e.author,
+                                );
+                                return false;
+                            }
+                        }
+                    }
+                }
+                true
             })
             .cloned()
             .collect();
@@ -770,10 +904,28 @@ impl PyGraphStore {
         Ok(inserted)
     }
 
+    /// Create an entry, auto-signing if a signing key is configured.
+    fn create_entry(
+        &self,
+        payload: GraphOp,
+        next: Vec<Hash>,
+        refs: Vec<Hash>,
+        clock: LamportClock,
+        author: &str,
+    ) -> Entry {
+        #[cfg(feature = "signing")]
+        {
+            if let Some(ref key) = self.signing_key {
+                return Entry::new_signed(payload, next, refs, clock, author, key);
+            }
+        }
+        Entry::new(payload, next, refs, clock, author)
+    }
+
     fn append(&mut self, op: GraphOp) -> PyResult<String> {
         self.clock.tick();
         let heads = self.backend.oplog().heads();
-        let entry = Entry::new(op, heads, vec![], self.clock.clone(), &self.instance_id);
+        let entry = self.create_entry(op, heads, vec![], self.clock.clone(), &self.instance_id);
         let hex = hex::encode(entry.hash);
         // Apply to materialized graph before backend (graph needs the entry ref).
         self.graph.apply(&entry);

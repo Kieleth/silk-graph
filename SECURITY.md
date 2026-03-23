@@ -22,7 +22,7 @@ Silk is designed for **trusted peer networks** — devices and services you cont
 
 ### What's NOT protected (known limitations)
 
-- **Author authentication** — `author` is a self-declared string, not cryptographically verified. Any peer can forge entries claiming any author identity. Safe in trusted networks; unsafe in open networks. (S-02 — planned for v0.3)
+- **Author authentication** — ed25519 signing is implemented (D-027: `generate_signing_key()`, `register_trusted_author()`, `set_require_signatures()`). In default mode, unsigned entries are accepted for backward compatibility. Enable strict mode for full enforcement. Key revocation and rotation are not yet supported.
 - **Resource exhaustion** — OpLog grows without bound. A peer sending millions of valid entries fills memory and disk. (S-07 — planned for v0.3)
 - **Open network deployment** — Silk is not currently safe for untrusted/open peer networks. Use it between devices and services you control.
 
