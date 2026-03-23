@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - **S-01**: HybridClock logical counter uses `saturating_add` — prevents overflow wrap-around at u64::MAX
 - **S-03**: Sync message size limits — 64 MB max bytes, 100K max entries per payload
-- **S-04**: Ontology validation on sync merge — invalid entries from remote peers are skipped, not silently accepted
+- **S-04 → R-02**: Ontology validation on sync — superseded by R-02 quarantine model. Invalid entries accepted into oplog (CRDT convergence), quarantined from materialized graph.
 - **S-05**: Bloom filter dimension validation — rejects malformed bloom filters that would cause panics
 - **S-06**: pyo3 version pinned to >=0.23.4 (RUSTSEC-2025-0020)
 - **S-09**: redb databases created with 0600 permissions on Unix (owner-only)

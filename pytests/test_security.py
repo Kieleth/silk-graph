@@ -27,11 +27,11 @@ def _store(instance_id="test"):
     return GraphStore(instance_id, ONTOLOGY)
 
 
-# -- S-04: Ontology validation on sync merge --
+# -- R-02: Ontology validation on sync (quarantine model) --
 
 
 def test_sync_rejects_invalid_node_type():
-    """S-04: entries with invalid node types from sync are skipped."""
+    """R-02: valid entries from sync are accepted and materialized."""
     store_a = _store("a")
     store_b = _store("b")
 
@@ -51,7 +51,7 @@ def test_sync_rejects_invalid_node_type():
 
 
 def test_sync_valid_entries_converge():
-    """S-04: valid entries from sync are accepted and converge."""
+    """R-02: valid entries from sync are accepted and converge."""
     store_a = _store("a")
     store_b = _store("b")
 

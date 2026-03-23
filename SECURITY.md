@@ -13,7 +13,7 @@ Silk is designed for **trusted peer networks** — devices and services you cont
 - **Clock drift rejection** — entries with physical_ms exceeding local physical_ms + 1,000,000 ms are rejected on sync, preventing the "Byzantine clock" attack where a malicious peer wins all LWW conflicts (S-01b)
 - **Bloom filter crashes** — malformed dimensions validated after deserialization (S-05)
 - **Message size limits** — sync payloads capped at 64 MB / 100K entries (S-03)
-- **Schema enforcement on sync** — ontology validation on merge path, invalid entries skipped (S-04)
+- **Schema enforcement on sync** — ontology validation during graph materialization. Invalid entries are accepted into the oplog (preserving CRDT convergence) but quarantined from the materialized graph (R-02). `get_quarantined()` exposes quarantined entry hashes.
 - **Value depth limits** — nested structures capped at 64 levels (S-10)
 - **Value size limits** — strings capped at 1 MB, lists/maps at 10K items (S-12)
 - **File permissions** — redb databases created with 0600 on Unix (S-09)
@@ -36,6 +36,6 @@ Do not open public issues for security vulnerabilities.
 
 | Version | What |
 |---------|------|
-| v0.1 | Clock overflow, bloom validation, message limits, schema enforcement on sync, value limits, file permissions |
-| v0.2 | pyo3 upgrade (RUSTSEC-2025-0020), oplog size warnings |
-| v0.3 | Author authentication via ed25519 signatures, configurable oplog limits |
+| v0.1 | Clock overflow, bloom validation, message limits, value limits, file permissions |
+| v0.2 | HLC clocks (R-01), sync quarantine (R-02), ed25519 signatures (D-027), clock drift bounds |
+| v0.3 | Monotonic ontology evolution (R-03), oplog compaction (R-08), configurable oplog limits |

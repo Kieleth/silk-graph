@@ -761,7 +761,7 @@ impl PyGraphStore {
 }
 
 impl PyGraphStore {
-    /// S-04: Validate an entry's payload against the ontology.
+    /// Validate an entry's payload against the ontology (used by graph.apply() for R-02 quarantine).
     /// Returns Ok(()) if valid (or not applicable), Err(reason) if invalid.
     fn validate_entry_payload(&self, entry: &Entry) -> Result<(), String> {
         match &entry.payload {

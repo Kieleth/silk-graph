@@ -1053,7 +1053,7 @@ S-4 (Python API) ──────────────────┘
 - `two_node_sync.yml`: basic 2-node sync verification
 - `three_node_partition.yml`: network partition + heal + convergence
 - `rolling_update.yml`: backward-compatible rolling restart
-- `byzantine.yml`: reject corrupt/invalid entries
+- `byzantine.yml`: quarantine corrupt/invalid entries (R-02)
 - `stress.yml`: 5-node, 50k ops, convergence verification
 
 ### Phase S-6: Production Integration ✅ COMPLETE

@@ -128,7 +128,7 @@ store.merge_sync_payload(&payload)?;
 
 ## Features
 
-- **Ontology-enforced schema** — define node types, edge types, and their properties. Silk validates required properties and type constraints at write time. Unknown properties and subtypes are accepted (D-026: open properties) — the ontology defines the minimum, not the maximum.
+- **Ontology-enforced schema** — define node types, edge types, and their properties. Silk validates at write time. Invalid entries from sync are quarantined (R-02) — accepted into the oplog for CRDT convergence but invisible in the materialized graph. Unknown properties and subtypes are accepted (D-026: open properties) — the ontology defines the minimum, not the maximum.
 - **Content-addressed entries** — every mutation is a BLAKE3-hashed entry in a Merkle-DAG. Entries are immutable. The DAG is the audit trail.
 - **Per-property last-writer-wins** — two concurrent writes to different properties on the same node both succeed. No data loss from non-conflicting edits.
 - **Delta-state sync** — Bloom filter optimization minimizes data transfer. Only entries the peer doesn't have are sent.
@@ -384,6 +384,9 @@ store.set_signing_key(hex_private_key)                     # load existing key
 pub_key = store.get_public_key()                           # hex public key or None
 store.register_trusted_author(author_id, hex_public_key)   # trust a peer
 store.set_require_signatures(True)                         # reject unsigned entries on merge
+
+# Quarantine (R-02)
+quarantined = store.get_quarantined()                       # list of hex hashes of quarantined entries
 ```
 
 ### ObservationLog
