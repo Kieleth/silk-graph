@@ -139,6 +139,7 @@ store.merge_sync_payload(&payload)?;
 - **Zero runtime dependencies** — no Postgres, no Redis, no network required. Silk is a library, not a service.
 - **Author authentication** — ed25519 signatures on every entry. Auto-sign on write, verify on merge. Trust registry for known peers. Strict mode rejects unsigned entries. (D-027)
 - **Evolvable schema** — extend the ontology at runtime with new types, properties, and subtypes via `extend_ontology()`. Only additive changes — no migrations, no store recreation. (R-03)
+- **Scalable sync** — gossip-based peer selection (R-05). Instead of syncing with all N peers, select ceil(ln(N)+1) random targets per round. Scales from 2 peers to 10,000+.
 
 ## When to Use Silk
 
@@ -228,7 +229,7 @@ This means your application can evolve its data model without touching the ontol
 
 ## Architecture
 
-For the full architectural overview — research foundations (Merkle-CRDTs, Delta-state CRDTs, MAPE-K), design principles, and 28 design decisions — see [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md).
+For the full architectural overview — research foundations (Merkle-CRDTs, Delta-state CRDTs, MAPE-K), design principles, and 28 design decisions (D-001–D-028) plus 8 roadmap items (R-01–R-08) — see [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md).
 
 ```
 Write (add_node, add_edge, update_property)
@@ -324,7 +325,7 @@ Run the examples yourself: `python examples/offline_first.py`. See all five scen
 
 ## Design Decisions
 
-Silk's architecture is driven by 28 explicit design decisions (D-001 through D-028), documented in full in [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md). Key choices:
+Silk's architecture is driven by 28 design decisions (D-001–D-028) plus 8 roadmap items (R-01–R-08), documented in full in [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md). Key choices:
 
 | Decision | Choice | Why |
 |----------|--------|-----|
@@ -337,6 +338,8 @@ Silk's architecture is driven by 28 explicit design decisions (D-001 through D-0
 | Schema | Open properties (D-026) | Ontology is the floor, not the ceiling — unknown properties accepted |
 | Sync validation | Quarantine (R-02) | Invalid entries in oplog but hidden from graph |
 | Schema evolution | Monotonic (R-03) | Add types/properties only, never remove |
+| Convergence | Formal proof (R-04) | Three theorems proving determinism, idempotence, convergence |
+| Peer selection | Gossip (R-05) | Logarithmic fan-out: ceil(ln(N)+1) per round, scales to 10K+ peers |
 
 ## Python API Reference
 
@@ -391,6 +394,13 @@ store.set_require_signatures(True)                         # reject unsigned ent
 
 # Quarantine (R-02)
 quarantined = store.get_quarantined()                       # list of hex hashes of quarantined entries
+
+# Gossip Peer Selection (R-05)
+store.register_peer(peer_id, address)                      # add a peer
+store.unregister_peer(peer_id)                              # remove a peer
+peers = store.list_peers()                                  # [{"peer_id", "address", "last_seen_ms"}]
+targets = store.select_sync_targets()                       # ceil(ln(N)+1) random peer IDs
+store.record_sync(peer_id)                                  # mark sync completed
 ```
 
 ### ObservationLog
@@ -541,6 +551,14 @@ Silk keeps the full graph in memory (OpLog + MaterializedGraph). Practical limit
 - **> 1M nodes**: Consider sharding across multiple stores with application-level routing
 
 Silk is designed for knowledge graphs (thousands to hundreds of thousands of richly-connected entities), not for big-data workloads (millions of rows with simple schemas). If you need the latter, use DuckDB or ClickHouse.
+
+### Peer Scaling
+
+For fleets with many peers, use gossip-based sync (R-05):
+- `store.register_peer()` to register known peers
+- `store.select_sync_targets()` each tick — returns ceil(ln(N)+1) targets
+- 10 peers → 4 targets/tick, 1000 → 8, 10000 → 10
+- Full convergence in O(log N) rounds
 
 ## Tutorial: Build a Distributed Note-Taking App
 
@@ -719,8 +737,9 @@ cargo bench
 |----------|---------------|
 | [README.md](https://github.com/Kieleth/silk-graph/blob/main/README.md) | Quick start, features, API reference, tutorial |
 | [WHY.md](https://github.com/Kieleth/silk-graph/blob/main/WHY.md) | Why Silk exists, what makes it different, benchmark analysis |
-| [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md) | Research foundations, 28 design decisions (D-001–D-028), architecture |
+| [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md) | Research foundations, 28 design decisions (D-001–D-028) plus 8 roadmap items (R-01–R-08), architecture |
 | [PROOF.md](https://github.com/Kieleth/silk-graph/blob/main/PROOF.md) | Convergence proof — three theorems, six invariants, quarantine + ontology addenda |
+| [ROADMAP.md](https://github.com/Kieleth/silk-graph/blob/main/ROADMAP.md) | Eight problems in order — dependency graph and implementation status |
 | [PROTOCOL.md](https://github.com/Kieleth/silk-graph/blob/main/PROTOCOL.md) | Sync wire format specification — for implementing peers in other languages |
 | [CHANGELOG.md](https://github.com/Kieleth/silk-graph/blob/main/CHANGELOG.md) | Release history |
 | [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |
