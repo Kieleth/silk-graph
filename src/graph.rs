@@ -158,12 +158,11 @@ impl MaterializedGraph {
                     self.nodes.get(source_id.as_str()),
                     self.nodes.get(target_id.as_str()),
                 ) {
-                    if let Err(_) = self.ontology.validate_edge(
-                        edge_type,
-                        &src.node_type,
-                        &tgt.node_type,
-                        properties,
-                    ) {
+                    if self
+                        .ontology
+                        .validate_edge(edge_type, &src.node_type, &tgt.node_type, properties)
+                        .is_err()
+                    {
                         self.quarantined.insert(entry.hash);
                         return;
                     }

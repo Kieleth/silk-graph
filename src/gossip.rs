@@ -24,7 +24,7 @@ pub struct PeerInfo {
 ///
 /// The registry is ephemeral — not stored in the graph or oplog.
 /// The application manages peer lifecycle (register/unregister).
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PeerRegistry {
     peers: BTreeMap<String, PeerInfo>,
     /// Instance ID — mixed into RNG seed to prevent thundering herd (Bug 9).
