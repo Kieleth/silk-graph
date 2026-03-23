@@ -24,7 +24,7 @@ Layer 2 (depends on Layer 1)
   └── R-06: Time-Travel Queries ← R-01
 
 Layer 3 (depends on Layer 2)
-  ├── R-07: Datalog Query Engine ← R-06
+  ├── R-07: Query Builder ← R-06
   └── R-08: Epoch Compaction ← R-01 + R-02 + R-03 + R-04
 ```
 
@@ -300,20 +300,40 @@ Under the hood, the graph is just facts: "server-1 is a server," "server-1 runs 
 - Abiteboul, Hull & Vianu (1995) — *Foundations of Databases* (Datalog semantics)
 - Whaley & Lam (2004) — Datalog for large-scale graph analysis
 
-### What Changes
+### What Was Built
 
-New module: `datalog.rs`. Projects the materialized graph as EAV (entity-attribute-value) facts. Evaluates queries via bottom-up semi-naive evaluation with hash joins.
+Foundation layer in pure Python (`python/silk/query.py`):
 
 ```python
-store.query('''
-    ?- node(X, "server"),
-       edge(_, "RUNS", X, Y),
-       property(Y, "status", "down").
-''')
-# Returns: [{"X": "server-1", "Y": "api-svc"}, ...]
+from silk import Query
+
+# Find all down services running on active servers
+results = (
+    Query(store)
+    .nodes("server")
+    .where(status="active")
+    .follow("RUNS")
+    .where(status="down")
+    .collect()
+)
 ```
 
-Minimal parser (~150 LOC) for positive Datalog: facts, variables, conjunction. No negation initially (pure positive Datalog always terminates, always monotonic).
+Fluent API: `.nodes()` → `.where()` → `.follow()` → `.where()` → `.collect()`. Chains filter and traversal operations. Works with both `GraphStore` (live) and `GraphSnapshot` (historical).
+
+Extension protocol (`QueryEngine`): anyone can plug in Datalog, SPARQL, or a custom query language:
+
+```python
+from silk import Query, QueryEngine
+
+class DatalogEngine:
+    def execute(self, store, query):
+        # Parse Datalog, evaluate against store, return results
+        ...
+
+results = Query(store, engine=DatalogEngine()).raw("?- node(X, 'server').")
+```
+
+The Datalog engine described in the original roadmap is an optional community contribution, not core Silk. The foundation (fluent builder + extension protocol) ships in core.
 
 ### Depends On
 

@@ -323,7 +323,7 @@ Edge density scales linearly with traversal cost — no surprise, but now measur
 
 Higher overlap = more Bloom filter cross-checking. The fast path is low-overlap (first sync). Incremental syncs on already-converged peers use the 10% delta path (611 µs, see above).
 
-Run the examples yourself: `python examples/offline_first.py`. See all six scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
+Run the examples yourself: `python examples/offline_first.py`. See all seven scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
 
 ## Design Decisions
 
@@ -414,6 +414,41 @@ snapshot = store.as_of(physical_ms, logical)               # read-only GraphSnap
 # GraphSnapshot has: get_node, all_nodes, all_edges, query_nodes_by_type,
 # outgoing_edges, incoming_edges, bfs, shortest_path, impact_analysis,
 # pattern_match, topological_sort, has_cycle, neighbors, subgraph
+```
+
+### Query Builder (R-07)
+
+```python
+from silk import Query
+
+# Fluent queries — chain filters and traversals
+results = (
+    Query(store)
+    .nodes("server")           # start with all server nodes
+    .where(status="active")    # filter by property
+    .follow("RUNS")            # follow RUNS edges to connected nodes
+    .where(status="down")      # filter the target nodes
+    .collect()                 # return list of dicts
+)
+
+# Other result methods
+ids = Query(store).nodes("server").collect_ids()   # just node IDs
+n = Query(store).nodes("server").count()           # count
+first = Query(store).nodes("server").first()       # first or None
+
+# Works on historical snapshots too
+snap = store.as_of(physical_ms, logical)
+Query(snap).nodes("server").where(status="active").collect()
+
+# Extension point: plug in custom query engines
+from silk import QueryEngine
+
+class MyEngine:
+    def execute(self, store, query_str):
+        # Parse and evaluate custom query language
+        return [...]
+
+Query(store, engine=MyEngine()).raw("FIND servers WHERE status=active")
 ```
 
 ### ObservationLog
@@ -756,8 +791,9 @@ cargo bench
 | [PROTOCOL.md](https://github.com/Kieleth/silk-graph/blob/main/PROTOCOL.md) | Sync wire format specification — for implementing peers in other languages |
 | [CHANGELOG.md](https://github.com/Kieleth/silk-graph/blob/main/CHANGELOG.md) | Release history |
 | [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |
+| [QUERY_EXTENSIONS.md](https://github.com/Kieleth/silk-graph/blob/main/QUERY_EXTENSIONS.md) | How to extend the query model — QueryEngine protocol, examples, rationale |
 | [CONTRIBUTING.md](https://github.com/Kieleth/silk-graph/blob/main/CONTRIBUTING.md) | Development setup, PR guidelines |
-| [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology, signing, time-travel) |
+| [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology, signing, time-travel, queries) |
 
 ## License
 
