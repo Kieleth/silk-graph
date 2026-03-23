@@ -1,13 +1,13 @@
 [package]
 name = "silk-graph"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs"
 authors = ["Kieleth <kieleth@gmail.com>"]
 license-file = "LICENSE.md"
 readme = "README.md"
 repository = "https://github.com/Kieleth/silk-graph"
-homepage = "https://github.com/Kieleth/silk-graph"
+homepage = "https://kieleth.com"
 keywords = ["crdt", "merkle", "graph", "distributed", "knowledge-graph"]
 categories = ["database", "data-structures", "network-programming"]
 rust-version = "1.75"

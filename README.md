@@ -5,7 +5,7 @@ A Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs.
 [![CI](https://github.com/Kieleth/silk-graph/actions/workflows/ci.yml/badge.svg)](https://github.com/Kieleth/silk-graph/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/silk-graph.svg)](https://crates.io/crates/silk-graph)
 [![PyPI](https://img.shields.io/pypi/v/silk-graph.svg)](https://pypi.org/project/silk-graph/)
-[![License](https://img.shields.io/badge/license-FSL--1.0--Apache--2.0-blue.svg)](LICENSE.md)
+[![License](https://img.shields.io/badge/license-FSL--1.0--Apache--2.0-blue.svg)](https://github.com/Kieleth/silk-graph/blob/main/LICENSE.md)
 
 Silk is an embedded graph database with automatic conflict resolution. Built on Merkle-DAGs and CRDTs, it requires no leader, no consensus protocol, and no coordinator. Any two Silk instances that exchange sync messages are guaranteed to converge to the same graph state. Schema is enforced at write time via an ontology — not at query time.
 
@@ -205,7 +205,7 @@ This means your application can evolve its data model without touching the ontol
 
 ## Architecture
 
-For the full architectural overview — research foundations (Merkle-CRDTs, Delta-state CRDTs, MAPE-K), design principles, and 26 design decisions — see [DESIGN.md](DESIGN.md).
+For the full architectural overview — research foundations (Merkle-CRDTs, Delta-state CRDTs, MAPE-K), design principles, and 26 design decisions — see [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md).
 
 ```
 Write (add_node, add_edge, update_property)
@@ -229,7 +229,7 @@ OpLog (append-only Merkle-DAG, content-addressed)
 
 ## Benchmarks
 
-Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, release build. Run `cargo bench --no-default-features` on your hardware. For the full analysis — what these numbers mean and why they matter — see [WHY.md](WHY.md).
+Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, release build. Run `cargo bench --no-default-features` on your hardware. For the full analysis — what these numbers mean and why they matter — see [WHY.md](https://github.com/Kieleth/silk-graph/blob/main/WHY.md).
 
 ### Core Operations
 
@@ -277,11 +277,11 @@ Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, releas
 | Concurrent property writes | 1 node | 0.06 ms |
 | 10-peer ring convergence | 10 x 100 | 51.8 ms (3 rounds) |
 
-Run the examples yourself: `python examples/offline_first.py`. See all four scenarios in [`examples/`](examples/).
+Run the examples yourself: `python examples/offline_first.py`. See all four scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
 
 ## Design Decisions
 
-Silk's architecture is driven by 26 explicit design decisions (D-001 through D-026), documented in full in [DESIGN.md](DESIGN.md). Key choices:
+Silk's architecture is driven by 26 explicit design decisions (D-001 through D-026), documented in full in [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md). Key choices:
 
 | Decision | Choice | Why |
 |----------|--------|-----|
@@ -661,22 +661,22 @@ cargo bench
 
 | Document | What it covers |
 |----------|---------------|
-| [README.md](README.md) | Quick start, features, API reference, tutorial |
-| [WHY.md](WHY.md) | Why Silk exists, what makes it different, benchmark analysis |
-| [DESIGN.md](DESIGN.md) | Research foundations, 26 design decisions (D-001–D-026), architecture |
-| [PROTOCOL.md](PROTOCOL.md) | Sync wire format specification — for implementing peers in other languages |
-| [CHANGELOG.md](CHANGELOG.md) | Release history |
-| [SECURITY.md](SECURITY.md) | Threat model, known limitations, vulnerability reporting |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, PR guidelines |
-| [`examples/`](examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology) |
+| [README.md](https://github.com/Kieleth/silk-graph/blob/main/README.md) | Quick start, features, API reference, tutorial |
+| [WHY.md](https://github.com/Kieleth/silk-graph/blob/main/WHY.md) | Why Silk exists, what makes it different, benchmark analysis |
+| [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md) | Research foundations, 26 design decisions (D-001–D-026), architecture |
+| [PROTOCOL.md](https://github.com/Kieleth/silk-graph/blob/main/PROTOCOL.md) | Sync wire format specification — for implementing peers in other languages |
+| [CHANGELOG.md](https://github.com/Kieleth/silk-graph/blob/main/CHANGELOG.md) | Release history |
+| [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |
+| [CONTRIBUTING.md](https://github.com/Kieleth/silk-graph/blob/main/CONTRIBUTING.md) | Development setup, PR guidelines |
+| [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology) |
 
 ## License
 
-Licensed under the [Functional Source License, Version 1.0, Apache 2.0 Change License](LICENSE.md) (FSL-1.0-Apache-2.0).
+Licensed under the [Functional Source License, Version 1.0, Apache 2.0 Change License](https://github.com/Kieleth/silk-graph/blob/main/LICENSE.md) (FSL-1.0-Apache-2.0).
 
 **What this means:**
 - Free to use, modify, and distribute for any purpose that doesn't compete with silk-graph
 - After 2 years from each release, the code converts to Apache License 2.0 (fully permissive)
 - Internal use, learning, research, and non-competing commercial use are unrestricted
 
-See [LICENSE.md](LICENSE.md) for full terms.
+See [LICENSE.md](https://github.com/Kieleth/silk-graph/blob/main/LICENSE.md) for full terms.

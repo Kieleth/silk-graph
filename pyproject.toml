@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "silk-graph"
-version = "0.1.0"
+version = "0.1.1"
 description = "Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs"
 requires-python = ">=3.11"
 license = {file = "LICENSE.md"}
@@ -23,9 +23,11 @@ classifiers = [
 readme = "README.md"
 
 [project.urls]
+Homepage = "https://kieleth.com"
 Repository = "https://github.com/Kieleth/silk-graph"
 Documentation = "https://docs.rs/silk-graph"
 Issues = "https://github.com/Kieleth/silk-graph/issues"
+Changelog = "https://github.com/Kieleth/silk-graph/blob/main/CHANGELOG.md"
 
 [tool.maturin]
 features = ["python"]
