@@ -1,16 +1,20 @@
 # Silk FAQ
 
-Common questions about silk-graph, rooted in real feedback from expert reviews.
+Answers to real questions from expert reviews and early users.
+
+> **Quick links:** [README](README.md) · [WHY](WHY.md) · [DESIGN](DESIGN.md) · [PROOF](PROOF.md) · [PROTOCOL](PROTOCOL.md) · [SECURITY](SECURITY.md) · [ROADMAP](ROADMAP.md)
 
 ---
 
+## Architecture & Scope
+
 ### Why doesn't Silk have Dijkstra / PageRank / weighted graph algorithms?
 
-Silk is a distributed sync layer for knowledge graphs, not a graph analytics engine. The built-in algorithms (BFS, shortest_path, impact_analysis, pattern_match) are navigation primitives — they answer "what's connected?" not "what's the optimal route?"
+Silk is a distributed sync layer, not a graph analytics engine. The built-in algorithms (`bfs`, `shortest_path`, `impact_analysis`, `pattern_match`) are navigation primitives — they answer "what's connected?" not "what's the optimal route?"
 
-For analytics, use your preferred tool (NetworkX, igraph, graph-tool) on top of Silk's graph data. The intended architecture: multiple application instances on different servers, connected by Silk for consistency, each running analytics locally.
+For analytics, use your preferred tool on top of Silk's graph data. The intended architecture: multiple application instances connected by Silk for consistency, each running analytics locally.
 
-The `QueryEngine` extension protocol (R-07) is the explicit integration point:
+The [`QueryEngine`](QUERY_EXTENSIONS.md) extension protocol is the integration point:
 
 ```python
 from silk import Query
@@ -21,21 +25,21 @@ class NetworkXEngine:
         G = nx.DiGraph()
         for e in store.all_edges():
             G.add_edge(e["source_id"], e["target_id"], **e["properties"])
-        # Parse query, run NetworkX algorithm, return results
+        # Parse query, run algorithm, return results
         ...
 
 results = Query(store, engine=NetworkXEngine()).raw("dijkstra(A, B, weight='latency')")
 ```
 
-Note: `shortest_path()` is unweighted BFS (fewest hops, not minimum cost). This follows NetworkX naming convention — NetworkX's `shortest_path` also defaults to unweighted.
+> **Note:** `shortest_path()` is unweighted BFS (fewest hops, not minimum cost). Same default as NetworkX.
 
 ---
 
 ### Why no hyperedges / reification / named graphs?
 
-Silk enforces **structural contracts** (what types exist, what connects to what, what properties are required). It does NOT enforce **semantic expressiveness** (reification, hyperedges, transitivity, cardinality). The boundary: Silk ensures the graph is well-formed. The application decides what the graph means.
+Silk enforces **structural contracts** (types, connections, required properties), not **semantic expressiveness** (reification, hyperedges, transitivity). The boundary: Silk ensures the graph is well-formed. The application decides what the graph means.
 
-To model "Bob claims (with 80% confidence) that Alice knows Carol," use the standard property graph pattern — an intermediate node:
+Model n-ary relationships with intermediate nodes — the industry standard for property graphs (Neo4j, TigerGraph, Amazon Neptune all do this):
 
 ```python
 store.add_node("claim-1", "claim", "Bob's claim", {
@@ -46,17 +50,26 @@ store.add_edge("e1", "SUBJECT", "claim-1", "alice")
 store.add_edge("e2", "OBJECT", "claim-1", "carol")
 ```
 
-This is the same pattern Neo4j, TigerGraph, and Amazon Neptune use. RDF's original reification model was widely considered a failure — RDF-star was invented to replace it.
-
-Silk's ontology validates structure (`EMPLOYS` connects `organization→person`), not semantics (`EMPLOYS` is transitive). Structural guardrails prevent malformed graphs. Domain semantics are the application's responsibility.
-
-Edge properties (D-026: open properties) can carry arbitrary metadata — `{"confidence": 0.8, "source": "bob", "timestamp": "2026-03-23"}` — without schema changes. Silk syncs whatever structure you build.
+Edge properties ([D-026: open properties](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md)) carry arbitrary metadata without schema changes: `{"confidence": 0.8, "source": "bob"}`.
 
 ---
 
+### Why no OWL-style reasoning (transitivity, inverse properties)?
+
+Silk validates at write time. It does not infer new facts.
+
+- **Structural** (Silk does this): `EMPLOYS` connects `organization→person` — validated
+- **Semantic** (application does this): `EMPLOYS` is transitive — inference, not validation
+
+If you need reasoning, run a reasoner (Pellet, HermiT) on top of Silk's graph data. Silk stays fast and predictable.
+
+---
+
+## Schema & Constraints
+
 ### How do I add enum or range validation to properties?
 
-Use the `constraints` field on `PropertyDef`. Built-in constraints: `enum` (allowed values), `min`/`max` (numeric range).
+Use the `constraints` field on property definitions:
 
 ```python
 store = GraphStore("test", {
@@ -80,21 +93,20 @@ store = GraphStore("test", {
     "edge_types": {}
 })
 
-store.add_node("s1", "server", "Prod", {"status": "active", "port": 8080})   # OK
-store.add_node("s2", "server", "Bad", {"status": "exploded"})                 # ValueError!
-store.add_node("s3", "server", "Bad", {"port": 0})                           # ValueError!
+store.add_node("s1", "server", "Prod", {"status": "active", "port": 8080})  # OK
+store.add_node("s2", "server", "Bad", {"status": "exploded"})                # ValueError!
+store.add_node("s3", "server", "Bad", {"port": 0})                          # ValueError!
 ```
 
-Constraints are validated at write time. Unknown constraint names are silently ignored (forward compatibility).
+Built-in: `enum` (allowed string values), `min`/`max` (numeric range). Unknown constraint names are silently ignored (forward compatibility for community-contributed validators).
+
+---
 
 ### How do I add a custom constraint type?
 
-Add a new handler to `validate_constraints()` in `src/ontology.rs`. The function receives the constraint config (as `serde_json::Value`) and the property value. Return `Ok(())` or `Err(ConstraintViolation)`.
-
-Example — adding a `pattern` (regex) constraint:
+Add a handler to `validate_constraints()` in [`src/ontology.rs`](https://github.com/Kieleth/silk-graph/blob/main/src/ontology.rs). Example — adding `pattern` (regex):
 
 ```rust
-// In validate_constraints(), add after the "max" handler:
 if let Some(serde_json::Value::String(pattern)) = constraints.get("pattern") {
     if let Value::String(s) = value {
         let re = regex::Regex::new(pattern).map_err(|e| ...)?;
@@ -105,75 +117,74 @@ if let Some(serde_json::Value::String(pattern)) = constraints.get("pattern") {
 }
 ```
 
-Then users can write:
-```json
-{"value_type": "string", "constraints": {"pattern": "^[a-z0-9-]+$"}}
-```
+Users then write: `{"value_type": "string", "constraints": {"pattern": "^[a-z0-9-]+$"}}`.
 
 Contributions welcome — open a PR with your constraint type + tests.
 
+---
+
 ### Why no cardinality constraints ("a team has 2-10 members")?
 
-Cardinality requires counting edges during validation, which means the validator needs access to the full graph — not just the property value. The current validation API (`validate_node(type, subtype, properties)`) doesn't have graph context.
+Cardinality requires counting edges during validation — the validator needs graph context, not just the property value. The current API (`validate_node(type, subtype, properties)`) doesn't have graph access.
 
-This is a different API contract. If you need cardinality validation, implement it in your application layer by checking edge counts after writes. If there's demand, file an RFC — it would require a design change to the validation pipeline.
-
-### Why no OWL-style reasoning (transitivity, inverse properties)?
-
-Silk enforces structural contracts — "EMPLOYS connects organization→person." It does NOT infer new facts — "if A employs B and B manages C, then A indirectly employs C." That's a reasoner's job (Pellet, HermiT, Protégé).
-
-Silk's design choice: validate at write time, don't reason. This keeps the engine fast and the behavior predictable. If you need reasoning, run a reasoner on top of Silk's graph data.
+Workaround: check edge counts in your application after writes. If there's demand, [file an RFC](https://github.com/Kieleth/silk-graph/issues) — it requires a design change to the validation pipeline.
 
 ---
 
-### Won't the oplog grow forever? How do I manage tombstones?
+## Compaction & Growth
 
-Use compaction policies. `store.compact()` compresses the entire oplog into a single checkpoint, excluding tombstoned entities. Call it periodically:
+### Won't the oplog grow forever?
+
+No. Use compaction policies. `store.compact()` compresses the oplog into a single checkpoint — all live data preserved, tombstones removed.
 
 ```python
 from silk import ThresholdPolicy, IntervalPolicy
 
-# Option 1: compact when oplog exceeds 1000 entries
+# Compact when oplog exceeds 1000 entries
 policy = ThresholdPolicy(max_entries=1000)
 policy.check(store)  # call after write batches
 
-# Option 2: compact at most once per hour
+# Compact at most once per hour
 policy = IntervalPolicy(seconds=3600)
 policy.check(store)  # call on a timer
 
-# Option 3: custom policy
+# Custom policy
 class MyPolicy:
     def should_compact(self, store):
         return store.len() > 5000
-
     def check(self, store):
         if self.should_compact(store):
             return store.compact()
         return None
 ```
 
-Each compaction produces a clean checkpoint — all live nodes and edges preserved, all tombstones and intermediate history removed. The oplog goes from N entries to 1.
+Each compaction: N entries → 1 checkpoint. Call periodically. See [`CompactionPolicy`](https://github.com/Kieleth/silk-graph/blob/main/python/silk/compaction.py) for the extension protocol.
 
-**Safety in multi-peer deployments:** only compact when all peers have synced to the current state. The policies don't know about peers — your application is responsible for the safety check. For single-instance stores, compaction is always safe.
+> **Multi-peer safety:** only compact when all peers have synced. The policies don't know about peers — your application handles the safety check.
 
 ---
 
-### Can I sync only part of the graph? (Partial sync)
+## Sync & Partial Replication
+
+### Can I sync only part of the graph?
 
 Two approaches, used together:
 
-**GraphView (query-time filtering):** See only the slice you care about. Full oplog underneath — CRDT convergence preserved.
+**1. GraphView (query-time filtering)** — see only your slice:
 
 ```python
 from silk import GraphView
 
 view = GraphView(store, node_types=["server"])
-servers = view.all_nodes()        # only servers
-edges = view.all_edges()          # only edges where BOTH endpoints are servers
-view.get_node("svc-api")          # None — filtered out
+view.all_nodes()              # only servers
+view.all_edges()              # only edges where BOTH endpoints are servers
+view.get_node("svc-api")      # None — filtered out
+
+# Also works with predicates
+eu_view = GraphView(store, predicate=lambda n: n["properties"].get("region") == "eu")
 ```
 
-**Filtered sync (bandwidth reduction):** Transfer only entries matching a type filter, plus causal ancestors.
+**2. Filtered sync (bandwidth reduction)** — transfer fewer entries:
 
 ```python
 offer = receiver.generate_sync_offer()
@@ -184,6 +195,20 @@ receiver.merge_sync_payload(payload)
 view = GraphView(receiver, node_types=["server"])
 ```
 
-**Honest limitation:** In a single-DAG oplog, entries are causally linked via `next` pointers. Causal closure may pull in entries of other types. Filtered sync is most effective when types are truly independent (no cross-type edges, inserted in separate batches). For guaranteed isolation, use separate stores per domain.
+> **Honest limitation:** In a single-DAG oplog, causal closure may pull in entries of other types. Filtered sync is most effective for independent data types. For guaranteed isolation, use separate stores. True partial replication (fragmented DAGs) is tracked in a [research branch](https://github.com/Kieleth/silk-graph).
 
-**True partial replication** (fragmented DAGs, independent subtree oplogs) is a research problem tracked in a separate branch. If this is critical for your use case, reach out.
+---
+
+## Contributing
+
+### How do I extend Silk?
+
+Three extension points, all Python protocols:
+
+| Extension | Protocol | Built-in | File |
+|-----------|----------|----------|------|
+| Query engines | [`QueryEngine`](QUERY_EXTENSIONS.md) | Fluent `Query` builder | `python/silk/query.py` |
+| Compaction policies | [`CompactionPolicy`](https://github.com/Kieleth/silk-graph/blob/main/python/silk/compaction.py) | `IntervalPolicy`, `ThresholdPolicy` | `python/silk/compaction.py` |
+| Graph views | [`GraphView`](https://github.com/Kieleth/silk-graph/blob/main/python/silk/views.py) | Type/subtype/predicate filters | `python/silk/views.py` |
+
+For Rust-level contributions (new constraint types, new graph algorithms, sync optimizations): see [CONTRIBUTING.md](CONTRIBUTING.md).

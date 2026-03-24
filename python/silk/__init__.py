@@ -13,4 +13,4 @@ __all__ = [
     "CompactionPolicy", "IntervalPolicy", "ThresholdPolicy",
     "GraphView",
 ]
-__version__ = "0.1.4"
+__version__ = "0.1.5"

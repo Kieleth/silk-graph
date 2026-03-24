@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-03-24
+
+### Added
+- **Property constraints** — `enum`, `min`, `max` on PropertyDef. Extensible via `validate_constraints()` in ontology.rs. Unknown constraints ignored (forward compat).
+- **Compaction policies** — `IntervalPolicy`, `ThresholdPolicy`, `CompactionPolicy` protocol. Automate when to compact.
+- **GraphView** — filtered projection over stores/snapshots. `GraphView(store, node_types=["server"])`. Edges filtered by both endpoints.
+- **Filtered sync** — `receive_filtered_sync_offer(offer, node_types)`. Best-effort bandwidth reduction with causal closure.
+- **FAQ.md** — 10 questions from expert reviews: algorithms, schema, compaction, partial sync, extensibility.
+
 ## [0.1.4] - 2026-03-23
 
 ### Fixed

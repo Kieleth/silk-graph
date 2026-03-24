@@ -813,9 +813,10 @@ cargo bench
 | [PROTOCOL.md](https://github.com/Kieleth/silk-graph/blob/main/PROTOCOL.md) | Sync wire format specification — for implementing peers in other languages |
 | [CHANGELOG.md](https://github.com/Kieleth/silk-graph/blob/main/CHANGELOG.md) | Release history |
 | [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |
+| [FAQ.md](https://github.com/Kieleth/silk-graph/blob/main/FAQ.md) | Common questions — algorithms, schema, compaction, partial sync, extending Silk |
 | [QUERY_EXTENSIONS.md](https://github.com/Kieleth/silk-graph/blob/main/QUERY_EXTENSIONS.md) | How to extend the query model — QueryEngine protocol, examples, rationale |
 | [CONTRIBUTING.md](https://github.com/Kieleth/silk-graph/blob/main/CONTRIBUTING.md) | Development setup, PR guidelines |
-| [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology, signing, time-travel, queries, compaction) |
+| [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology, signing, time-travel, queries, compaction, partial views) |
 
 ## License
 
