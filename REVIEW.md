@@ -99,6 +99,12 @@ Binary edges only. "Bob SAID that Alice KNOWS Carol" requires an intermediate no
 
 **Reference:** Angles, Arenas, Barcelo, Hogan, Reutter & Vrgoc (2017) — "Foundations of Modern Query Languages for Graph Databases."
 
+> **Response (v0.1.4):** Acknowledged as out of scope. Silk enforces structural contracts (types, connections, required properties), not semantic expressiveness (reification, hyperedges, transitivity). Applications model their domain using Silk's primitives — binary edges, intermediate nodes, rich edge properties (D-026) — whatever pattern fits. Silk syncs the result. The transport layer doesn't prescribe the modeling pattern above it.
+>
+> The intermediate node pattern is the industry standard for property graphs — Neo4j, TigerGraph, and Amazon Neptune all use it. RDF's original reification model was widely considered a failure (RDF-star was invented to replace it).
+>
+> Distinction: Silk's ontology is structural guardrails ("EMPLOYS connects organization→person"), not semantic modeling ("EMPLOYS is transitive"). It prevents malformed graphs. It doesn't encode domain semantics — that's the application's job.
+
 ### 12. Ontology Less Expressive Than OWL-Lite
 
 Cannot express: cardinality constraints, range constraints, inverse properties, transitivity, disjointness.
