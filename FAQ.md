@@ -51,3 +51,75 @@ This is the same pattern Neo4j, TigerGraph, and Amazon Neptune use. RDF's origin
 Silk's ontology validates structure (`EMPLOYS` connects `organization→person`), not semantics (`EMPLOYS` is transitive). Structural guardrails prevent malformed graphs. Domain semantics are the application's responsibility.
 
 Edge properties (D-026: open properties) can carry arbitrary metadata — `{"confidence": 0.8, "source": "bob", "timestamp": "2026-03-23"}` — without schema changes. Silk syncs whatever structure you build.
+
+---
+
+### How do I add enum or range validation to properties?
+
+Use the `constraints` field on `PropertyDef`. Built-in constraints: `enum` (allowed values), `min`/`max` (numeric range).
+
+```python
+store = GraphStore("test", {
+    "node_types": {
+        "server": {
+            "properties": {
+                "status": {
+                    "value_type": "string",
+                    "required": True,
+                    "constraints": {
+                        "enum": ["active", "standby", "decommissioned"]
+                    }
+                },
+                "port": {
+                    "value_type": "int",
+                    "constraints": {"min": 1, "max": 65535}
+                }
+            }
+        }
+    },
+    "edge_types": {}
+})
+
+store.add_node("s1", "server", "Prod", {"status": "active", "port": 8080})   # OK
+store.add_node("s2", "server", "Bad", {"status": "exploded"})                 # ValueError!
+store.add_node("s3", "server", "Bad", {"port": 0})                           # ValueError!
+```
+
+Constraints are validated at write time. Unknown constraint names are silently ignored (forward compatibility).
+
+### How do I add a custom constraint type?
+
+Add a new handler to `validate_constraints()` in `src/ontology.rs`. The function receives the constraint config (as `serde_json::Value`) and the property value. Return `Ok(())` or `Err(ConstraintViolation)`.
+
+Example — adding a `pattern` (regex) constraint:
+
+```rust
+// In validate_constraints(), add after the "max" handler:
+if let Some(serde_json::Value::String(pattern)) = constraints.get("pattern") {
+    if let Value::String(s) = value {
+        let re = regex::Regex::new(pattern).map_err(|e| ...)?;
+        if !re.is_match(s) {
+            return Err(ValidationError::ConstraintViolation { ... });
+        }
+    }
+}
+```
+
+Then users can write:
+```json
+{"value_type": "string", "constraints": {"pattern": "^[a-z0-9-]+$"}}
+```
+
+Contributions welcome — open a PR with your constraint type + tests.
+
+### Why no cardinality constraints ("a team has 2-10 members")?
+
+Cardinality requires counting edges during validation, which means the validator needs access to the full graph — not just the property value. The current validation API (`validate_node(type, subtype, properties)`) doesn't have graph context.
+
+This is a different API contract. If you need cardinality validation, implement it in your application layer by checking edge counts after writes. If there's demand, file an RFC — it would require a design change to the validation pipeline.
+
+### Why no OWL-style reasoning (transitivity, inverse properties)?
+
+Silk enforces structural contracts — "EMPLOYS connects organization→person." It does NOT infer new facts — "if A employs B and B manages C, then A indirectly employs C." That's a reasoner's job (Pellet, HermiT, Protégé).
+
+Silk's design choice: validate at write time, don't reason. This keeps the engine fast and the behavior predictable. If you need reasoning, run a reasoner on top of Silk's graph data.

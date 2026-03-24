@@ -25,6 +25,11 @@ pub struct PropertyDef {
     pub required: bool,
     #[serde(default)]
     pub description: Option<String>,
+    /// Extensible constraints — validated at write time.
+    /// Built-in: "enum" (list of allowed values), "min"/"max" (numeric range).
+    /// Community contributions welcome for additional constraint types.
+    #[serde(default)]
+    pub constraints: Option<BTreeMap<String, serde_json::Value>>,
 }
 
 /// Definition of a subtype within a node type (D-024).
@@ -118,6 +123,13 @@ pub enum ValidationError {
         node_type: String,
         subtype: String,
     },
+    /// A property value violates a constraint (enum, range, etc.)
+    ConstraintViolation {
+        type_name: String,
+        property: String,
+        constraint: String,
+        message: String,
+    },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -172,6 +184,15 @@ impl std::fmt::Display for ValidationError {
             ValidationError::UnexpectedSubtype { node_type, subtype } => write!(
                 f,
                 "'{node_type}' does not define subtypes, but got subtype '{subtype}'"
+            ),
+            ValidationError::ConstraintViolation {
+                type_name,
+                property,
+                constraint,
+                message,
+            } => write!(
+                f,
+                "'{type_name}'.'{property}' violates constraint '{constraint}': {message}"
             ),
         }
     }
@@ -499,7 +520,85 @@ fn validate_properties(
                 });
             }
         }
+
+        // Validate constraints (if any)
+        if let Some(constraints) = &prop_def.constraints {
+            validate_constraints(type_name, prop_name, value, constraints)?;
+        }
     }
+
+    Ok(())
+}
+
+/// Validate a property value against its constraints.
+/// Built-in constraints: "enum" (allowed values), "min"/"max" (numeric range).
+/// Unknown constraint names are silently ignored — enables forward compatibility
+/// with community-contributed constraint types.
+fn validate_constraints(
+    type_name: &str,
+    prop_name: &str,
+    value: &Value,
+    constraints: &BTreeMap<String, serde_json::Value>,
+) -> Result<(), ValidationError> {
+    // "enum": list of allowed string values
+    if let Some(serde_json::Value::Array(allowed)) = constraints.get("enum") {
+        if let Value::String(s) = value {
+            let allowed_strs: Vec<&str> = allowed.iter().filter_map(|v| v.as_str()).collect();
+            if !allowed_strs.contains(&s.as_str()) {
+                return Err(ValidationError::ConstraintViolation {
+                    type_name: type_name.to_string(),
+                    property: prop_name.to_string(),
+                    constraint: "enum".to_string(),
+                    message: format!("value '{}' not in allowed set {:?}", s, allowed_strs),
+                });
+            }
+        }
+    }
+
+    // "min": minimum numeric value (inclusive)
+    if let Some(min_val) = constraints.get("min") {
+        if let Some(min) = min_val.as_f64() {
+            let num = match value {
+                Value::Int(n) => Some(*n as f64),
+                Value::Float(n) => Some(*n),
+                _ => None,
+            };
+            if let Some(n) = num {
+                if n < min {
+                    return Err(ValidationError::ConstraintViolation {
+                        type_name: type_name.to_string(),
+                        property: prop_name.to_string(),
+                        constraint: "min".to_string(),
+                        message: format!("value {} is less than minimum {}", n, min),
+                    });
+                }
+            }
+        }
+    }
+
+    // "max": maximum numeric value (inclusive)
+    if let Some(max_val) = constraints.get("max") {
+        if let Some(max) = max_val.as_f64() {
+            let num = match value {
+                Value::Int(n) => Some(*n as f64),
+                Value::Float(n) => Some(*n),
+                _ => None,
+            };
+            if let Some(n) = num {
+                if n > max {
+                    return Err(ValidationError::ConstraintViolation {
+                        type_name: type_name.to_string(),
+                        property: prop_name.to_string(),
+                        constraint: "max".to_string(),
+                        message: format!("value {} exceeds maximum {}", n, max),
+                    });
+                }
+            }
+        }
+    }
+
+    // Unknown constraint names are silently ignored (forward compat).
+    // Community contributors: add new constraint handlers here.
 
     Ok(())
 }
@@ -547,6 +646,7 @@ mod tests {
                                 value_type: ValueType::String,
                                 required: true,
                                 description: None,
+                                constraints: None,
                             },
                         )]),
                         subtypes: None,
@@ -563,6 +663,7 @@ mod tests {
                                     value_type: ValueType::String,
                                     required: false,
                                     description: None,
+                                    constraints: None,
                                 },
                             ),
                             (
@@ -571,6 +672,7 @@ mod tests {
                                     value_type: ValueType::Int,
                                     required: false,
                                     description: None,
+                                    constraints: None,
                                 },
                             ),
                         ]),

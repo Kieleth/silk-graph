@@ -113,6 +113,19 @@ Cannot express: cardinality constraints, range constraints, inverse properties, 
 
 **Reference:** Horrocks, Patel-Schneider & van Harmelen (2003) — "From SHIQ and RDF to OWL."
 
+> **Response (v0.1.4):** Partially addressed. Silk enforces structural contracts, not semantic reasoning. The boundary:
+>
+> **Now supported** (structural validation):
+> - Enum constraints: `"constraints": {"enum": ["active", "standby", "decommissioned"]}`
+> - Range constraints: `"constraints": {"min": 1, "max": 65535}`
+> - Unknown constraint names are silently ignored (forward compatibility for community-contributed validators)
+>
+> **Out of scope** (semantic reasoning):
+> - Inverse properties, transitivity, disjointness — these infer new facts. That's a reasoner's job (Pellet, HermiT), not a sync engine's.
+> - Cardinality constraints — requires graph context during validation (counting edges), which is a different API contract. File an RFC if you need this.
+>
+> Community contributions welcome: add new constraint types to `validate_constraints()` in `ontology.rs`. See [FAQ.md](FAQ.md) for the extension guide.
+
 ### 13. ~~Edge Source/Target Type Validation Skipped on Sync~~
 
 **FIXED in v0.1.4.** `graph.apply()` for `AddEdge` now calls `ontology.validate_edge()` when both source and target nodes are materialized. If either endpoint is missing (out-of-order sync), validation is deferred to `rebuild()`. Invalid edges are quarantined.

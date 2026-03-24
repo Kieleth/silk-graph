@@ -264,6 +264,7 @@ mod tests {
                                     value_type: ValueType::String,
                                     required: false,
                                     description: None,
+                                    constraints: None,
                                 },
                             ),
                             (
@@ -272,6 +273,7 @@ mod tests {
                                     value_type: ValueType::Int,
                                     required: false,
                                     description: None,
+                                    constraints: None,
                                 },
                             ),
                         ]),
