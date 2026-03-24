@@ -623,6 +623,100 @@ impl PyGraphStore {
         Ok(payload.to_bytes())
     }
 
+    /// Generate a filtered sync payload — only entries matching the given node types,
+    /// plus all causal ancestors (ensures causal completeness).
+    /// This reduces bandwidth for peers that only need a subset of the graph.
+    #[pyo3(signature = (offer_bytes, node_types))]
+    fn receive_filtered_sync_offer(
+        &self,
+        offer_bytes: Vec<u8>,
+        node_types: Vec<String>,
+    ) -> PyResult<Vec<u8>> {
+        let offer = crate::sync::SyncOffer::from_bytes(&offer_bytes).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid sync offer: {e}"))
+        })?;
+
+        // Get full payload first
+        let full_payload = crate::sync::entries_missing(self.backend.oplog(), &offer);
+
+        // Filter entries: keep those matching node_types + all ancestors
+        let type_set: HashSet<String> = node_types.into_iter().collect();
+
+        // Phase 1: collect entries that match the filter.
+        // Aggressively exclude: AddNode of wrong type, edges referencing
+        // wrong-type nodes, and property updates on wrong-type nodes.
+        // Build a set of node_ids we want to keep.
+        let mut wanted_node_ids: HashSet<String> = HashSet::new();
+        for entry in &full_payload.entries {
+            if let GraphOp::AddNode {
+                node_id, node_type, ..
+            } = &entry.payload
+            {
+                if type_set.contains(node_type) {
+                    wanted_node_ids.insert(node_id.clone());
+                }
+            }
+        }
+
+        let mut keep: HashSet<Hash> = HashSet::new();
+        for entry in &full_payload.entries {
+            let dominated = match &entry.payload {
+                GraphOp::AddNode { node_type, .. } => !type_set.contains(node_type),
+                GraphOp::AddEdge {
+                    source_id,
+                    target_id,
+                    ..
+                } => !wanted_node_ids.contains(source_id) && !wanted_node_ids.contains(target_id),
+                GraphOp::UpdateProperty { entity_id, .. }
+                | GraphOp::RemoveNode {
+                    node_id: entity_id, ..
+                } => !wanted_node_ids.contains(entity_id),
+                GraphOp::RemoveEdge { .. } => false, // keep (can't tell without edge lookup)
+                GraphOp::DefineOntology { .. }
+                | GraphOp::ExtendOntology { .. }
+                | GraphOp::Checkpoint { .. } => false, // always keep
+            };
+            if !dominated {
+                keep.insert(entry.hash);
+            }
+        }
+
+        // Phase 2: causal closure — add all ancestors of kept entries
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for entry in &full_payload.entries {
+                if !keep.contains(&entry.hash) {
+                    continue;
+                }
+                for parent in &entry.next {
+                    if !keep.contains(parent) {
+                        for e2 in &full_payload.entries {
+                            if e2.hash == *parent {
+                                keep.insert(e2.hash);
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build filtered payload
+        let filtered_entries: Vec<Entry> = full_payload
+            .entries
+            .into_iter()
+            .filter(|e| keep.contains(&e.hash))
+            .collect();
+
+        let filtered = crate::sync::SyncPayload {
+            entries: filtered_entries,
+            need: full_payload.need,
+        };
+
+        Ok(filtered.to_bytes())
+    }
+
     /// Merge a sync payload (entries received from a peer) into this store.
     ///
     /// Returns the number of new entries merged. Updates the materialized graph

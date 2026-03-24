@@ -155,3 +155,35 @@ class MyPolicy:
 Each compaction produces a clean checkpoint — all live nodes and edges preserved, all tombstones and intermediate history removed. The oplog goes from N entries to 1.
 
 **Safety in multi-peer deployments:** only compact when all peers have synced to the current state. The policies don't know about peers — your application is responsible for the safety check. For single-instance stores, compaction is always safe.
+
+---
+
+### Can I sync only part of the graph? (Partial sync)
+
+Two approaches, used together:
+
+**GraphView (query-time filtering):** See only the slice you care about. Full oplog underneath — CRDT convergence preserved.
+
+```python
+from silk import GraphView
+
+view = GraphView(store, node_types=["server"])
+servers = view.all_nodes()        # only servers
+edges = view.all_edges()          # only edges where BOTH endpoints are servers
+view.get_node("svc-api")          # None — filtered out
+```
+
+**Filtered sync (bandwidth reduction):** Transfer only entries matching a type filter, plus causal ancestors.
+
+```python
+offer = receiver.generate_sync_offer()
+payload = sender.receive_filtered_sync_offer(offer, ["server"])
+receiver.merge_sync_payload(payload)
+
+# Combine with GraphView for clean queries
+view = GraphView(receiver, node_types=["server"])
+```
+
+**Honest limitation:** In a single-DAG oplog, entries are causally linked via `next` pointers. Causal closure may pull in entries of other types. Filtered sync is most effective when types are truly independent (no cross-type edges, inserted in separate batches). For guaranteed isolation, use separate stores per domain.
+
+**True partial replication** (fragmented DAGs, independent subtree oplogs) is a research problem tracked in a separate branch. If this is critical for your use case, reach out.

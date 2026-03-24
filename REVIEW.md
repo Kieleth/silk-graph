@@ -149,11 +149,21 @@ R-08 compaction excludes tombstoned nodes. But post-compaction removes create ne
 >
 > Safety note: in multi-peer deployments, the application is responsible for ensuring all peers have synced before compaction. Built-in policies don't know about peers — same as `store.compact()` itself.
 
-### 15. No Partial Sync
+### 15. ~~No Partial Sync~~
 
 Every peer holds the entire graph. No mechanism for "sync only nodes of type X" or "sync only the last hour." Mobile/IoT clients that need a subtree must store everything.
 
 Ditto has subscriptions. PowerSync has sync rules. Electric SQL has shapes.
+
+> **Response (v0.1.4):** Partially addressed with two approaches:
+>
+> **Approach 1: GraphView (projection)** — query-time filtering over the full graph. `GraphView(store, node_types=["server"])` returns only server nodes and edges where both endpoints are servers. Oplog unchanged (CRDT convergence preserved). Zero bandwidth impact. Solves the "dashboard only shows my slice" use case.
+>
+> **Approach 2: Filtered sync** — `receive_filtered_sync_offer(offer, ["server"])` transfers only entries matching the filter plus causal ancestors. Best-effort bandwidth reduction. In single-DAG stores where entries are causally linked, the closure may pull in most entries. Most effective for truly independent data types with no cross-type edges.
+>
+> **Honest limitation:** Neither approach reduces storage. Both still sync or store the full oplog. For real bandwidth + storage reduction on mobile/IoT, true partial replication (fragmented DAGs per subtree) is needed — a research-grade problem tracked in a separate branch.
+>
+> **Recommended combination:** Use filtered sync to reduce transfer, then `GraphView` to filter queries. For truly independent datasets, use separate stores.
 
 ### 16. ~~Convergence Proof Doesn't Cover Compaction~~
 
@@ -226,7 +236,7 @@ The `QueryEngine` extension protocol is the escape hatch. But shipping with only
 4. ~~Edge source/target validation~~ → validate_edge when endpoints exist
 
 ### Structural Limitations (Design Decisions)
-5. No partial sync (mobile/IoT blocked)
+5. ~~No partial sync~~ → GraphView (projection) + filtered sync (best-effort bandwidth). True partial replication tracked in research branch.
 6. No weighted graph algorithms
 7. No access control
 8. No networking layer

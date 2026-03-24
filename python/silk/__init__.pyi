@@ -217,6 +217,15 @@ class GraphStore:
         (entries + need list) as bytes.
         """
         ...
+    def receive_filtered_sync_offer(
+        self, offer_bytes: bytes, node_types: list[str]
+    ) -> bytes:
+        """Filtered sync: only entries matching node_types (+ causal ancestors).
+
+        Reduces bandwidth for peers that only need a subset of the graph.
+        Causal closure ensures the receiver can still build a valid oplog.
+        """
+        ...
     def merge_sync_payload(self, payload_bytes: bytes) -> int:
         """Merge a sync payload (entries received from a peer) into this store.
 
