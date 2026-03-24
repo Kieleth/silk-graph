@@ -123,3 +123,35 @@ This is a different API contract. If you need cardinality validation, implement 
 Silk enforces structural contracts — "EMPLOYS connects organization→person." It does NOT infer new facts — "if A employs B and B manages C, then A indirectly employs C." That's a reasoner's job (Pellet, HermiT, Protégé).
 
 Silk's design choice: validate at write time, don't reason. This keeps the engine fast and the behavior predictable. If you need reasoning, run a reasoner on top of Silk's graph data.
+
+---
+
+### Won't the oplog grow forever? How do I manage tombstones?
+
+Use compaction policies. `store.compact()` compresses the entire oplog into a single checkpoint, excluding tombstoned entities. Call it periodically:
+
+```python
+from silk import ThresholdPolicy, IntervalPolicy
+
+# Option 1: compact when oplog exceeds 1000 entries
+policy = ThresholdPolicy(max_entries=1000)
+policy.check(store)  # call after write batches
+
+# Option 2: compact at most once per hour
+policy = IntervalPolicy(seconds=3600)
+policy.check(store)  # call on a timer
+
+# Option 3: custom policy
+class MyPolicy:
+    def should_compact(self, store):
+        return store.len() > 5000
+
+    def check(self, store):
+        if self.should_compact(store):
+            return store.compact()
+        return None
+```
+
+Each compaction produces a clean checkpoint — all live nodes and edges preserved, all tombstones and intermediate history removed. The oplog goes from N entries to 1.
+
+**Safety in multi-peer deployments:** only compact when all peers have synced to the current state. The policies don't know about peers — your application is responsible for the safety check. For single-instance stores, compaction is always safe.

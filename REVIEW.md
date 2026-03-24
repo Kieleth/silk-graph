@@ -134,11 +134,20 @@ Cannot express: cardinality constraints, range constraints, inverse properties, 
 
 ## IV. Cracks in the Distributed Protocol
 
-### 14. Unbounded Tombstone Regrowth After Compaction
+### 14. ~~Unbounded Tombstone Regrowth After Compaction~~
 
 R-08 compaction excludes tombstoned nodes. But post-compaction removes create new tombstones that grow without bound. Compaction is a one-time reset, not continuous.
 
 **Reference:** Shapiro & Baquero (2016) — "Tombstones should be garbage-collected when causal stability is reached."
+
+> **Response (v0.1.4):** Addressed via compaction policies. `store.compact()` is not one-time — it can be called repeatedly. Each call produces a clean checkpoint excluding current tombstones. Two built-in policies automate this:
+>
+> - `IntervalPolicy(seconds=3600)` — compact at most once per hour
+> - `ThresholdPolicy(max_entries=1000)` — compact when oplog exceeds N entries
+>
+> Custom policies implement the `CompactionPolicy` protocol (`should_compact(store) -> bool`). The application calls `policy.check(store)` periodically or after write batches.
+>
+> Safety note: in multi-peer deployments, the application is responsible for ensuring all peers have synced before compaction. Built-in policies don't know about peers — same as `store.compact()` itself.
 
 ### 15. No Partial Sync
 
