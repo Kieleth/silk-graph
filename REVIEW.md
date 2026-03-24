@@ -85,6 +85,14 @@ All algorithms are unweighted. `shortest_path()` is BFS (fewest hops, not minimu
 
 Neo4j has GDS (Graph Data Science) library with 60+ algorithms. NetworkX has comprehensive weighted graph support. Users who need these will fragment their stack.
 
+> **Response (v0.1.4):** Out of scope — by design. Silk is the distributed sync layer, not a graph analytics engine. Section I of this review positions Silk against sync engines (Automerge, OrbitDB, Ditto); evaluating it against analytics engines (Neo4j GDS, NetworkX) is a category error.
+>
+> The intended architecture: two NetworkX instances on different servers, connected by Silk. Silk keeps the graph consistent. The application does analytics on top.
+>
+> The built-in algorithms (BFS, shortest_path, impact_analysis, pattern_match) are navigation primitives for graph traversal, not a competing analytics suite. `shortest_path()` is unweighted BFS following NetworkX naming convention (NetworkX defaults to unweighted too).
+>
+> The `QueryEngine` extension protocol (R-07) is the explicit integration point: a user who wants weighted shortest path writes a QueryEngine backed by NetworkX, registers it with `Query(store, engine=nx_engine)`, and gets `.raw("dijkstra(A, B, weight='latency')")`. The architecture already accounts for this — it's a designed boundary, not a gap.
+
 ### 11. No Hyperedges, No Reification, No Named Graphs
 
 Binary edges only. "Bob SAID that Alice KNOWS Carol" requires an intermediate node. RDF has native reification. For knowledge graphs, "who said what, when, with what confidence" is the core use case.
