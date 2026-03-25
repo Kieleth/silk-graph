@@ -224,7 +224,8 @@ assert store.get_node("eve")["subtype"] == "contractor"
 - Node types must be declared in the ontology
 - Edge types must be declared (with source/target type constraints)
 - Required properties must be present
-- Known property types are validated (if `name` is `string`, it must be a string)
+- Known property types are validated on both `add_node` and `update_property` (if `name` is `string`, it must be a string)
+- Property constraints (`enum`, `min`, `max`) are enforced on both `add_node` and `update_property`
 
 **What's open:**
 - Extra properties on any node or edge (stored without type validation)

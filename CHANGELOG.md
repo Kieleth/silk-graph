@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-03-25
+
+### Fixed
+- **UpdateProperty validation** — `update_property()` now validates property types and constraints (`enum`, `min`, `max`) against the ontology before applying. Previously, type mismatches and constraint violations were silently accepted. Unknown properties still accepted (D-026: ontology defines minimum, not maximum).
+
 ## [0.1.5] - 2026-03-24
 
 ### Added

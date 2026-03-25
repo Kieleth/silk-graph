@@ -14,6 +14,7 @@ Silk is designed for **trusted peer networks** — devices and services you cont
 - **Bloom filter crashes** — malformed dimensions validated after deserialization (S-05)
 - **Message size limits** — sync payloads capped at 64 MB / 100K entries (S-03)
 - **Schema enforcement on sync** — ontology validation during graph materialization. Invalid entries are accepted into the oplog (preserving CRDT convergence) but quarantined from the materialized graph (R-02). `get_quarantined()` exposes quarantined entry hashes.
+- **Property validation on update** — `update_property()` validates value types and constraints (`enum`, `min`, `max`) against the ontology before applying. Prevents constraint bypass via updates.
 - **Value depth limits** — nested structures capped at 64 levels (S-10)
 - **Value size limits** — strings capped at 1 MB, lists/maps at 10K items (S-12)
 - **File permissions** — redb databases created with 0600 on Unix (S-09)
