@@ -185,3 +185,70 @@ def test_constraints_via_extension():
 
     with pytest.raises(ValueError, match="max"):
         store.add_node("n2", "entity", "Bad", {"priority": 10})
+
+
+# -- update_property validation --
+
+
+def test_update_property_enum_valid():
+    """update_property accepts valid enum values."""
+    store = _store_with_constraints()
+    store.add_node("s1", "server", "S", {"status": "active"})
+    store.update_property("s1", "status", "standby")
+    assert store.get_node("s1")["properties"]["status"] == "standby"
+
+
+def test_update_property_enum_invalid_rejected():
+    """update_property rejects invalid enum values."""
+    store = _store_with_constraints()
+    store.add_node("s1", "server", "S", {"status": "active"})
+    with pytest.raises(ValueError, match="enum"):
+        store.update_property("s1", "status", "exploded")
+
+
+def test_update_property_range_valid():
+    """update_property accepts values within range."""
+    store = _store_with_constraints()
+    store.add_node("s1", "server", "S", {"status": "active", "port": 8080})
+    store.update_property("s1", "port", 443)
+    assert store.get_node("s1")["properties"]["port"] == 443
+
+
+def test_update_property_range_below_min_rejected():
+    """update_property rejects values below min."""
+    store = _store_with_constraints()
+    store.add_node("s1", "server", "S", {"status": "active", "port": 8080})
+    with pytest.raises(ValueError, match="min"):
+        store.update_property("s1", "port", 0)
+
+
+def test_update_property_range_above_max_rejected():
+    """update_property rejects values above max."""
+    store = _store_with_constraints()
+    store.add_node("s1", "server", "S", {"status": "active", "port": 8080})
+    with pytest.raises(ValueError, match="max"):
+        store.update_property("s1", "port", 70000)
+
+
+def test_update_property_wrong_type_rejected():
+    """update_property rejects wrong value type."""
+    store = _store_with_constraints()
+    store.add_node("s1", "server", "S", {"status": "active", "port": 8080})
+    with pytest.raises(ValueError):
+        store.update_property("s1", "port", "not_a_number")
+
+
+def test_update_property_unknown_property_accepted():
+    """update_property accepts unknown properties (D-026)."""
+    store = _store_with_constraints()
+    store.add_node("s1", "server", "S", {"status": "active"})
+    store.update_property("s1", "custom_field", "anything")
+    assert store.get_node("s1")["properties"]["custom_field"] == "anything"
+
+
+def test_update_property_float_range_rejected():
+    """update_property rejects float values outside range."""
+    store = _store_with_constraints()
+    store.add_node("s1", "server", "S", {"status": "active", "cpu_percent": 50.0})
+    with pytest.raises(ValueError, match="max"):
+        store.update_property("s1", "cpu_percent", 101.0)

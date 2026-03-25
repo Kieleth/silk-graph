@@ -1133,7 +1133,24 @@ impl PyGraphStore {
                     Err(format!("unknown edge type '{edge_type}'"))
                 }
             }
-            // UpdateProperty, RemoveNode, RemoveEdge, DefineOntology: no validation needed.
+            GraphOp::UpdateProperty {
+                entity_id, key, value,
+            } => {
+                // Validate property type against ontology (if node is known)
+                if let Some(node) = self.graph.get_node(entity_id) {
+                    self.ontology
+                        .validate_property_update(
+                            &node.node_type,
+                            node.subtype.as_deref(),
+                            key,
+                            value,
+                        )
+                        .map_err(|e| e.to_string())
+                } else {
+                    Ok(()) // Node not yet materialized (e.g., during sync)
+                }
+            }
+            // RemoveNode, RemoveEdge, DefineOntology: no validation needed.
             _ => Ok(()),
         }
     }
@@ -1312,6 +1329,10 @@ impl PyGraphStore {
         let heads = self.backend.oplog().heads();
         let entry = self.create_entry(op, heads, vec![], self.clock.clone(), &self.instance_id);
         let hex = hex::encode(entry.hash);
+        // Validate against ontology before applying (type checks, constraints)
+        if let Err(reason) = self.validate_entry_payload(&entry) {
+            return Err(pyo3::exceptions::PyValueError::new_err(reason));
+        }
         // Apply to materialized graph before backend (graph needs the entry ref).
         self.graph.apply(&entry);
         self.backend

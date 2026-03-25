@@ -356,6 +356,54 @@ impl Ontology {
         validate_properties(edge_type, &def.properties, properties)
     }
 
+    /// Validate a single property update against the ontology.
+    /// Checks that the value type matches the property definition.
+    /// Unknown properties are accepted (D-026: ontology defines minimum, not maximum).
+    pub fn validate_property_update(
+        &self,
+        node_type: &str,
+        subtype: Option<&str>,
+        key: &str,
+        value: &Value,
+    ) -> Result<(), ValidationError> {
+        let def = match self.node_types.get(node_type) {
+            Some(d) => d,
+            None => return Ok(()), // Unknown node type — can't validate
+        };
+
+        // Merge type-level + subtype-level property definitions
+        let mut merged = def.properties.clone();
+        if let (Some(subtypes), Some(st)) = (&def.subtypes, subtype) {
+            if let Some(st_def) = subtypes.get(st) {
+                merged.extend(st_def.properties.clone());
+            }
+        }
+
+        // D-026: unknown properties accepted without validation
+        let prop_def = match merged.get(key) {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+
+        // Type check
+        if prop_def.value_type != ValueType::Any && !value_matches_type(value, &prop_def.value_type)
+        {
+            return Err(ValidationError::WrongPropertyType {
+                type_name: node_type.to_string(),
+                property: key.to_string(),
+                expected: prop_def.value_type.clone(),
+                got: value_type_name(value).to_string(),
+            });
+        }
+
+        // Constraint check
+        if let Some(constraints) = &prop_def.constraints {
+            validate_constraints(node_type, key, value, constraints)?;
+        }
+
+        Ok(())
+    }
+
     /// Validate that the ontology itself is internally consistent.
     /// All source_types/target_types in edge defs must reference existing node types.
     pub fn validate_self(&self) -> Result<(), ValidationError> {
