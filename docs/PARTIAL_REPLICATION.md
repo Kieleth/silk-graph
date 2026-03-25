@@ -171,83 +171,145 @@ alert_store = GraphStore("alerts", alert_ontology)
 
 **Status:** Already possible with Silk today. No code changes needed.
 
-### 3.2 Approach B: Deferred Entries
+### 3.2 Approach B: Deferred Entries — REJECTED
 
 **Mechanism:** Relax I-02 from "all parents must exist NOW" to "all parents must exist EVENTUALLY." Entries with missing parents go into a `deferred` set. When parents arrive (via later sync), deferred entries are promoted to the oplog.
 
-**Changes required:**
+**Why it doesn't work for Silk:**
 
-```
-src/oplog.rs:
-  + deferred: HashMap<Hash, Entry>           // entries waiting for parents
-  + missing_parents: HashMap<Hash, HashSet<Hash>>  // what each deferred entry needs
-  + promote_deferred()                       // called after each append, checks if any can be promoted
-  ~ append(): on MissingParent, insert into deferred instead of erroring
-  ~ entries_since(): exclude deferred entries
+The deferred mechanism solves a mechanical problem (don't crash on `MissingParent`) but creates a semantic one: the query model becomes unpredictable.
 
-src/graph.rs:
-  No changes. Deferred entries are invisible to materialization.
+In Silk's single-DAG oplog, entries are linked by the `next` field (causal ordering). If `server-3` was appended after `alert-1`, then `server-3`'s DAG parent is `alert-1` — regardless of their graph-level relationship. With filtered sync excluding alerts:
 
-src/python.rs:
-  + get_deferred() -> list[str]              // inspect deferred entries
-  + get_deferred_count() -> int              // how many are waiting
+1. `server-3` arrives but its DAG parent `alert-1` is missing → deferred
+2. `alert-1` may **never** arrive (it's out of scope) → `server-3` stays deferred forever
+3. Or `alert-1` eventually arrives → `server-3` promotes, but its `AddEdge` entries might still be deferred → server-3 appears as a disconnected island
 
-PROOF.md:
-  + New invariant I-02': "I-02 holds eventually after all ancestors synced"
-  + Partial convergence theorem: "peers converge within their scope"
-```
+**Two failure modes:**
+- **Entries you want stay invisible** — trapped in deferred because their DAG parents are out of scope
+- **Entries that promote appear disconnected** — edges lag behind nodes, graph has orphan islands
 
-**Estimated code:** ~350 lines of Rust + ~100 lines of Python tests.
+Both defeat the query model. `store.all_nodes()` cannot be trusted — some in-scope nodes are hidden in deferred, and promoted nodes may lack edges. This is worse than full replication (predictable, complete) or separate stores (predictable, isolated).
 
-**Convergence proof sketch:**
-1. Within the non-deferred entry set, I-02 holds (all parents exist)
-2. Materialization only applies non-deferred entries → graph is consistent
-3. When a deferred entry's last missing parent arrives, it's promoted → graph grows monotonically
-4. After all parents synced, the full entry set converges (reduces to Theorem 3)
-
-**What it solves:** Graceful handling of incomplete sync. No crash on missing parents. Entries arrive in any order.
-**What it doesn't solve:** Bandwidth — causal closure still pulls most entries. Storage — all entries eventually stored.
-**Tradeoff:** Correctness (eventually) vs completeness (immediately).
+**Conclusion:** B is useful as internal plumbing (a `MissingParent` that doesn't crash) but useless as a partial replication strategy. It doesn't reduce bandwidth, doesn't reduce storage, and makes the graph unreliable. If B is ever implemented, it should be as a building block inside C — never exposed as a user-facing sync mode.
 
 ### 3.3 Approach C: Scope-Aware Protocol
 
 **Mechanism:** New sync mode where peers declare a `SyncScope` (set of node types, predicates). The sender filters entries AND skips causal closure for entries outside scope. The receiver knows it has an intentionally partial oplog.
 
-**Changes required:**
+#### Sub-Problem 1: What is a scope?
+
+The simplest version: a set of node types.
+
+```
+SyncScope { node_types: {"server", "rack"}, include_cross_edges: true }
+```
+
+More expressive options, each adding complexity:
+- **Predicate-based**: `region == "eu"` (like Ditto subscriptions) — requires evaluating predicates at every write
+- **Partition-key**: `org_id == "acme"` (like Realm) — simple but inflexible, mutually exclusive partitions
+- **Subgraph**: "everything reachable from node X within 3 hops" — graph-dependent, expensive to compute
+
+Node-type filtering is the minimum viable scope — it maps directly to Silk's ontology and can be evaluated without graph traversal.
+
+#### Sub-Problem 2: What happens to the DAG?
+
+This is the hard part. Today, every entry's `next` field points to previous entries — forming a single causal chain. Filtering by scope breaks this chain. Two options:
+
+**C-α: Scope-local DAG (rewrite causal chain per scope)**
+- When generating a scoped sync payload, rewrite `next` fields to point only to the previous in-scope entry
+- The receiver gets a valid sub-DAG where every entry's parents exist
+- Pro: I-02 holds within scope. Clean sub-DAG.
+- Con: **Rewriting `next` changes the entry hash** → entries are no longer content-addressed across scopes. A "server" entry has different hashes on different peers depending on their scope. **This breaks deduplication, Merkle verification, and the convergence proof.**
+- **Verdict: Rejected.** Content addressing is foundational to Silk.
+
+**C-β: Scope envelope (metadata layer above the DAG)**
+- Don't touch the DAG entries at all — their hashes remain canonical
+- Add a `ScopeEnvelope` that wraps the sync payload: declares scope, lists included entry hashes, and provides a scope-local Merkle root
+- Receiver stores entries with their original hashes but tracks which scope delivered them
+- I-02 is relaxed for scoped sync: entries within the envelope are not required to have all DAG parents — only parents that are also within scope
+- Pro: Entry hashes unchanged. Content addressing works. Deduplication works across scopes.
+- Con: Needs a new invariant (I-02-scoped) and a modified `append()` path that tolerates intentional gaps
+- **Verdict: Viable.** This is the path forward.
+
+The key insight: B's deferred mechanism could serve as internal plumbing here — entries with missing parents don't crash, they're accepted as "scoped entries" with known-absent ancestors. But the user never sees "deferred" — they see a complete graph within their declared scope.
+
+#### Sub-Problem 3: Cross-scope edges
+
+If an edge connects `server-1` (in scope) to `alert-5` (out of scope):
+
+| Option | Behavior | Query impact | Complexity |
+|--------|----------|--------------|------------|
+| **C3-a: Drop** | Edge excluded from sync | Graph clean but incomplete at boundaries. `server-1.edges()` is missing connections. | Low |
+| **C3-b: Dangle** | Edge included, target doesn't exist | Queries must handle `None` targets. Every graph traversal needs null checks. | Medium |
+| **C3-c: Stub** | Edge + lightweight placeholder (node_id + type, no properties) | Queries see connection exists, can't inspect remote node. Clear boundary marker. | Medium |
+
+C3-c (stubs) is the most informative: the query model remains predictable ("I can see this server connects to an alert, but I don't have the alert's details"). The stub acts as a boundary marker — the application knows exactly where its scope ends.
+
+#### Sub-Problem 4: Scope changes
+
+What happens when a peer expands its scope (e.g., adds "alert" to its scope)?
+
+- **Backfill needed**: the peer must sync all historical alert entries it never received
+- This is a regular sync with a wider scope — the bloom filter will show all alert entries as "missing"
+- **Shrinking scope**: simpler — stop syncing entries of that type. Existing entries can be pruned or kept.
+
+#### Sub-Problem 5: Convergence proof
+
+New theorem required:
+
+> **Theorem 3-S (Scoped Convergence):** For peers A and B with scopes S_A and S_B, after bidirectional scoped sync, the materialized graphs restricted to their shared scope intersection converge: π_{S_A ∩ S_B}(G_A) = π_{S_A ∩ S_B}(G_B).
+
+Proof sketch:
+1. Within scope S, all entries of types in S are exchanged (bloom filter + force heads, same as full sync)
+2. Cross-scope edges handled by chosen policy (drop/dangle/stub) — deterministic
+3. Entry hashes unchanged (C-β) → deduplication and idempotent merge still hold
+4. LWW conflict resolution operates on the same entry set within S → deterministic materialization
+5. Reduces to Theorem 3 when S_A = S_B = all types
+
+**Open question:** Does scoped sync preserve the causal ordering guarantees that the HLC provides? If peer A has alert entries that causally depend on server entries, and peer B only syncs servers, B's causal history for those servers is incomplete. This may not matter for materialization (LWW doesn't need full causal history, just clocks) but needs formal verification.
+
+#### Changes required
 
 ```
 src/sync.rs:
-  + SyncScope { node_types: HashSet<String>, include_edges: bool }
-  + entries_missing_scoped(oplog, offer, scope) -> SyncPayload
-  ~ SyncPayload gains scope: Option<SyncScope> field
+  + SyncScope { node_types: HashSet<String>, include_cross_edges: bool }
+  + ScopeEnvelope { scope: SyncScope, entries: Vec<Hash>, scope_root: Hash }
+  + entries_missing_scoped(oplog, offer, scope) -> ScopedSyncPayload
+  ~ SyncPayload: add scope: Option<SyncScope> field
 
 src/oplog.rs:
-  + Deferred entries (from Approach B)
+  + append_scoped(): accepts entries with known-absent parents (within scope envelope)
   + scope_heads(scope) -> Vec<Hash>          // heads within scope only
 
 src/graph.rs:
   + apply_scoped(entry, scope) -> bool       // only materialize if in scope
-  + rebuild_scoped(entries, scope)            // filtered rebuild
+  + StubNode { id, node_type }               // lightweight boundary marker
+  + rebuild_scoped(entries, scope)            // filtered rebuild with stubs
 
 src/python.rs:
   + set_sync_scope(scope)                    // declare what this peer wants
   + generate_scoped_sync_offer(scope)        // offer with scope metadata
+  + get_stub_nodes() -> list                 // inspect boundary markers
 
 PROOF.md:
-  + Scope convergence theorem: π_S(G_A) = π_S(G_B) for shared scope S
-  + Cross-scope edge semantics documented
+  + Theorem 3-S: Scoped convergence
+  + Invariant I-02-S: Scoped causal completeness
+  + Cross-scope edge semantics (chosen policy)
 ```
 
-**Estimated code:** ~500 lines Rust + ~200 lines Python + new proof section.
+**Estimated code:** ~700 lines Rust + ~200 lines Python + new PROOF.md section + protocol version bump.
 
-**Cross-scope edges:** If an edge connects a server (in scope) to an alert (out of scope):
-- Option C1: Include the edge. Source/target may not exist on receiver. Edge is dangling.
-- Option C2: Exclude the edge. Receiver's graph is incomplete at the boundary.
-- Option C3: Include the edge + the missing endpoint as a "stub" (node_id + type, no properties).
+**What it solves:** True partial sync with explicit scope. Peers sync only what they need. Query model remains predictable within scope.
+**What it doesn't solve:** Cross-scope consistency without coordination. The HLC causal ordering question (needs formal verification).
+**Tradeoff:** Capability vs complexity. Requires formal design + proof before implementation.
 
-**What it solves:** True partial sync with explicit scope. Peers sync only what they need.
-**What it doesn't solve:** Cross-scope consistency without coordination. Dynamic scope changes (what happens when you expand your scope?).
-**Tradeoff:** Capability vs complexity. Full design + proof required before implementation.
+#### Open design decisions (not yet taken)
+
+1. **Scope definition** — node types only, or more expressive? (affects evaluation cost)
+2. **Cross-scope edges** — C3-a (drop), C3-b (dangle), or C3-c (stub)?
+3. **Scope negotiation** — how do peers communicate their scopes? (in SyncOffer? separate handshake?)
+4. **Scope storage** — does the receiver persist its scope declaration? (needed for scope-change backfill)
 
 ---
 
@@ -256,19 +318,20 @@ PROOF.md:
 ### Bandwidth vs Correctness
 
 Filtering reduces bandwidth. But the Merkle-DAG's causal chain links everything. You can either:
-- Keep causal closure → full bandwidth (Approach 2 today)
-- Break causal closure → entries with missing parents → deferred (Approach B)
-- Skip causal closure entirely → convergence proof breaks → need new proof (Approach C)
+- Keep causal closure → full bandwidth (current filtered sync)
+- Break causal closure → unpredictable query model (Approach B — rejected)
+- Replace the causal model within a declared scope → new proof required (Approach C)
 
 ### Simplicity vs Capability
 
-| | Separate stores (A) | Deferred entries (B) | Scope protocol (C) |
-|---|---|---|---|
-| Code complexity | 0 lines | ~350 lines | ~700 lines |
-| Convergence risk | None | Low (deferred = eventually consistent) | Medium (new invariants) |
-| Cross-domain edges | Impossible | Possible (deferred) | Possible (with stubs) |
-| Bandwidth reduction | Full (separate streams) | Minimal (causal closure) | Significant |
-| Storage reduction | Full (separate stores) | None | Possible (scope-pruning) |
+| | Separate stores (A) | Scope protocol (C) |
+|---|---|---|
+| Code complexity | 0 lines | ~700 lines |
+| Convergence risk | None | Medium (new invariants) |
+| Cross-domain edges | Impossible | Possible (with stubs) |
+| Bandwidth reduction | Full (separate streams) | Significant |
+| Storage reduction | Full (separate stores) | Possible (scope-pruning) |
+| Query model | Predictable (isolated) | Predictable (within scope) |
 
 ### Offline vs Coordination
 
@@ -289,13 +352,12 @@ For Silk's peer-to-peer model, the coordinator would need to be the peers themse
 - **Separate stores** for domain isolation ✓
 
 ### Next (v0.2 candidate)
-- **Approach B: Deferred entries** — the minimum viable step. Accept entries with missing parents gracefully. No crash on incomplete sync. ~350 lines of Rust. Low convergence risk (deferred entries are invisible until complete).
-
-### Future (requires formal design)
 - **Approach C: Scope-aware protocol** — true partial sync with explicit scope negotiation. Requires: new SyncScope struct, scoped entries_missing, partial convergence proof, cross-scope edge semantics. Estimated effort: 700+ lines of Rust, new PROOF.md section, protocol version bump.
 
+### Rejected
+- **Approach B: Deferred entries** — solves a mechanical problem (no crash on missing parents) but breaks the query model. Nodes trapped in deferred or appearing as disconnected islands. Useless as a standalone strategy. May be reused as internal plumbing inside C.
+
 ### Not recommended
-- Attempting partial sync without deferred entries. The causal chain breaks immediately.
 - Attempting scope-aware sync without a formal proof. Convergence bugs are silent and catastrophic.
 - Comparing Silk to Ditto/Electric SQL on partial sync. They have centralized authority; Silk is peer-to-peer. Different problem space.
 
