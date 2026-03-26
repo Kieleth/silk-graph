@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use crate::bloom::BloomFilter;
 use crate::entry::{Entry, Hash};
@@ -220,27 +220,25 @@ pub fn entries_missing(oplog: &OpLog, remote_offer: &SyncOffer) -> SyncPayload {
     }
 
     // Phase 2: ancestor closure — for each entry we're sending, ensure
-    // all parents are either in the remote's bloom OR in our send set.
-    // This resolves false positives that would break causal chains.
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for entry in &all_entries {
-            if !send_set.contains(&entry.hash) {
-                continue;
-            }
-            for parent_hash in &entry.next {
-                // If the parent is not already being sent and is not in the
-                // remote's heads (which they definitely have), check if they
-                // might need it.
-                if !send_set.contains(parent_hash)
-                    && !remote_heads_set.contains(parent_hash)
-                    && oplog.get(parent_hash).is_some()
-                {
-                    // The parent might have been a bloom false positive.
-                    // Include it to be safe.
-                    send_set.insert(*parent_hash);
-                    changed = true;
+    // all parents are either in the remote's heads OR in our send set.
+    // This recovers bloom filter false positives that would break causal chains.
+    //
+    // EXP-01 fix: BFS queue instead of O(n × depth) nested loop.
+    // The old code iterated ALL entries per pass, needing O(depth) passes.
+    // For a 900-entry linear chain: 900 × 1000 = 900K iterations.
+    // BFS processes each entry at most once: O(|send_set| + |ancestors|).
+    {
+        let mut queue: VecDeque<Hash> = send_set.iter().copied().collect();
+        while let Some(hash) = queue.pop_front() {
+            if let Some(entry) = oplog.get(&hash) {
+                for parent_hash in &entry.next {
+                    if !send_set.contains(parent_hash)
+                        && !remote_heads_set.contains(parent_hash)
+                        && oplog.get(parent_hash).is_some()
+                    {
+                        send_set.insert(*parent_hash);
+                        queue.push_back(*parent_hash);
+                    }
                 }
             }
         }

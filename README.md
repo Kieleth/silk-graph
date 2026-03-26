@@ -332,7 +332,7 @@ Edge density scales linearly with traversal cost — no surprise, but now measur
 | 50% | 27.7 ms |
 | 90% (nearly converged) | 42.4 ms |
 
-> **Known issue ([EXP-01](EXPERIMENTS.md#exp-01-sync-overlap-cost-f-10)):** Sync cost currently scales with overlap (shared entries), not with delta (entries to send). At 90% overlap, only 100 entries need sending, but the ancestor closure re-walks the entire shared DAG. This is a protocol inefficiency, not a correctness issue — sync always converges. See [EXPERIMENTS.md](EXPERIMENTS.md) for the full analysis with reproducible measurements.
+> **[EXP-01](EXPERIMENTS.md#exp-01-sync-overlap-cost-f-10):** Sync cost is now constant (~1.3ms) regardless of overlap. The ancestor closure uses BFS (O(n)) instead of the original nested loop (O(n × depth)). At 99% overlap: 16x faster than before the fix. See [EXPERIMENTS.md](EXPERIMENTS.md) for the full analysis with before/after measurements.
 
 Run the examples yourself: `python examples/offline_first.py`. See all eight scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
 

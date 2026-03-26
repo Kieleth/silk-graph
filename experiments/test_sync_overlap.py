@@ -143,10 +143,6 @@ def run_all_scenarios(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="F-10: ancestor closure is O(n) in shared entries, not O(delta)",
-    strict=True,
-)
 def test_sync_overlap_cost_sublinear():
     """Sync receive time should scale with delta (entries to send),
     not with overlap (shared entries).

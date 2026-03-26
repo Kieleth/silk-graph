@@ -68,9 +68,65 @@ The closure checks if a parent is in the remote's **heads set** (usually 1-2 ent
 
 At 90% overlap: 100 unique entries are in the send set. Their parents are shared entries. The closure adds those parents, whose parents are also shared, all the way back to genesis. The entire shared DAG (900 entries) gets re-added to the send set.
 
-### Fix Direction
+### Fix Applied
 
-Make the ancestor closure bloom-aware: skip parents that the remote's bloom filter says they already have. Accept the ~1% false positive rate — entries falsely skipped by the bloom will be caught by a follow-up sync round via the `need` list.
+The root cause was not *what* the closure computed (it correctly identifies all needed ancestors), but *how* it computed it. The original `while changed` loop iterated over ALL entries on every pass, requiring O(depth) passes for a linear chain:
+
+```
+O(all_entries × chain_depth) = O(1000 × 900) = 900,000 iterations
+```
+
+**Fix:** Replace the nested loop with a BFS queue that processes each entry at most once:
+
+```rust
+let mut queue: VecDeque<Hash> = send_set.iter().copied().collect();
+while let Some(hash) = queue.pop_front() {
+    if let Some(entry) = oplog.get(&hash) {
+        for parent_hash in &entry.next {
+            if !send_set.contains(parent_hash)
+                && !remote_heads_set.contains(parent_hash)
+                && oplog.get(parent_hash).is_some()
+            {
+                send_set.insert(*parent_hash);
+                queue.push_back(*parent_hash);
+            }
+        }
+    }
+}
+```
+
+Complexity: O(|send_set| + |ancestors|) — each entry processed once.
+
+### Results After Fix
+
+Platform: arm64 / Darwin, Python 3.12.9, silk-graph 0.1.6
+
+| Overlap | Shared | To Send | receive_ms | total_ms | payload_bytes |
+|---------|--------|---------|------------|----------|---------------|
+| 0% | 0 | 1000 | 1.36 | 6.52 | 169,695 |
+| 10% | 100 | 900 | 1.26 | 6.33 | 169,388 |
+| 25% | 250 | 750 | 1.39 | 5.91 | 169,912 |
+| 50% | 500 | 500 | 1.37 | 5.84 | 171,420 |
+| 75% | 750 | 250 | 1.11 | 4.92 | 172,738 |
+| 90% | 900 | 100 | 1.39 | 5.26 | 173,865 |
+| 95% | 950 | 50 | 1.30 | 5.12 | 174,229 |
+| 99% | 990 | 10 | 1.33 | 5.35 | 174,363 |
+
+**Scaling ratio (90% / 10% overlap): 1.1x** — flat, as expected.
+
+### Before/After Comparison
+
+| Overlap | Before (ms) | After (ms) | Speedup |
+|---------|-------------|------------|---------|
+| 0% | 1.24 | 1.36 | ~same |
+| 10% | 3.91 | 1.26 | 3.1x |
+| 50% | 12.92 | 1.37 | 9.4x |
+| 90% | 19.82 | 1.39 | 14.3x |
+| 99% | 21.47 | 1.33 | 16.1x |
+
+The `receive_ms` is now constant (~1.3ms) regardless of overlap. The improvement scales with overlap — up to **16x faster** at 99% overlap.
+
+**Note:** Payload size is unchanged (the closure still sends all needed ancestors). The fix is purely algorithmic — same result, fewer iterations.
 
 ### Reproduce
 
