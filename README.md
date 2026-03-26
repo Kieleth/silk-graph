@@ -323,16 +323,17 @@ Edge density scales linearly with traversal cost — no surprise, but now measur
 | Concurrent property writes | 1 node | 0.06 ms |
 | 10-peer ring convergence | 10 x 100 | 51.8 ms (3 rounds) |
 
-### Sync by Divergence (1,000 nodes per peer, bidirectional)
+### Sync by Divergence (1,000 nodes per peer, `receive_sync_offer` time)
 
 | Overlap | Time |
 |---------|------|
-| 1% (nearly disjoint) | 2.3 ms |
-| 10% | 8.0 ms |
-| 50% | 27.7 ms |
-| 90% (nearly converged) | 42.4 ms |
+| 0% (disjoint) | 1.36 ms |
+| 10% | 1.26 ms |
+| 50% | 1.37 ms |
+| 90% (nearly converged) | 1.39 ms |
+| 99% | 1.33 ms |
 
-> **[EXP-01](EXPERIMENTS.md#exp-01-sync-overlap-cost-f-10):** Sync cost is now constant (~1.3ms) regardless of overlap. The ancestor closure uses BFS (O(n)) instead of the original nested loop (O(n × depth)). At 99% overlap: 16x faster than before the fix. See [EXPERIMENTS.md](EXPERIMENTS.md) for the full analysis with before/after measurements.
+Receive time is flat regardless of overlap. The ancestor closure uses BFS — each entry processed once. See [EXP-01](EXPERIMENTS.md#exp-01-sync-overlap-cost-f-10) for the full experiment with methodology and before/after comparison.
 
 Run the examples yourself: `python examples/offline_first.py`. See all eight scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
 
@@ -344,7 +345,7 @@ Silk ships a lightweight experiment harness for measuring protocol behavior unde
 # Run all experiments (table output)
 python experiments/test_sync_overlap.py
 
-# Run as pytest (xfail tests for known issues)
+# Run as pytest
 pytest experiments/ -v
 
 # JSON output for data capture
