@@ -9,6 +9,8 @@ A Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs.
 
 Silk is an embedded graph database with automatic conflict resolution. Built on Merkle-DAGs and CRDTs, it requires no leader, no consensus protocol, and no coordinator. Any two Silk instances that exchange sync messages are guaranteed to converge to the same graph state. Schema is enforced at write time via an ontology — not at query time.
 
+> **Terminology note:** Silk uses "ontology" to mean a typed property-graph schema — node types, edge type constraints, property validation. It does not perform OWL-style reasoning, inference, or subsumption. Think "schema with graph-aware constraints," not "description logic."
+
 ## Quick Start
 
 ### Python
@@ -184,6 +186,8 @@ If you're syncing between devices you control, Silk is safe. If you're building 
 See [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) for the full threat model.
 
 ## Schema Philosophy: Open Properties (D-026)
+
+**Terminology:** Silk uses "ontology" to mean a typed property-graph schema — node types, edge constraints, property definitions with type and constraint validation. It does not perform OWL-style reasoning, inference, or subsumption. If you need semantic reasoning, run a reasoner on top of Silk's graph data.
 
 Silk's ontology defines the **minimum**, not the maximum. You declare node types, edge types, required properties, and type constraints. Silk enforces those. But your application can store any additional properties without changing the ontology.
 

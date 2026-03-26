@@ -5,8 +5,10 @@ A standalone Rust library (with Python bindings via PyO3) for distributed, peer-
 Silk is an independent library. It can be used by any application that needs a distributed, conflict-free, graph-structured data store.
 
 **Repository**: https://github.com/Kieleth/silk-graph
-**License**: TBD (open-source candidate)
-**Whitepaper**: Planned — documenting the Merkle-CRDT graph store design and ontology-first approach for distributed knowledge graphs.
+**License**: [FSL-1.0-Apache-2.0](LICENSE.md) (converts to Apache-2.0 after two years)
+**Whitepaper**: In progress — documenting the Merkle-CRDT graph store design and schema-enforced replication approach.
+
+**Terminology:** Silk uses "ontology" to mean a typed property-graph schema — node types, edge constraints, property definitions with type and constraint validation. It does not perform OWL-style reasoning, inference, or subsumption.
 
 ## Research Foundation
 
@@ -64,6 +66,8 @@ For new peers joining the fleet, Automerge sends the entire document as a compre
 ---
 
 ## Ontology-First Design
+
+> **Terminology:** Silk uses "ontology" to mean a typed property-graph schema — node types, edge type constraints, property validation with optional constraints (enum, min/max). It does not perform OWL-style reasoning, inference, or subsumption. The model is closer to a strict graph schema than to a description-logic ontology.
 
 Silk is domain-agnostic. It has no built-in node types or edge types. Instead, every graph store begins with a **genesis entry** that defines an initial **ontology** (extendable via R-03 monotonic evolution) — the vocabulary and rules for that graph. The ontology must be defined before any data can be written.
 

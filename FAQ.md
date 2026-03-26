@@ -65,6 +65,18 @@ If you need reasoning, run a reasoner (Pellet, HermiT) on top of Silk's graph da
 
 ---
 
+### Why does Silk use last-writer-wins (LWW) for conflicts? Doesn't that lose data?
+
+LWW is a deliberate trade-off. Per-property LWW means: two concurrent writes to different properties on the same node both survive; two concurrent writes to the *same* property — the one with the later HLC timestamp wins, the other is silently discarded.
+
+That is fine for operational metadata (status fields, timestamps, config values). It is **not ideal** for semantically rich data where concurrent edits carry intent — tags, multi-valued fields, counters, or collaborative text. For those, richer merge strategies (OR-sets, counters, MV-registers) would preserve more information.
+
+Silk chose LWW because it is the simplest convergent strategy that works for the graph-sync use case. Applications needing richer merge semantics should model them at the application layer — for example, storing a tag list as a node with individual tag nodes linked via edges (each edge is add-wins), rather than as a single property value.
+
+> **Academic context:** LWW registers are well-understood in CRDT literature (Shapiro et al. 2011). They guarantee convergence at the cost of potential intent loss. This is a universal trade-off: richer merge algebras preserve more intent but add per-field type complexity. Silk keeps the merge layer simple and pushes semantic richness to the graph structure.
+
+---
+
 ## Schema & Constraints
 
 ### How do I add enum or range validation to properties?
