@@ -112,6 +112,90 @@ If you need reasoning, run a reasoner (Pellet, HermiT) on top of Silk's graph da
 
 ---
 
+### How do I enforce graph-level invariants? ("Every server must have a RUNS_ON edge")
+
+Silk validates **per-node** and **per-edge** at write time: types exist, properties match, constraints pass. It does NOT validate **cross-node** rules like "every server must have at least one RUNS_ON edge" or "if status is 'critical', there must be an assigned action."
+
+This is deliberate. Graph-level invariants are **domain logic** — they belong in your application, not in the storage engine. The same way "every order must have a customer" belongs in application code, not in PostgreSQL triggers.
+
+**Why Silk can't do this reliably:** During sync, the graph is transiently incomplete. Peer A adds a server. Peer B adds the RUNS_ON edge. Between syncs, A's graph has a server without a RUNS_ON edge — temporarily invalid. Rejecting the server would be wrong. The graph heals when B's entries arrive.
+
+**The pattern: validate in your application after writes or syncs.**
+
+```python
+from silk import GraphStore
+
+def validate_graph(store: GraphStore) -> list[str]:
+    """Check graph-level invariants. Call after write batches or sync."""
+    violations = []
+
+    # Every server must have at least one RUNS_ON edge
+    for server in store.query_nodes_by_type("server"):
+        edges = store.outgoing_edges(server["node_id"])
+        if not any(e["edge_type"] == "RUNS_ON" for e in edges):
+            violations.append(f"server '{server['node_id']}' has no RUNS_ON edge")
+
+    # Critical alerts must have an assigned action
+    for alert in store.query_nodes_by_type("alert"):
+        if alert["properties"].get("severity") == "critical":
+            edges = store.outgoing_edges(alert["node_id"])
+            if not any(e["edge_type"] == "ASSIGNED_TO" for e in edges):
+                violations.append(f"critical alert '{alert['node_id']}' has no ASSIGNED_TO edge")
+
+    # No decommissioned server should have active services
+    for server in store.query_nodes_by_type("server"):
+        if server["properties"].get("status") == "decommissioned":
+            edges = store.outgoing_edges(server["node_id"])
+            active_services = [e for e in edges if e["edge_type"] == "RUNS"]
+            if active_services:
+                violations.append(
+                    f"decommissioned server '{server['node_id']}' still has "
+                    f"{len(active_services)} active service(s)"
+                )
+
+    return violations
+
+# Use it
+violations = validate_graph(store)
+if violations:
+    for v in violations:
+        print(f"WARNING: {v}")
+```
+
+**With subscriptions**, you can validate on every change:
+
+```python
+def on_change(event):
+    if event["op"] in ("add_node", "add_edge", "remove_edge"):
+        violations = validate_graph(store)
+        if violations:
+            alert_operator(violations)
+
+store.subscribe(on_change)
+```
+
+**With time-travel**, you can validate historical states:
+
+```python
+snapshot = store.as_of(yesterday_ms)
+violations = validate_graph(snapshot)  # same function works on snapshots
+```
+
+**Where this sits on the ontology spectrum:**
+
+| Layer | What validates | Where it lives | Example |
+|---|---|---|---|
+| Property constraints | Single values | Silk (ontology) | `"port": {"min": 1, "max": 65535}` |
+| Class hierarchy | Type relationships | Silk (parent_type) | server is-a entity |
+| **Graph invariants** | **Cross-node rules** | **Your application** | **Every server must have RUNS_ON** |
+| Semantic reasoning | Inferred facts | External reasoner | EMPLOYS is transitive |
+
+Silk handles the first two layers. Your application handles the third. External tools (Pellet, HermiT) handle the fourth. Each layer belongs at the right level of abstraction.
+
+> **Academic context:** This maps to the RDFS/SHACL distinction. RDFS (class hierarchy) is a schema-level concern — Silk handles it. SHACL (graph-level validation) is a data-quality concern — the application handles it. OWL (reasoning) is a knowledge-inference concern — external tools handle it. Silk's position: structural contracts in the engine, domain logic in the application.
+
+---
+
 ### Why does Silk use last-writer-wins (LWW) for conflicts? Doesn't that lose data?
 
 LWW is a deliberate trade-off. Per-property LWW means: two concurrent writes to different properties on the same node both survive; two concurrent writes to the *same* property — the one with the later HLC timestamp wins, the other is silently discarded.
