@@ -6,7 +6,7 @@ Silk is an independent library. It can be used by any application that needs a d
 
 **Repository**: https://github.com/Kieleth/silk-graph
 **License**: TBD (open-source candidate)
-**Whitepaper**: Planned — documenting the Merkle-CRDT graph store design, 5-primitive domain model, and the Wisdom loop for autonomous systems.
+**Whitepaper**: Planned — documenting the Merkle-CRDT graph store design and ontology-first approach for distributed knowledge graphs.
 
 ## Research Foundation
 
@@ -114,7 +114,7 @@ Ontology
 
 The ontology itself is validated for internal consistency at creation time — all source/target types referenced in edge definitions must exist as node types. Invalid ontologies are rejected before any data can be written.
 
-**For example, a domain model** with primitives, edge grammar, and DIKW/MAPE-K alignment could define its own ontology and pass it at graph creation.
+**For example, a domain model** with typed nodes, edge grammar, and domain-specific constraints could define its own ontology and pass it at graph creation.
 
 ---
 
@@ -280,7 +280,7 @@ Built-in graph algorithms, implemented in Rust for speed:
 | Shortest path (Dijkstra / BFS) | Find path between two entities |
 | Subgraph extraction | Get all nodes/edges within N hops |
 | Impact analysis | "What is affected if server-1 goes down?" — reverse dependency traversal |
-| Pattern matching | Find all Signal → Rule → Plan → Action chains (the MAPE-K loop) |
+| Pattern matching | Find chains matching a sequence of node types (e.g., `source → processor → sink`) |
 | Topological sort | Dependency ordering for deploy sequences |
 
 For small graphs (hundreds to low thousands of nodes), all of these run in microseconds in Rust. The Python API returns results as dicts/lists — no graph library dependency on the Python side.
@@ -554,7 +554,7 @@ silk/
 │   ├── test_store_basic.py     # ── Level 1: Smoke ──
 │   ├── test_graph_ops.py       # ── Level 2: Graph CRUD ──
 │   ├── test_queries.py         # ── Level 3: Traversal + queries ──
-│   ├── test_primitives.py      #    Signal/Entity/Rule/Plan/Action
+│   ├── test_ontology_types.py   #    Domain type validation + edge grammar
 │   ├── test_sync_python.py     # ── Level 4: Two stores syncing ──
 │   ├── test_persistence.py     #    Crash recovery, rematerialization
 │   └── test_stress.py          # ── Level 5: Python stress tests ──
@@ -744,13 +744,13 @@ test_queries.py:
   ✓ traverse_bfs                         BFS from Python API
   ✓ shortest_path                        path finding from Python
   ✓ impact_analysis                      reverse dependency traversal
-  ✓ pattern_match                        find primitive chains
+  ✓ pattern_match                        find type-sequence chains
 
-test_primitives.py:
-  ✓ signal_entity_rule_plan_action      each primitive type works
-  ✓ edge_grammar_enforced               only valid edge types between primitives
-  ✓ wisdom_loop_queryable               Action → Signal → Rule chain is traversable
-  ✓ mape_k_full_cycle                   complete Monitor→Analyze→Plan→Execute cycle
+test_ontology_types.py:
+  ✓ all_declared_types_work             each ontology type can be instantiated
+  ✓ edge_grammar_enforced               only valid edge types between declared types
+  ✓ type_chain_queryable                multi-hop type chains are traversable
+  ✓ full_cycle_pattern                  complete cyclic pattern detectable
 
 test_sync_python.py:
   ✓ two_stores_sync_via_bytes           ops_since() + merge() round-trip
@@ -992,11 +992,11 @@ S-4 (Python API) ──────────────────┘
 
 **Tests written first**:
 - `test_crdt.rs`: LWW, add-wins, tombstones, commutativity, associativity, idempotency
-- `test_graph.rs`: CRUD nodes/edges, query by type/property, materialization from empty, incremental equals full, primitive type enforcement
+- `test_graph.rs`: CRUD nodes/edges, query by type/property, materialization from empty, incremental equals full, ontology type enforcement
 - `test_engine.rs`: BFS, shortest path, impact analysis, subgraph extraction, pattern matching, cycle detection
 - `pytests/test_graph_ops.py`: Python CRUD round-trips
 - `pytests/test_queries.py`: Python traversal and queries
-- `pytests/test_primitives.py`: 5 primitive types, edge grammar, wisdom loop queryable
+- `pytests/test_ontology_types.py`: declared types, edge grammar, type-chain traversal
 - `stress/test_large_graph.rs`: 10k/100k nodes, algorithm performance
 - `bench_graph.rs` + `bench_engine.rs`: query latency baselines
 
@@ -1090,8 +1090,8 @@ Bottom-up aggregate TDD with 5-level hierarchical testing.
 
 ## Decisions Log
 
-### D-001: 5 Primitives — Signal, Entity, Rule, Plan, Action (Example Ontology)
-An example domain model, not a Silk engine feature. Any application defines its own ontology. This example uses 5 primitives for a DevOps domain: Signal (something observed), Entity (something that exists), Rule (a condition), Plan (a course of action), Action (something executed).
+### D-001: Application-Defined Ontology (Example)
+Silk has no built-in node or edge types. Applications define their own ontology at graph creation. See D-012 for the full design.
 
 ### D-002: Rust + PyO3
 Rust core, Python API via PyO3/maturin. Same pattern as pydantic-core, polars, tiktoken. Memory safety, fearless concurrency, low FFI overhead.
@@ -1103,13 +1103,7 @@ Rust core, Python API via PyO3/maturin. Same pattern as pydantic-core, polars, t
 Schemaless, compact, Serde integration. No codegen, no schema files. For sub-KB messages, zero-copy deserialization is irrelevant.
 
 ### D-005: Full PostgreSQL Replacement
-Silk replaces PostgreSQL entirely. Events → op log. Projections → materialized graph. KG → native. Queue → graph transitions. SSE → subscriptions. Four current architectural gaps (metrics, exceptions, alert_rules, deploy_logs bypassing the event store) are eliminated.
-
-### D-006: Action is Information, Not Knowledge
-A domain modeling decision. Actions represent executed operations (Information tier in DIKW), not derived Knowledge.
-
-### D-007: Wisdom is Enacted, Not Stored
-A domain modeling decision. Wisdom emerges from the system's behavior (rule evaluation, plan selection), not from stored data.
+Silk replaces PostgreSQL entirely. Events → op log. Projections → materialized graph. KG → native. Queue → graph transitions. SSE → subscriptions.
 
 ### D-008: TDD — Tests Are the Specification
 Every feature is test-first. Tests grow in five levels of complexity: unit → component → integration → stress → Docker scenarios. If it's not tested, it doesn't exist. The test suite IS the specification of correct behavior. Convergence, commutativity, associativity, idempotency, causality, integrity, persistence, recovery, and liveness are all mechanically verified.
@@ -1126,7 +1120,7 @@ Silk has no built-in node types or edge types. The ontology is defined by the co
 1. **Ontology is immutable** — defined once at genesis, locked forever. No migration, no versioning. Changing the rules mid-game invalidates all prior state. Do your research before committing. This guarantees system integrity.
 2. **Connection constraints are strict** — edge types enforce exactly which node types can be source/target. Like Conway's Game of Life: simple, fixed rules create complex emergent behavior. The rules define the space of possible interactions; complexity emerges from the data, not from evolving the rules.
 
-Previous design (D-001) hardcoded `NodeType` as a Rust enum with 5 DevOps variants. This was removed. `node_type` is now a `String` validated against the ontology. Edge types were already strings. The `NodeType` enum was deleted; `ontology.rs` was added with `Ontology`, `NodeTypeDef`, `EdgeTypeDef`, `PropertyDef`, and `ValueType` structs plus full validation logic.
+Early prototypes hardcoded node types as a Rust enum. This was removed. `node_type` is now a `String` validated against the ontology. Edge types were already strings. `ontology.rs` was added with `Ontology`, `NodeTypeDef`, `EdgeTypeDef`, `PropertyDef`, and `ValueType` structs plus full validation logic.
 
 This separation enables Silk to be used in any domain: DevOps, biology, supply chain, social networks, knowledge management — each defines its own ontology. Silk enforces it.
 
@@ -1288,7 +1282,7 @@ Silk gains a second store type: `ObservationLog`. While `GraphStore` embodies th
 **Why not use GraphStore?**: Three reasons from production experience:
 1. **C-099 (store bloat)**: An 11MB GraphStore caused 100% CPU on boot. The Merkle-DAG oplog grows monotonically — entries can't be deleted without breaking hash chains. Observations at 60s cadence would bloat the oplog by ~10M entries/day at scale.
 2. **CRDT sync overhead**: Every GraphStore entry syncs to all fleet peers. Raw observations are local — "server-7 CPU was 47%" doesn't need to be on server-3.
-3. **SA-001 (DIKW filter)**: The KG stores Knowledge and Wisdom. Raw observations are Data. Mixing them violates the fundamental design principle.
+3. **SA-001 (separation of concerns)**: The KG stores derived, validated facts. Raw observations are unprocessed data. Mixing them violates the fundamental design principle.
 
 **Why not an external system (Kafka, NATS, SQLite)?**: Zero external dependencies for core operations. The observation layer must survive everything the KG survives — Docker crashes, network partitions, disk pressure. Adding a Go binary (NATS) or JVM (Kafka) creates unnecessary dependencies. SQLite via Python stdlib would work but splits persistence across two engines (redb + SQLite).
 
@@ -1310,7 +1304,7 @@ ObservationLog (observations.redb)
 
 **Scale target**: 100 servers, 1200 projects, ~10M observations/day, ~1GB/day with 24h retention. redb handles this comfortably (B-tree, ACID, single-file).
 
-**Hierarchical federation**: Observations never leave the fleet. Only Signals (derived from observations by the detection layer) flow UP to parent instances. This is the DIKW filter applied to the network topology.
+**Hierarchical federation**: Observations never leave the fleet. Only derived events (produced by the detection layer from raw observations) flow UP to parent instances. Raw data stays local; only processed results propagate.
 
 **Kreps' duality in Silk terms**: "If you have a log of changes, you can apply these changes to create a table." The ObservationLog is the raw change stream. The GraphStore's Signals are the materialized "table" of significant events. The detection layer is the stream processor.
 
@@ -1391,4 +1385,4 @@ Any Silk consumer could use ObservationLog for time-series data, audit trails, o
 
 ---
 
-*Research conducted: 2026-03-14. Based on Merkle-CRDTs (Sanjuán et al., 2020), MAPE-K (Kephart & Chess, 2003), DIKW (Zeleny 1987, Ackoff 1989), and analysis of OrbitDB, Automerge, cr-sqlite, TerminusDB, Ditto implementations. Subscription research: 2026-03-16, based on SQLite, RocksDB, Y.js, Automerge, OrbitDB, Neo4j CDC. Subtypes research: 2026-03-16, based on Google KG, Wikidata, BFO (ISO/IEC 21838-2), Neo4j, categorial grammar (Ajdukiewicz/Lambek), graph grammars (Rozenberg/Ehrig).*
+*Research conducted: 2026-03-14. Based on Merkle-CRDTs (Sanjuán et al., 2020) and analysis of OrbitDB, Automerge, cr-sqlite, TerminusDB, Ditto implementations. Subscription research: 2026-03-16, based on SQLite, RocksDB, Y.js, Automerge, OrbitDB, Neo4j CDC. Subtypes research: 2026-03-16, based on Google KG, Wikidata, BFO (ISO/IEC 21838-2), Neo4j, categorial grammar (Ajdukiewicz/Lambek), graph grammars (Rozenberg/Ehrig).*

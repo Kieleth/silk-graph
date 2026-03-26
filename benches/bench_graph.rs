@@ -267,7 +267,7 @@ fn impact_analysis_bench(c: &mut Criterion) {
 }
 
 /// Measures pattern_match with a 2-type sequence ("entity" -> "signal").
-/// Pattern matching is how Silk finds structural motifs (e.g., MAPE-K loops)
+/// Pattern matching is how Silk finds structural motifs (type-sequence chains)
 /// in the knowledge graph.
 fn pattern_match_bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("pattern_match");

@@ -170,7 +170,7 @@ pub fn subgraph(graph: &MaterializedGraph, start: &str, hops: usize) -> (Vec<Str
 }
 
 /// Pattern match: find chains matching a sequence of node types connected by edges.
-/// E.g., `["signal", "rule", "plan", "action"]` finds all MAPE-K loops.
+/// E.g., `["source", "processor", "sink"]` finds all matching chains.
 /// Returns list of chains, each chain being a list of node_ids.
 /// Find chains of nodes matching a type sequence (e.g., `["signal", "rule", "plan"]`).
 ///

@@ -235,7 +235,7 @@ This means your application can evolve its data model without touching the ontol
 
 ## Architecture
 
-For the full architectural overview — research foundations (Merkle-CRDTs, Delta-state CRDTs, MAPE-K), design principles, and 28 design decisions (D-001–D-028) plus 8 roadmap items (R-01–R-08) — see [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md).
+For the full architectural overview — research foundations (Merkle-CRDTs, Delta-state CRDTs), design principles, and 28 design decisions (D-001–D-028) plus 8 roadmap items (R-01–R-08) — see [DESIGN.md](https://github.com/Kieleth/silk-graph/blob/main/DESIGN.md).
 
 ```
 Write (add_node, add_edge, update_property)

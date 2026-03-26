@@ -1,7 +1,7 @@
 """Tests for Silk subtype support (D-024).
 
-Subtypes allow coarse node types (e.g., 5 primitives) with per-subtype
-property definitions. Edge constraints reference top-level types only.
+Subtypes allow coarse node types with per-subtype property definitions.
+Edge constraints reference top-level types only.
 Backward compatible: types without subtypes work exactly as before.
 """
 
@@ -14,7 +14,7 @@ from silk import GraphStore
 
 
 def _ontology_with_subtypes():
-    """5-primitive-style ontology with subtypes."""
+    """Multi-type ontology with subtypes."""
     return {
         "node_types": {
             "entity": {
