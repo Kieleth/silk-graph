@@ -252,3 +252,177 @@ def test_update_property_float_range_rejected():
     store.add_node("s1", "server", "S", {"status": "active", "cpu_percent": 50.0})
     with pytest.raises(ValueError, match="max"):
         store.update_property("s1", "cpu_percent", 101.0)
+
+
+# -- Pattern constraint --
+
+
+def _store_with_pattern():
+    return GraphStore("test", {
+        "node_types": {
+            "project": {
+                "properties": {
+                    "slug": {
+                        "value_type": "string",
+                        "required": True,
+                        "constraints": {"pattern": "^[a-z0-9-]+$"}
+                    }
+                }
+            }
+        },
+        "edge_types": {}
+    })
+
+
+def test_pattern_valid():
+    store = _store_with_pattern()
+    store.add_node("p1", "project", "P", {"slug": "my-project-1"})
+    assert store.get_node("p1")["properties"]["slug"] == "my-project-1"
+
+
+def test_pattern_rejects_uppercase():
+    store = _store_with_pattern()
+    with pytest.raises(ValueError, match="pattern"):
+        store.add_node("p1", "project", "P", {"slug": "My-Project"})
+
+
+def test_pattern_rejects_spaces():
+    store = _store_with_pattern()
+    with pytest.raises(ValueError, match="pattern"):
+        store.add_node("p1", "project", "P", {"slug": "has space"})
+
+
+def test_pattern_rejects_underscore():
+    store = _store_with_pattern()
+    with pytest.raises(ValueError, match="pattern"):
+        store.add_node("p1", "project", "P", {"slug": "has_underscore"})
+
+
+def test_pattern_update_property_rejected():
+    store = _store_with_pattern()
+    store.add_node("p1", "project", "P", {"slug": "valid-slug"})
+    with pytest.raises(ValueError, match="pattern"):
+        store.update_property("p1", "slug", "INVALID SLUG!")
+
+
+# -- String length constraints --
+
+
+def _store_with_length():
+    return GraphStore("test", {
+        "node_types": {
+            "item": {
+                "properties": {
+                    "name": {
+                        "value_type": "string",
+                        "constraints": {"min_length": 1, "max_length": 50}
+                    }
+                }
+            }
+        },
+        "edge_types": {}
+    })
+
+
+def test_length_valid():
+    store = _store_with_length()
+    store.add_node("n1", "item", "I", {"name": "hello"})
+    assert store.get_node("n1")["properties"]["name"] == "hello"
+
+
+def test_length_min_boundary():
+    store = _store_with_length()
+    store.add_node("n1", "item", "I", {"name": "x"})
+    assert store.get_node("n1") is not None
+
+
+def test_length_max_boundary():
+    store = _store_with_length()
+    store.add_node("n1", "item", "I", {"name": "x" * 50})
+    assert store.get_node("n1") is not None
+
+
+def test_length_empty_rejected():
+    store = _store_with_length()
+    with pytest.raises(ValueError, match="min_length"):
+        store.add_node("n1", "item", "I", {"name": ""})
+
+
+def test_length_too_long_rejected():
+    store = _store_with_length()
+    with pytest.raises(ValueError, match="max_length"):
+        store.add_node("n1", "item", "I", {"name": "x" * 51})
+
+
+# -- Exclusive range constraints --
+
+
+def _store_with_exclusive():
+    return GraphStore("test", {
+        "node_types": {
+            "metric": {
+                "properties": {
+                    "score": {
+                        "value_type": "float",
+                        "constraints": {"min_exclusive": 0.0, "max_exclusive": 100.0}
+                    }
+                }
+            }
+        },
+        "edge_types": {}
+    })
+
+
+def test_exclusive_valid():
+    store = _store_with_exclusive()
+    store.add_node("m1", "metric", "M", {"score": 50.0})
+    assert store.get_node("m1")["properties"]["score"] == 50.0
+
+
+def test_exclusive_min_boundary_rejected():
+    """min_exclusive: 0.0 rejects exactly 0.0"""
+    store = _store_with_exclusive()
+    with pytest.raises(ValueError, match="min_exclusive"):
+        store.add_node("m1", "metric", "M", {"score": 0.0})
+
+
+def test_exclusive_max_boundary_rejected():
+    """max_exclusive: 100.0 rejects exactly 100.0"""
+    store = _store_with_exclusive()
+    with pytest.raises(ValueError, match="max_exclusive"):
+        store.add_node("m1", "metric", "M", {"score": 100.0})
+
+
+def test_exclusive_just_above_min():
+    store = _store_with_exclusive()
+    store.add_node("m1", "metric", "M", {"score": 0.001})
+    assert store.get_node("m1") is not None
+
+
+def test_exclusive_just_below_max():
+    store = _store_with_exclusive()
+    store.add_node("m1", "metric", "M", {"score": 99.999})
+    assert store.get_node("m1") is not None
+
+
+def test_exclusive_int_also_works():
+    """Exclusive bounds work on int values too."""
+    store = GraphStore("test", {
+        "node_types": {
+            "item": {
+                "properties": {
+                    "priority": {
+                        "value_type": "int",
+                        "constraints": {"min_exclusive": 0, "max_exclusive": 10}
+                    }
+                }
+            }
+        },
+        "edge_types": {}
+    })
+    store.add_node("n1", "item", "I", {"priority": 5})
+    assert store.get_node("n1") is not None
+    with pytest.raises(ValueError, match="min_exclusive"):
+        store.add_node("n2", "item", "I", {"priority": 0})
+    with pytest.raises(ValueError, match="max_exclusive"):
+        store.add_node("n3", "item", "I", {"priority": 10})
