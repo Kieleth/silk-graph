@@ -162,6 +162,9 @@ store.merge_sync_payload(&payload)?;
 - SQL queries — use SQLite or Postgres
 - Document storage — use MongoDB or CouchDB
 - Blob storage — use S3
+- Large graphs (>100K nodes) where peers need different subsets — Silk replicates the full graph to every peer
+- Untrusted/open peer networks — Silk assumes non-malicious peers (see Trust Model below)
+- Rich semantic reasoning (OWL inference, transitivity) — Silk validates structure, not semantics
 
 ## Trust Model
 

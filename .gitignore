@@ -10,3 +10,6 @@ __pycache__/
 dist/
 /.venv/
 /venv/
+
+# Internal review docs — not for public repo
+REVIEW*.md
