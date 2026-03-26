@@ -172,7 +172,7 @@ pub fn subgraph(graph: &MaterializedGraph, start: &str, hops: usize) -> (Vec<Str
 /// Pattern match: find chains matching a sequence of node types connected by edges.
 /// E.g., `["source", "processor", "sink"]` finds all matching chains.
 /// Returns list of chains, each chain being a list of node_ids.
-/// Find chains of nodes matching a type sequence (e.g., `["signal", "rule", "plan"]`).
+/// Find chains of nodes matching a type sequence (e.g., `["source", "processor", "sink"]`).
 ///
 /// Complexity: O(n * b^d) where n = nodes of first type, b = average branching,
 /// d = sequence length. Bounded by `max_results` to prevent runaway expansion on
@@ -295,7 +295,7 @@ mod tests {
                     },
                 ),
                 (
-                    "signal".into(),
+                    "source".into(),
                     NodeTypeDef {
                         description: None,
                         properties: BTreeMap::new(),
@@ -303,7 +303,7 @@ mod tests {
                     },
                 ),
                 (
-                    "rule".into(),
+                    "processor".into(),
                     NodeTypeDef {
                         description: None,
                         properties: BTreeMap::new(),
@@ -311,7 +311,7 @@ mod tests {
                     },
                 ),
                 (
-                    "plan".into(),
+                    "queue".into(),
                     NodeTypeDef {
                         description: None,
                         properties: BTreeMap::new(),
@@ -319,7 +319,7 @@ mod tests {
                     },
                 ),
                 (
-                    "action".into(),
+                    "sink".into(),
                     NodeTypeDef {
                         description: None,
                         properties: BTreeMap::new(),
@@ -338,20 +338,20 @@ mod tests {
                     },
                 ),
                 (
-                    "TRIGGERS".into(),
+                    "FEEDS".into(),
                     EdgeTypeDef {
                         description: None,
-                        source_types: vec!["signal".into()],
-                        target_types: vec!["rule".into()],
+                        source_types: vec!["source".into()],
+                        target_types: vec!["processor".into()],
                         properties: BTreeMap::new(),
                     },
                 ),
                 (
-                    "PRODUCES".into(),
+                    "ROUTES".into(),
                     EdgeTypeDef {
                         description: None,
-                        source_types: vec!["rule".into(), "plan".into(), "action".into()],
-                        target_types: vec!["plan".into(), "action".into(), "signal".into()],
+                        source_types: vec!["processor".into(), "queue".into(), "sink".into()],
+                        target_types: vec!["queue".into(), "sink".into(), "source".into()],
                         properties: BTreeMap::new(),
                     },
                 ),
@@ -484,19 +484,19 @@ mod tests {
     }
 
     #[test]
-    fn pattern_match_mape_k_loop() {
+    fn pattern_match_type_chain() {
         let mut g = MaterializedGraph::new(test_ontology());
-        g.apply(&add_node("sig1", "signal", 1));
-        g.apply(&add_node("rule1", "rule", 2));
-        g.apply(&add_node("plan1", "plan", 3));
-        g.apply(&add_node("act1", "action", 4));
-        g.apply(&add_edge("e1", "TRIGGERS", "sig1", "rule1", 5));
-        g.apply(&add_edge("e2", "PRODUCES", "rule1", "plan1", 6));
-        g.apply(&add_edge("e3", "PRODUCES", "plan1", "act1", 7));
+        g.apply(&add_node("src1", "source", 1));
+        g.apply(&add_node("proc1", "processor", 2));
+        g.apply(&add_node("q1", "queue", 3));
+        g.apply(&add_node("snk1", "sink", 4));
+        g.apply(&add_edge("e1", "FEEDS", "src1", "proc1", 5));
+        g.apply(&add_edge("e2", "ROUTES", "proc1", "q1", 6));
+        g.apply(&add_edge("e3", "ROUTES", "q1", "snk1", 7));
 
-        let chains = pattern_match(&g, &["signal", "rule", "plan", "action"], 1000);
+        let chains = pattern_match(&g, &["source", "processor", "queue", "sink"], 1000);
         assert_eq!(chains.len(), 1);
-        assert_eq!(chains[0], vec!["sig1", "rule1", "plan1", "act1"]);
+        assert_eq!(chains[0], vec!["src1", "proc1", "q1", "snk1"]);
     }
 
     #[test]

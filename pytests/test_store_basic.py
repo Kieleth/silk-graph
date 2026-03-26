@@ -8,46 +8,46 @@ from silk import GraphStore
 
 # -- Ontology fixtures -------------------------------------------------------
 
-DEVOPS_ONTOLOGY = json.dumps(
+SAMPLE_ONTOLOGY = json.dumps(
     {
         "node_types": {
-            "signal": {
-                "description": "Something observed",
+            "alert": {
+                "description": "A notification event",
                 "properties": {
                     "severity": {"value_type": "string", "required": True},
                 },
             },
-            "entity": {
-                "description": "Something that exists",
+            "server": {
+                "description": "A compute resource",
                 "properties": {
                     "ip": {"value_type": "string", "required": False},
                     "port": {"value_type": "int", "required": False},
                     "status": {"value_type": "string", "required": False},
                 },
             },
-            "rule": {"properties": {}},
-            "plan": {"properties": {}},
-            "action": {"properties": {}},
+            "service": {"properties": {}},
+            "config": {"properties": {}},
+            "deployment": {"properties": {}},
         },
         "edge_types": {
-            "OBSERVES": {
-                "source_types": ["signal"],
-                "target_types": ["entity"],
+            "MONITORS": {
+                "source_types": ["alert"],
+                "target_types": ["server"],
                 "properties": {},
             },
-            "TRIGGERS": {
-                "source_types": ["signal"],
-                "target_types": ["rule"],
+            "NOTIFIES": {
+                "source_types": ["alert"],
+                "target_types": ["service"],
                 "properties": {},
             },
             "RUNS_ON": {
-                "source_types": ["entity"],
-                "target_types": ["entity"],
+                "source_types": ["server"],
+                "target_types": ["server"],
                 "properties": {},
             },
-            "PRODUCES": {
-                "source_types": ["action"],
-                "target_types": ["signal"],
+            "DEPLOYS": {
+                "source_types": ["deployment"],
+                "target_types": ["alert"],
                 "properties": {},
             },
         },
@@ -75,20 +75,20 @@ MINIMAL_ONTOLOGY = json.dumps(
 
 class TestGenesis:
     def test_store_starts_with_genesis(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
         assert store.len() == 1  # genesis entry
         assert len(store.heads()) == 1
         ct = store.clock_time()
         assert isinstance(ct, tuple) and len(ct) == 2  # (physical_ms, logical)
 
     def test_genesis_contains_ontology(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
         genesis_hash = store.heads()[0]
         entry = store.get(genesis_hash)
         payload = json.loads(entry["payload"])
         assert payload["op"] == "define_ontology"
-        assert "signal" in payload["ontology"]["node_types"]
-        assert "OBSERVES" in payload["ontology"]["edge_types"]
+        assert "alert" in payload["ontology"]["node_types"]
+        assert "MONITORS" in payload["ontology"]["edge_types"]
 
     def test_invalid_ontology_json_raises(self):
         with pytest.raises(ValueError, match="invalid ontology JSON"):
@@ -111,20 +111,20 @@ class TestGenesis:
             GraphStore("node-a", bad)
 
     def test_ontology_json_roundtrip(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
         recovered = json.loads(store.ontology_json())
-        assert "signal" in recovered["node_types"]
-        assert "OBSERVES" in recovered["edge_types"]
+        assert "alert" in recovered["node_types"]
+        assert "MONITORS" in recovered["edge_types"]
 
     def test_node_type_names(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
         names = store.node_type_names()
-        assert set(names) == {"signal", "entity", "rule", "plan", "action"}
+        assert set(names) == {"alert", "server", "service", "config", "deployment"}
 
     def test_edge_type_names(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
         names = store.edge_type_names()
-        assert set(names) == {"OBSERVES", "TRIGGERS", "RUNS_ON", "PRODUCES"}
+        assert set(names) == {"MONITORS", "NOTIFIES", "RUNS_ON", "DEPLOYS"}
 
 
 # -- Node validation tests ---------------------------------------------------
@@ -132,44 +132,44 @@ class TestGenesis:
 
 class TestNodeValidation:
     def test_add_valid_node(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        h = store.add_node("srv-1", "entity", "Server", {"ip": "10.0.0.1"})
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        h = store.add_node("srv-1", "server", "Server", {"ip": "10.0.0.1"})
         assert len(h) == 64
         assert store.len() == 2  # genesis + node
 
     def test_add_node_unknown_type_rejected(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
         with pytest.raises(ValueError, match="unknown node type"):
             store.add_node("x", "potato", "Bad")
 
     def test_add_node_missing_required_property(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
         with pytest.raises(ValueError, match="requires property"):
-            store.add_node("s1", "signal", "Alert")  # missing severity
+            store.add_node("a1", "alert", "Alert")  # missing severity
 
     def test_add_node_wrong_property_type(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
         with pytest.raises(ValueError, match="expects"):
-            store.add_node("s1", "signal", "Alert", {"severity": 42})  # int, not string
+            store.add_node("a1", "alert", "Alert", {"severity": 42})  # int, not string
 
     def test_add_node_unknown_property_accepted(self):
         """D-026: unknown properties are accepted without validation."""
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        store.add_node("s1", "signal", "Alert", {"severity": "high", "bogus": True})
-        node = store.get_node("s1")
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        store.add_node("a1", "alert", "Alert", {"severity": "high", "bogus": True})
+        node = store.get_node("a1")
         assert node["properties"]["bogus"] is True
 
     def test_add_node_optional_property_absent(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        h = store.add_node("srv-1", "entity", "Server")  # ip/port/status all optional
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        h = store.add_node("srv-1", "server", "Server")  # ip/port/status all optional
         assert len(h) == 64
 
     def test_add_all_ontology_node_types(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        for nt in ("entity", "rule", "plan", "action"):
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        for nt in ("server", "service", "config", "deployment"):
             h = store.add_node(f"n-{nt}", nt, f"Test {nt}")
             assert len(h) == 64
-        h = store.add_node("n-signal", "signal", "Alert", {"severity": "low"})
+        h = store.add_node("n-alert", "alert", "Alert", {"severity": "low"})
         assert len(h) == 64
 
 
@@ -178,44 +178,44 @@ class TestNodeValidation:
 
 class TestEdgeValidation:
     def test_add_valid_edge(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        store.add_node("svc-1", "entity", "Service")
-        store.add_node("srv-1", "entity", "Server")
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        store.add_node("svc-1", "server", "Server A")
+        store.add_node("srv-1", "server", "Server B")
         h = store.add_edge("e1", "RUNS_ON", "svc-1", "srv-1")
         assert len(h) == 64
 
     def test_add_edge_unknown_type_rejected(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        store.add_node("a", "entity", "A")
-        store.add_node("b", "entity", "B")
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        store.add_node("a", "server", "A")
+        store.add_node("b", "server", "B")
         with pytest.raises(ValueError, match="unknown edge type"):
             store.add_edge("e1", "FLIES_TO", "a", "b")
 
     def test_add_edge_invalid_source_type(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        store.add_node("srv", "entity", "Server")
-        store.add_node("rule", "rule", "Rule")
-        # OBSERVES requires source=signal, not entity
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        store.add_node("srv", "server", "Server")
+        store.add_node("svc", "service", "Service")
+        # MONITORS requires source=alert, not server
         with pytest.raises(ValueError, match="cannot have source type"):
-            store.add_edge("e1", "OBSERVES", "srv", "rule")
+            store.add_edge("e1", "MONITORS", "srv", "svc")
 
     def test_add_edge_invalid_target_type(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        store.add_node("sig", "signal", "Alert", {"severity": "high"})
-        store.add_node("act", "action", "Deploy")
-        # OBSERVES requires target=entity, not action
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        store.add_node("a1", "alert", "Alert", {"severity": "high"})
+        store.add_node("dep", "deployment", "Deploy")
+        # MONITORS requires target=server, not deployment
         with pytest.raises(ValueError, match="cannot have target type"):
-            store.add_edge("e1", "OBSERVES", "sig", "act")
+            store.add_edge("e1", "MONITORS", "a1", "dep")
 
     def test_add_edge_source_not_found(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        store.add_node("srv", "entity", "Server")
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        store.add_node("srv", "server", "Server")
         with pytest.raises(ValueError, match="source node.*not found"):
             store.add_edge("e1", "RUNS_ON", "ghost", "srv")
 
     def test_add_edge_target_not_found(self):
-        store = GraphStore("node-a", DEVOPS_ONTOLOGY)
-        store.add_node("srv", "entity", "Server")
+        store = GraphStore("node-a", SAMPLE_ONTOLOGY)
+        store.add_node("srv", "server", "Server")
         with pytest.raises(ValueError, match="target node.*not found"):
             store.add_edge("e1", "RUNS_ON", "srv", "ghost")
 

@@ -10,10 +10,10 @@ ONTOLOGY = json.dumps(
     {
         "node_types": {
             "entity": {"properties": {"status": {"value_type": "string", "required": False}}},
-            "signal": {"properties": {}},
-            "rule": {"properties": {}},
-            "plan": {"properties": {}},
-            "action": {"properties": {}},
+            "source": {"properties": {}},
+            "processor": {"properties": {}},
+            "queue": {"properties": {}},
+            "sink": {"properties": {}},
         },
         "edge_types": {
             "DEPENDS_ON": {
@@ -21,14 +21,14 @@ ONTOLOGY = json.dumps(
                 "target_types": ["entity"],
                 "properties": {},
             },
-            "TRIGGERS": {
-                "source_types": ["signal"],
-                "target_types": ["rule"],
+            "FEEDS": {
+                "source_types": ["source"],
+                "target_types": ["processor"],
                 "properties": {},
             },
-            "PRODUCES": {
-                "source_types": ["rule", "plan", "action"],
-                "target_types": ["plan", "action", "signal"],
+            "ROUTES": {
+                "source_types": ["processor", "queue", "sink"],
+                "target_types": ["queue", "sink", "source"],
                 "properties": {},
             },
         },
@@ -179,16 +179,16 @@ class TestEngine:
 
     def test_pattern_match(self):
         store = GraphStore("inst-1", ONTOLOGY)
-        store.add_node("sig1", "signal", "Alert")
-        store.add_node("rule1", "rule", "Rule 1")
-        store.add_node("plan1", "plan", "Plan 1")
-        store.add_node("act1", "action", "Action 1")
-        store.add_edge("e1", "TRIGGERS", "sig1", "rule1")
-        store.add_edge("e2", "PRODUCES", "rule1", "plan1")
-        store.add_edge("e3", "PRODUCES", "plan1", "act1")
-        chains = store.pattern_match(["signal", "rule", "plan", "action"])
+        store.add_node("src1", "source", "Data Source")
+        store.add_node("proc1", "processor", "Processor 1")
+        store.add_node("q1", "queue", "Queue 1")
+        store.add_node("snk1", "sink", "Sink 1")
+        store.add_edge("e1", "FEEDS", "src1", "proc1")
+        store.add_edge("e2", "ROUTES", "proc1", "q1")
+        store.add_edge("e3", "ROUTES", "q1", "snk1")
+        chains = store.pattern_match(["source", "processor", "queue", "sink"])
         assert len(chains) == 1
-        assert chains[0] == ["sig1", "rule1", "plan1", "act1"]
+        assert chains[0] == ["src1", "proc1", "q1", "snk1"]
 
     def test_topological_sort(self):
         store = self._build_chain()

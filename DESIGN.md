@@ -77,10 +77,10 @@ This separation makes Silk usable in any domain: DevOps, biology, supply chain, 
 ```
 Silk (engine)                    Your App (domain ontology)
 ┌──────────────────────┐        ┌──────────────────────────┐
-│ Ontology enforcement │◄───────│ signal, entity, rule,    │
-│ Merkle-DAG           │        │ plan, action             │
-│ BLAKE3 hashing       │        │ OBSERVES, TRIGGERS,      │
-│ Hybrid Logical Clocks│        │ RUNS_ON, PRODUCES...     │
+│ Ontology enforcement │◄───────│ server, service, alert,  │
+│ Merkle-DAG           │        │ config, deployment       │
+│ BLAKE3 hashing       │        │ MONITORS, RUNS_ON,       │
+│ Hybrid Logical Clocks│        │ DEPLOYS, NOTIFIES...     │
 │ CRDT sync            │        └──────────────────────────┘
 │                      │
 │ No domain knowledge  │        Any other domain
@@ -405,12 +405,12 @@ The op log is the source of truth. Everything else is derived and recoverable.
 | `events` table (append-only) | Merkle-DAG op log | Same concept: append-only source of truth. Content-addressed instead of sequential. |
 | 18 `*_view` projections | Materialized graph | Derived from op log. Incrementally updated. Same pattern, different engine. |
 | `graph_nodes_view` + `graph_edges_view` | The graph IS the primary model | No separate KG projection — the graph is native. |
-| `work_queue_view` (SKIP LOCKED) | Ops with claim semantics | Plan → Action transition with fencing tokens for singleton claims. |
+| `work_queue_view` (SKIP LOCKED) | Ops with claim semantics | Deployment transitions with fencing tokens for singleton claims. |
 | `LISTEN/NOTIFY` for SSE | Local subscription callbacks | `store.subscribe(callback)` — notified on every new op. |
 | `metrics` table (PRIMARY) | Signal nodes in the graph | Metrics become Signal nodes with properties {name, value, timestamp}. Time-series queries via graph traversal with time-range filters. |
 | `exceptions` table (PRIMARY) | Signal nodes in the graph | Exceptions become Signal nodes with properties {type, message, stacktrace}. |
 | `alert_rules` table (PRIMARY) | Rule nodes in the graph | Alert rules become first-class Rule entities. Event-sourced via Silk ops. No more CRUD bypass. |
-| `deploy_logs` table (PRIMARY) | Signal nodes linked to Action | Deploy log lines become Signals, edges link them to the deploy Action. No more direct psql writes from bash scripts. |
+| `deploy_logs` table (PRIMARY) | Alert nodes linked to Deployment | Deploy log lines become alerts, edges link them to the deployment. No more direct psql writes from bash scripts. |
 | `retention_settings` | Graph property on a config Entity | Configuration as data in the graph. |
 | `alembic_version` | Not needed | No schema migrations — the graph ontology is immutable. New graphs get new ontologies. |
 
@@ -434,34 +434,34 @@ from silk import GraphStore
 # Define the ontology — the vocabulary for this graph
 ontology = json.dumps({
     "node_types": {
-        "signal": {
-            "description": "Something observed",
+        "alert": {
+            "description": "A notification event",
             "properties": {
                 "severity": {"value_type": "string", "required": True},
             },
         },
-        "entity": {
-            "description": "Something that exists",
+        "server": {
+            "description": "A compute resource",
             "properties": {
                 "ip": {"value_type": "string"},
                 "status": {"value_type": "string"},
             },
         },
-        "rule": {"properties": {}},
-        "plan": {"properties": {}},
-        "action": {"properties": {}},
+        "service": {"properties": {}},
+        "config": {"properties": {}},
+        "deployment": {"properties": {}},
     },
     "edge_types": {
-        "OBSERVES": {
-            "source_types": ["signal"], "target_types": ["entity"],
+        "MONITORS": {
+            "source_types": ["alert"], "target_types": ["server"],
             "properties": {},
         },
         "RUNS_ON": {
-            "source_types": ["entity"], "target_types": ["entity"],
+            "source_types": ["server"], "target_types": ["server"],
             "properties": {},
         },
-        "GUARDS": {
-            "source_types": ["rule"], "target_types": ["entity"],
+        "APPLIES_TO": {
+            "source_types": ["config"], "target_types": ["server"],
             "properties": {},
         },
     },
@@ -471,18 +471,18 @@ ontology = json.dumps({
 store = GraphStore("instance-a", ontology)
 
 # Graph mutations (each creates a Merkle-DAG entry, validated against ontology)
-store.add_node("server-1", "entity", "Production Server", {"ip": "192.168.1.100", "status": "alive"})
-store.add_node("api-svc", "entity", "API Service")
-store.add_edge("e1", "RUNS_ON", "api-svc", "server-1")
+store.add_node("server-1", "server", "Production Server", {"ip": "192.168.1.100", "status": "alive"})
+store.add_node("api-svc", "service", "API Service")
+store.add_edge("e1", "RUNS_ON", "server-1", "server-1")
 
 # Ontology enforcement: invalid operations are rejected
 store.add_node("x", "potato", "Bad")              # ValueError: unknown node type
-store.add_node("s1", "signal", "Alert")            # ValueError: requires property 'severity'
-store.add_edge("e2", "OBSERVES", "server-1", "api-svc")  # ValueError: cannot have source type 'entity'
+store.add_node("a1", "alert", "Alert")             # ValueError: requires property 'severity'
+store.add_edge("e2", "MONITORS", "server-1", "api-svc")  # ValueError: cannot have target type 'service'
 
 # Introspection
-store.node_type_names()  # ["action", "entity", "plan", "rule", "signal"]
-store.edge_type_names()  # ["GUARDS", "OBSERVES", "RUNS_ON"]
+store.node_type_names()  # ["alert", "config", "deployment", "server", "service"]
+store.edge_type_names()  # ["APPLIES_TO", "MONITORS", "RUNS_ON"]
 store.ontology_json()    # full ontology as JSON string
 
 # DAG structure
@@ -685,7 +685,7 @@ test_engine.rs:
   ✓ shortest_path_no_path              disconnected nodes → None
   ✓ impact_analysis_reverse_traversal  reverse deps from node
   ✓ subgraph_extraction                 extract N-hop neighborhood
-  ✓ pattern_match_mape_k_loop          find Signal→Rule→Plan→Action chains
+  ✓ pattern_match_type_chain            find type-sequence chains (e.g., source→processor→sink)
   ✓ topological_sort_dependency_order   deploy order respects deps
   ✓ cycle_detection                     detects and reports graph cycles
 
