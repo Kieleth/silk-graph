@@ -54,6 +54,53 @@ Edge properties ([D-026: open properties](https://github.com/Kieleth/silk-graph/
 
 ---
 
+### Does Silk support class hierarchies or type inheritance?
+
+Yes. Use `parent_type` on node types to declare is-a relationships:
+
+```python
+store = GraphStore("inst-1", {
+    "node_types": {
+        "thing": {"properties": {"name": {"value_type": "string", "required": True}}},
+        "entity": {
+            "parent_type": "thing",
+            "properties": {"status": {"value_type": "string"}}
+        },
+        "server": {
+            "parent_type": "entity",
+            "properties": {"ip": {"value_type": "string"}}
+        }
+    },
+    "edge_types": {
+        "MONITORS": {
+            "source_types": ["thing"],    # accepts thing, entity, server
+            "target_types": ["entity"],   # accepts entity, server
+            "properties": {}
+        }
+    }
+})
+
+store.add_node("s1", "server", "Web", {"name": "web-01", "ip": "10.0.0.1"})
+
+# Hierarchy-aware queries: server shows up under "thing" and "entity"
+store.query_nodes_by_type("thing")    # → includes s1
+store.query_nodes_by_type("entity")   # → includes s1
+store.query_nodes_by_type("server")   # → includes s1
+
+# Hierarchy-aware edges: server is valid for source_types: ["thing"]
+store.add_node("e1", "entity", "E", {"name": "target"})
+store.add_edge("m1", "MONITORS", "s1", "e1")  # OK — server is-a thing
+```
+
+Three capabilities:
+- **Property inheritance** — `server` inherits `name` (from thing) and `status` (from entity) automatically
+- **Hierarchy-aware queries** — `query_nodes_by_type("entity")` returns entity AND server nodes
+- **Hierarchy-aware edge validation** — `source_types: ["thing"]` accepts any descendant of thing
+
+RDFS-level (rdfs9 + rdfs11). Fully CRDT-compatible — the hierarchy is monotonic, same as the rest of the ontology.
+
+---
+
 ### Why no OWL-style reasoning (transitivity, inverse properties)?
 
 Silk validates at write time. It does not infer new facts.

@@ -9,7 +9,7 @@ A Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs.
 
 Silk is a replicated graph store with schema enforcement and automatic conflict resolution. Built on Merkle-DAGs and CRDTs, it requires no leader, no consensus protocol, and no coordinator. Any two Silk instances that exchange sync messages are guaranteed to converge to the same graph state. Schema is enforced at write time via a typed property-graph ontology.
 
-> **Terminology note:** Silk uses "ontology" to mean a typed property-graph schema — node types, edge type constraints, property validation. It does not perform OWL-style reasoning, inference, or subsumption. Think "schema with graph-aware constraints," not "description logic."
+> **Terminology note:** Silk uses "ontology" to mean a typed property-graph schema with RDFS-level class hierarchy — node types, edge type constraints, property validation, and `parent_type` inheritance. It does not perform OWL-style open-world reasoning or subsumption. Think "schema with class hierarchy and graph-aware constraints."
 
 ## Quick Start
 
@@ -131,6 +131,7 @@ store.merge_sync_payload(&payload)?;
 ## Features
 
 - **Ontology-enforced schema** — define node types, edge types, and their properties. Silk validates at write time. Invalid entries from sync are quarantined (R-02) — accepted into the oplog for CRDT convergence but invisible in the materialized graph. Unknown properties and subtypes are accepted (D-026: open properties) — the ontology defines the minimum, not the maximum.
+- **Class hierarchy** — `parent_type` on node types declares is-a relationships. `server` is-a `entity` means: queries for `entity` include servers, edge constraints accepting `entity` accept servers, and server inherits entity's properties. RDFS-level (rdfs9 + rdfs11), fully CRDT-compatible.
 - **Content-addressed entries** — every mutation is a BLAKE3-hashed entry in a Merkle-DAG. Entries are immutable. The DAG is the audit trail.
 - **Per-property last-writer-wins** — two concurrent writes to different properties on the same node both succeed. No data loss from non-conflicting edits.
 - **Delta-state sync** — Bloom filter optimization minimizes data transfer. Only entries the peer doesn't have are sent.

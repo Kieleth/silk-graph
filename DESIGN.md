@@ -67,14 +67,15 @@ For new peers joining the fleet, Automerge sends the entire document as a compre
 
 ## Ontology-First Design
 
-> **Terminology:** Silk uses "ontology" to mean a typed property-graph schema — node types, edge type constraints, property validation with optional constraints (enum, min/max). It does not perform OWL-style reasoning, inference, or subsumption. The model is closer to a strict graph schema than to a description-logic ontology.
+> **Terminology:** Silk uses "ontology" to mean a typed property-graph schema with RDFS-level class hierarchy — node types with `parent_type` inheritance, edge type constraints (hierarchy-aware), and property validation with constraints (enum, min/max, pattern, length). It does not perform OWL-style open-world reasoning or subsumption.
 
 Silk is domain-agnostic. It has no built-in node types or edge types. Instead, every graph store begins with a **genesis entry** that defines an initial **ontology** (extendable via R-03 monotonic evolution) — the vocabulary and rules for that graph. The ontology must be defined before any data can be written.
 
 The ontology defines:
-- **Node types** — with optional property schemas (name, type, required)
-- **Edge types** — with strict source/target constraints (which node types can connect)
-- **Property constraints** — type checking, required fields
+- **Node types** — with optional property schemas (name, type, required) and optional `parent_type` for class hierarchy
+- **Class hierarchy** — `parent_type` declares is-a relationships. Child types inherit properties from ancestors. Queries for a parent type return all descendants. Edge constraints are hierarchy-aware.
+- **Edge types** — with strict source/target constraints (hierarchy-aware: `source_types: ["entity"]` accepts any entity descendant)
+- **Property constraints** — type checking, required fields, enum, min/max, pattern (regex), length bounds
 
 This separation makes Silk usable in any domain: DevOps, biology, supply chain, social networks — each defines its own ontology. Silk enforces it.
 
@@ -102,17 +103,20 @@ Ontology
 ├── node_types: {name → NodeTypeDef}
 │   └── NodeTypeDef
 │       ├── description: Option<String>
+│       ├── parent_type: Option<String>    ← RDFS subClassOf (class hierarchy)
+│       ├── subtypes: Option<{name → SubtypeDef}>   ← D-024 flat specialization
 │       └── properties: {name → PropertyDef}
 │           └── PropertyDef
 │               ├── value_type: string | int | float | bool | list | map | any
 │               ├── required: bool
-│               └── description: Option<String>
+│               ├── description: Option<String>
+│               └── constraints: Option<{enum, min, max, pattern, min/max_length, ...}>
 │
 └── edge_types: {name → EdgeTypeDef}
     └── EdgeTypeDef
         ├── description: Option<String>
-        ├── source_types: [String]     ← which node types can be source (strict)
-        ├── target_types: [String]     ← which node types can be target (strict)
+        ├── source_types: [String]     ← hierarchy-aware (accepts descendants)
+        ├── target_types: [String]     ← hierarchy-aware (accepts descendants)
         └── properties: {name → PropertyDef}
 ```
 

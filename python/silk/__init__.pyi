@@ -149,7 +149,7 @@ class GraphStore:
         """
         ...
     def query_nodes_by_type(self, node_type: str) -> list[dict[str, Any]]:
-        """Query all live nodes of a given type."""
+        """Query all live nodes of a given type, including descendants via parent_type hierarchy."""
         ...
     def query_nodes_by_subtype(self, subtype: str) -> list[dict[str, Any]]:
         """Query all live nodes of a given subtype."""
@@ -390,7 +390,7 @@ class GraphSnapshot:
         """Get an edge by ID. Returns dict or None."""
         ...
     def query_nodes_by_type(self, node_type: str) -> list[dict[str, Any]]:
-        """Query all live nodes of a given type."""
+        """Query all live nodes of a given type, including descendants via parent_type hierarchy."""
         ...
     def query_nodes_by_subtype(self, subtype: str) -> list[dict[str, Any]]:
         """Query all live nodes of a given subtype."""

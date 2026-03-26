@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **RDFS-level class hierarchy** — `parent_type` on NodeTypeDef declares is-a relationships. Property inheritance from ancestors, hierarchy-aware queries (`query_nodes_by_type` returns descendants), hierarchy-aware edge validation (`source_types: ["entity"]` accepts server). Fully CRDT-compatible. See [FAQ.md](FAQ.md#does-silk-support-class-hierarchies-or-type-inheritance).
 - **Extended constraint vocabulary** — SHACL-inspired property constraints: `pattern` (full regex via `regex` crate), `min_length`/`max_length` (string length), `min_exclusive`/`max_exclusive` (exclusive numeric bounds). All enforced on both `add_node` and `update_property`. See [FAQ.md](FAQ.md) for the full constraint reference table.
 
 ## [0.1.6] - 2026-03-25
