@@ -9,23 +9,31 @@ Contributions are welcome. Here's how to get started.
 git clone https://github.com/Kieleth/silk-graph.git
 cd silk-graph
 
-# Rust
-cargo test --all-features
-
-# Python (requires maturin)
+# Build Python wheel (development mode)
 pip install maturin pytest
-maturin develop --release
-pytest pytests/ -v
+maturin develop --release --features python
+
+# Run full CI check locally (fmt + clippy + rust tests + pytest)
+make check
+
+# Or run individual steps
+make fmt       # cargo fmt --check
+make clippy    # cargo clippy --no-default-features -- -D warnings
+make test      # cargo test --no-default-features
+make pytest    # pytest pytests/ -v
+make examples  # run all example scripts
 
 # Benchmarks
 cargo bench
 ```
 
+A pre-push git hook runs `make check` automatically before every push. Skip with `git push --no-verify` when needed.
+
 ## Pull Requests
 
 1. Fork the repo and create a branch from `main`
 2. Add tests for any new functionality
-3. Run `cargo test`, `cargo clippy`, `cargo fmt`, and `pytest`
+3. Run `make check` (mirrors CI exactly)
 4. Keep PRs focused — one feature or fix per PR
 
 ## Code Style
