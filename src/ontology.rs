@@ -715,33 +715,28 @@ fn validate_constraints(
         }
     }
 
-    // "pattern": regex match on string values
+    // "pattern": regex match on string values (full regex via `regex` crate)
     if let Some(serde_json::Value::String(pattern)) = constraints.get("pattern") {
         if let Value::String(s) = value {
-            // Simple regex: anchor the pattern (must match entire string)
-            let anchored = if pattern.starts_with('^') {
-                pattern.clone()
-            } else {
-                format!("^(?:{})$", pattern)
-            };
-            // Use a basic regex check without external dependency.
-            // For full regex, add the `regex` crate. For now, support common patterns:
-            // - Exact prefix/suffix anchors
-            // - Character classes [a-z0-9-]
-            // We use a simple approach: compile at validation time.
-            // Since we can't add regex crate without changing Cargo.toml,
-            // we validate using a simple state machine for the most common patterns.
-            //
-            // ACTUALLY: just add regex crate — it's standard, widely used, and correct.
-            // For now, do a simple contains/exact check until regex is added.
-            // This is a placeholder that handles exact-match and prefix patterns.
-            if !simple_pattern_match(&anchored, s) {
-                return Err(ValidationError::ConstraintViolation {
-                    type_name: type_name.to_string(),
-                    property: prop_name.to_string(),
-                    constraint: "pattern".to_string(),
-                    message: format!("value '{}' does not match pattern '{}'", s, pattern),
-                });
+            match regex::Regex::new(pattern) {
+                Ok(re) => {
+                    if !re.is_match(s) {
+                        return Err(ValidationError::ConstraintViolation {
+                            type_name: type_name.to_string(),
+                            property: prop_name.to_string(),
+                            constraint: "pattern".to_string(),
+                            message: format!("value '{}' does not match pattern '{}'", s, pattern),
+                        });
+                    }
+                }
+                Err(e) => {
+                    return Err(ValidationError::ConstraintViolation {
+                        type_name: type_name.to_string(),
+                        property: prop_name.to_string(),
+                        constraint: "pattern".to_string(),
+                        message: format!("invalid regex pattern '{}': {}", pattern, e),
+                    });
+                }
             }
         }
     }
@@ -749,65 +744,6 @@ fn validate_constraints(
     // Unknown constraint names are silently ignored (forward compat).
 
     Ok(())
-}
-
-/// Simple pattern matching for common constraint patterns.
-/// Supports: exact match, `^...$` anchored, `^[a-z0-9-]+$` character classes.
-/// For full regex, add the `regex` crate as a dependency.
-fn simple_pattern_match(pattern: &str, value: &str) -> bool {
-    // Strip anchors for matching
-    let inner = pattern
-        .strip_prefix('^')
-        .unwrap_or(pattern)
-        .strip_suffix('$')
-        .unwrap_or(pattern);
-
-    // Handle (?:...)
-    let inner = if let Some(stripped) = inner.strip_prefix("(?:") {
-        stripped.strip_suffix(')').unwrap_or(stripped)
-    } else {
-        inner
-    };
-
-    // Character class + quantifier: [chars]+ or [chars]*
-    if inner.starts_with('[') {
-        if let Some(bracket_end) = inner.find(']') {
-            let class = &inner[1..bracket_end];
-            let quantifier = inner.get(bracket_end + 1..bracket_end + 2).unwrap_or("");
-            let allows_empty = quantifier == "*";
-
-            if value.is_empty() {
-                return allows_empty;
-            }
-
-            // Parse character class: ranges (a-z) and literals
-            return value.chars().all(|c| char_in_class(c, class));
-        }
-    }
-
-    // Fallback: exact string match
-    value == inner
-}
-
-fn char_in_class(c: char, class: &str) -> bool {
-    let chars: Vec<char> = class.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if i + 2 < chars.len() && chars[i + 1] == '-' {
-            // Range: a-z
-            if c >= chars[i] && c <= chars[i + 2] {
-                return true;
-            }
-            i += 3;
-        } else {
-            // Literal
-            if c == chars[i] {
-                return true;
-            }
-            i += 1;
-        }
-    }
-    false
 }
 
 fn value_matches_type(value: &Value, expected: &ValueType) -> bool {

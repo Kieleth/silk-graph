@@ -959,6 +959,7 @@ dependencies = [
  "pyo3",
  "rand",
  "redb",
+ "regex",
  "rmp-serde",
  "serde",
  "serde_json",

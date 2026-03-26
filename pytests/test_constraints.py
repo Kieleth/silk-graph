@@ -305,6 +305,71 @@ def test_pattern_update_property_rejected():
         store.update_property("p1", "slug", "INVALID SLUG!")
 
 
+def test_pattern_ip_address():
+    """Full regex: IPv4 address pattern."""
+    store = GraphStore("test", {
+        "node_types": {
+            "host": {
+                "properties": {
+                    "ip": {
+                        "value_type": "string",
+                        "constraints": {
+                            "pattern": r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"
+                        }
+                    }
+                }
+            }
+        },
+        "edge_types": {}
+    })
+    store.add_node("h1", "host", "H", {"ip": "192.168.1.100"})
+    assert store.get_node("h1")["properties"]["ip"] == "192.168.1.100"
+    with pytest.raises(ValueError, match="pattern"):
+        store.add_node("h2", "host", "H", {"ip": "not-an-ip"})
+
+
+def test_pattern_email_like():
+    """Full regex: email-like pattern with alternation and escapes."""
+    store = GraphStore("test", {
+        "node_types": {
+            "contact": {
+                "properties": {
+                    "email": {
+                        "value_type": "string",
+                        "constraints": {
+                            "pattern": r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+                        }
+                    }
+                }
+            }
+        },
+        "edge_types": {}
+    })
+    store.add_node("c1", "contact", "C", {"email": "user@example.com"})
+    assert store.get_node("c1") is not None
+    with pytest.raises(ValueError, match="pattern"):
+        store.add_node("c2", "contact", "C", {"email": "not-an-email"})
+
+
+def test_pattern_invalid_regex_rejected():
+    """Invalid regex pattern produces a clear error."""
+    store = GraphStore("test", {
+        "node_types": {
+            "item": {
+                "properties": {
+                    "code": {
+                        "value_type": "string",
+                        "constraints": {"pattern": "[invalid("}
+                    }
+                }
+            }
+        },
+        "edge_types": {}
+    })
+    with pytest.raises(ValueError, match="pattern"):
+        store.add_node("n1", "item", "I", {"code": "anything"})
+
+
 # -- String length constraints --
 
 

@@ -19,7 +19,7 @@ examples:
 	python examples/ring_topology.py
 
 # Full CI mirror — run before pushing
-check: fmt clippy test pytest
+check: fmt clippy test build pytest
 
 # Build Python wheel (development mode)
 build:
