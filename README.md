@@ -7,7 +7,7 @@ A Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs.
 [![PyPI](https://img.shields.io/pypi/v/silk-graph.svg)](https://pypi.org/project/silk-graph/)
 [![License](https://img.shields.io/badge/license-FSL--1.0--Apache--2.0-blue.svg)](https://github.com/Kieleth/silk-graph/blob/main/LICENSE.md)
 
-Silk is an embedded graph database with automatic conflict resolution. Built on Merkle-DAGs and CRDTs, it requires no leader, no consensus protocol, and no coordinator. Any two Silk instances that exchange sync messages are guaranteed to converge to the same graph state. Schema is enforced at write time via an ontology — not at query time.
+Silk is a replicated graph store with schema enforcement and automatic conflict resolution. Built on Merkle-DAGs and CRDTs, it requires no leader, no consensus protocol, and no coordinator. Any two Silk instances that exchange sync messages are guaranteed to converge to the same graph state. Schema is enforced at write time via a typed property-graph ontology.
 
 > **Terminology note:** Silk uses "ontology" to mean a typed property-graph schema — node types, edge type constraints, property validation. It does not perform OWL-style reasoning, inference, or subsumption. Think "schema with graph-aware constraints," not "description logic."
 

@@ -312,6 +312,8 @@ Therefore, compaction preserves convergence. ∎
 
 - **Performance bounds**: This proof shows correctness, not efficiency. Sync may transfer redundant entries (Bloom false positives); ancestor closure may be slow on adversarial DAGs. These are performance issues, not correctness issues.
 
+- **Machine verification**: This proof is semi-formal — structured reasoning with code references, not machine-checked. For publication-grade validation, formalization in TLA+ or Isabelle/HOL is the next step.
+
 ---
 
 *Proof structure follows Shapiro et al. (2011) Section 3.2: state-based CRDT convergence via join-semilattice properties. The OpLog entry set forms a join-semilattice under set union. Materialization is a monotonic function from the lattice to the graph domain. Quarantine and ontology evolution preserve monotonicity.*

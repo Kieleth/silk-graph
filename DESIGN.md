@@ -1,4 +1,4 @@
-# Silk — Distributed Knowledge Graph Engine
+# Silk — Replicated Graph Store with Schema Enforcement
 
 A standalone Rust library (with Python bindings via PyO3) for distributed, peer-to-peer knowledge graphs. Zero external dependencies beyond the Rust toolchain. No PostgreSQL, no Redis, no Kafka, no external database of any kind. Each node in a cluster carries the complete graph, syncs peer-to-peer via Merkle-CRDT, and materializes views locally.
 
@@ -1334,11 +1334,9 @@ Any Silk consumer could use ObservationLog for time-series data, audit trails, o
 - Edge type constraints are validated (RUNS_ON must connect entity→entity)
 - Node types must be declared (unknown node types still rejected)
 
-**Rationale**: Silk is a transport and storage layer. Applications define their domain on top of Silk. An application should be able to evolve its data model (add fields, add subtypes, store metadata) without touching the ontology or recreating the store. The ontology provides guardrails (required fields, type safety for known fields, edge grammar). Everything beyond that is the application's responsibility.
+**Rationale**: Silk is a transport and storage layer. The ontology enforces a typed core (required properties, type constraints, edge grammar). Unknown properties are accepted without validation — this is deliberate. It is closer to "typed core + permissive extensions" than to hard schema enforcement everywhere. Applications that need strict validation on all fields should enforce it at the application layer before calling `add_node` or `update_property`.
 
 **Analogy**: HTTP headers — known headers (Content-Type, Authorization) are validated by the server. Unknown headers (X-Custom-Id, X-Trace-Id) are accepted and forwarded. The protocol defines the minimum contract. Applications extend it freely.
-
-**Impact**: Applications can now store arbitrary metadata, evolve their entity models, and introduce new subtypes without coordinating with the schema. This is critical for systems that discover new entity types at runtime (e.g., a DevOps platform discovering containers, processes, or network interfaces on managed servers).
 
 ---
 
