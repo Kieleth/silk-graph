@@ -266,7 +266,7 @@ OpLog (append-only Merkle-DAG, content-addressed)
 
 ## Benchmarks
 
-Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, release build. Run `cargo bench --no-default-features` on your hardware. For the full analysis — what these numbers mean and why they matter — see [WHY.md](https://github.com/Kieleth/silk-graph/blob/main/WHY.md).
+Self-benchmarks on a single machine — not comparative against other systems. Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, release build. Rust benchmarks via [Criterion.rs](https://github.com/bheisler/criterion.rs), Python experiments via the [experiment harness](experiments/). Run on your hardware: `cargo bench --no-default-features` (Rust) or `python experiments/test_sync_overlap.py` (Python).
 
 ### Core Operations
 
@@ -332,9 +332,26 @@ Edge density scales linearly with traversal cost — no surprise, but now measur
 | 50% | 27.7 ms |
 | 90% (nearly converged) | 42.4 ms |
 
-Higher overlap = more Bloom filter cross-checking. The fast path is low-overlap (first sync). Incremental syncs on already-converged peers use the 10% delta path (611 µs, see above).
+> **Known issue ([EXP-01](EXPERIMENTS.md#exp-01-sync-overlap-cost-f-10)):** Sync cost currently scales with overlap (shared entries), not with delta (entries to send). At 90% overlap, only 100 entries need sending, but the ancestor closure re-walks the entire shared DAG. This is a protocol inefficiency, not a correctness issue — sync always converges. See [EXPERIMENTS.md](EXPERIMENTS.md) for the full analysis with reproducible measurements.
 
 Run the examples yourself: `python examples/offline_first.py`. See all eight scenarios in [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/).
+
+### Reproducible Experiments
+
+Silk ships a lightweight experiment harness for measuring protocol behavior under controlled conditions. No external dependencies — stdlib only.
+
+```bash
+# Run all experiments (table output)
+python experiments/test_sync_overlap.py
+
+# Run as pytest (xfail tests for known issues)
+pytest experiments/ -v
+
+# JSON output for data capture
+python experiments/test_sync_overlap.py --json
+```
+
+See [EXPERIMENTS.md](EXPERIMENTS.md) for results, root cause analysis, and methodology.
 
 ## Design Decisions
 
@@ -823,8 +840,11 @@ cargo bench
 | [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |
 | [FAQ.md](https://github.com/Kieleth/silk-graph/blob/main/FAQ.md) | Common questions — algorithms, schema, compaction, partial sync, extending Silk |
 | [QUERY_EXTENSIONS.md](https://github.com/Kieleth/silk-graph/blob/main/QUERY_EXTENSIONS.md) | How to extend the query model — QueryEngine protocol, examples, rationale |
+| [INVARIANTS.md](https://github.com/Kieleth/silk-graph/blob/main/INVARIANTS.md) | Six structural invariants with automated enforcement (INV-1 through INV-6) |
+| [EXPERIMENTS.md](https://github.com/Kieleth/silk-graph/blob/main/EXPERIMENTS.md) | Reproducible experiments — sync overlap cost, protocol behavior measurements |
 | [CONTRIBUTING.md](https://github.com/Kieleth/silk-graph/blob/main/CONTRIBUTING.md) | Development setup, PR guidelines |
 | [`examples/`](https://github.com/Kieleth/silk-graph/tree/main/examples/) | Runnable Python scenarios (offline sync, partition heal, conflicts, ring topology, signing, time-travel, queries, compaction, partial views) |
+| [`experiments/`](https://github.com/Kieleth/silk-graph/tree/main/experiments/) | Reproducible experiment harness — run `python experiments/test_sync_overlap.py` |
 
 ## License
 
