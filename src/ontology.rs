@@ -56,6 +56,12 @@ pub struct NodeTypeDef {
     /// a subtype and properties are validated per-subtype (D-024).
     #[serde(default)]
     pub subtypes: Option<BTreeMap<String, SubtypeDef>>,
+    /// RDFS-level class hierarchy (Step 2). If set, this type is a subclass
+    /// of `parent_type`. Queries for the parent type include this type.
+    /// Edge constraints accepting the parent type also accept this type.
+    /// Properties are inherited from the parent (child overrides on conflict).
+    #[serde(default)]
+    pub parent_type: Option<String>,
 }
 
 /// Definition of an edge type in the ontology.
@@ -279,6 +285,67 @@ impl std::fmt::Display for MonotonicityError {
 }
 
 impl Ontology {
+    // -- RDFS-level class hierarchy (Step 2) --
+
+    /// Return all ancestor types of `node_type` (transitive parent_type chain).
+    /// Does not include `node_type` itself. Returns empty vec if no parent.
+    pub fn ancestors(&self, node_type: &str) -> Vec<&str> {
+        let mut result = Vec::new();
+        let mut current = node_type;
+        // Guard against cycles (max 100 levels — no real ontology is deeper)
+        for _ in 0..100 {
+            match self
+                .node_types
+                .get(current)
+                .and_then(|d| d.parent_type.as_deref())
+            {
+                Some(parent) => {
+                    result.push(parent);
+                    current = parent;
+                }
+                None => break,
+            }
+        }
+        result
+    }
+
+    /// Return all descendant types of `node_type` (types whose ancestor chain includes it).
+    /// Does not include `node_type` itself.
+    pub fn descendants(&self, node_type: &str) -> Vec<&str> {
+        // Collect all types that have node_type anywhere in their ancestor chain.
+        self.node_types
+            .iter()
+            .filter(|(name, _)| {
+                name.as_str() != node_type && self.ancestors(name).contains(&node_type)
+            })
+            .map(|(name, _)| name.as_str())
+            .collect()
+    }
+
+    /// Check if `child_type` is the same as or a descendant of `parent_type`.
+    pub fn is_subtype_of(&self, child_type: &str, parent_type: &str) -> bool {
+        child_type == parent_type || self.ancestors(child_type).contains(&parent_type)
+    }
+
+    /// Get all properties for a type, including those inherited from ancestors.
+    /// Ancestors' properties are applied first (most general), then overridden
+    /// by more specific types. Same order as Python MRO: parent first, child overrides.
+    pub fn effective_properties(&self, node_type: &str) -> BTreeMap<String, PropertyDef> {
+        let mut chain: Vec<&str> = self.ancestors(node_type);
+        chain.reverse(); // most general first
+        chain.push(node_type);
+
+        let mut props = BTreeMap::new();
+        for t in chain {
+            if let Some(def) = self.node_types.get(t) {
+                for (k, v) in &def.properties {
+                    props.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        props
+    }
+
     /// Validate that a node type exists and its properties conform.
     ///
     /// If the type defines subtypes (D-024), `subtype` must be `Some` and
@@ -295,19 +362,22 @@ impl Ontology {
             .get(node_type)
             .ok_or_else(|| ValidationError::UnknownNodeType(node_type.to_string()))?;
 
+        // Step 2: use effective_properties (includes inherited from ancestors)
+        let base_props = self.effective_properties(node_type);
+
         match (&def.subtypes, subtype) {
             // Type has subtypes and caller provided one
             (Some(subtypes), Some(st)) => {
                 match subtypes.get(st) {
                     Some(st_def) => {
-                        // Known subtype — merge type-level + subtype-level properties
-                        let mut merged = def.properties.clone();
+                        // Known subtype — merge inherited + type-level + subtype-level
+                        let mut merged = base_props;
                         merged.extend(st_def.properties.clone());
                         validate_properties(node_type, &merged, properties)
                     }
                     None => {
-                        // D-026: unknown subtype — validate type-level properties only
-                        validate_properties(node_type, &def.properties, properties)
+                        // D-026: unknown subtype — validate inherited + type-level only
+                        validate_properties(node_type, &base_props, properties)
                     }
                 }
             }
@@ -317,9 +387,9 @@ impl Ontology {
                 allowed: subtypes.keys().cloned().collect(),
             }),
             // D-026: accept subtypes even if type doesn't declare any
-            (None, Some(_st)) => validate_properties(node_type, &def.properties, properties),
+            (None, Some(_st)) => validate_properties(node_type, &base_props, properties),
             // Type has no subtypes and caller didn't provide one — validate as before
-            (None, None) => validate_properties(node_type, &def.properties, properties),
+            (None, None) => validate_properties(node_type, &base_props, properties),
         }
     }
 
@@ -337,7 +407,13 @@ impl Ontology {
             .get(edge_type)
             .ok_or_else(|| ValidationError::UnknownEdgeType(edge_type.to_string()))?;
 
-        if !def.source_types.iter().any(|t| t == source_node_type) {
+        // Hierarchy-aware: accept if actual type IS one of the allowed types
+        // OR is a descendant of any allowed type (RDFS rdfs9).
+        if !def
+            .source_types
+            .iter()
+            .any(|t| self.is_subtype_of(source_node_type, t))
+        {
             return Err(ValidationError::InvalidSource {
                 edge_type: edge_type.to_string(),
                 node_type: source_node_type.to_string(),
@@ -345,7 +421,11 @@ impl Ontology {
             });
         }
 
-        if !def.target_types.iter().any(|t| t == target_node_type) {
+        if !def
+            .target_types
+            .iter()
+            .any(|t| self.is_subtype_of(target_node_type, t))
+        {
             return Err(ValidationError::InvalidTarget {
                 edge_type: edge_type.to_string(),
                 node_type: target_node_type.to_string(),
@@ -407,6 +487,7 @@ impl Ontology {
     /// Validate that the ontology itself is internally consistent.
     /// All source_types/target_types in edge defs must reference existing node types.
     pub fn validate_self(&self) -> Result<(), ValidationError> {
+        // Validate edge source/target references
         for (edge_name, edge_def) in &self.edge_types {
             for src in &edge_def.source_types {
                 if !self.node_types.contains_key(src) {
@@ -424,6 +505,17 @@ impl Ontology {
                         node_type: tgt.clone(),
                         allowed: self.node_types.keys().cloned().collect(),
                     });
+                }
+            }
+        }
+        // Validate parent_type references (Step 2: class hierarchy)
+        for (type_name, type_def) in &self.node_types {
+            if let Some(ref parent) = type_def.parent_type {
+                if !self.node_types.contains_key(parent) {
+                    return Err(ValidationError::UnknownNodeType(format!(
+                        "{}: parent_type '{}' does not exist",
+                        type_name, parent
+                    )));
                 }
             }
         }
@@ -793,6 +885,7 @@ mod tests {
                             },
                         )]),
                         subtypes: None,
+                        parent_type: None,
                     },
                 ),
                 (
@@ -820,6 +913,7 @@ mod tests {
                             ),
                         ]),
                         subtypes: None,
+                        parent_type: None,
                     },
                 ),
                 (
@@ -828,6 +922,7 @@ mod tests {
                         description: None,
                         properties: BTreeMap::new(),
                         subtypes: None,
+                        parent_type: None,
                     },
                 ),
                 (
@@ -836,6 +931,7 @@ mod tests {
                         description: None,
                         properties: BTreeMap::new(),
                         subtypes: None,
+                        parent_type: None,
                     },
                 ),
             ]),
@@ -992,6 +1088,7 @@ mod tests {
                     description: None,
                     properties: BTreeMap::new(),
                     subtypes: None,
+                    parent_type: None,
                 },
             )]),
             edge_types: BTreeMap::from([(
@@ -1019,6 +1116,7 @@ mod tests {
                     description: None,
                     properties: BTreeMap::new(),
                     subtypes: None,
+                    parent_type: None,
                 },
             )]),
             edge_types: BTreeMap::from([(
@@ -1084,6 +1182,7 @@ mod tests {
                         ),
                     ]),
                     subtypes: None,
+                    parent_type: None,
                 },
             )]),
             edge_types: BTreeMap::new(),
@@ -1197,5 +1296,216 @@ mod tests {
         let json = serde_json::to_string(&ont).unwrap();
         let decoded: Ontology = serde_json::from_str(&json).unwrap();
         assert_eq!(ont, decoded);
+    }
+
+    // --- Step 2: RDFS class hierarchy tests ---
+
+    fn hierarchy_ontology() -> Ontology {
+        // thing → entity → server (two levels)
+        //       → event
+        Ontology {
+            node_types: BTreeMap::from([
+                (
+                    "thing".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::from([(
+                            "name".into(),
+                            PropertyDef {
+                                value_type: ValueType::String,
+                                required: true,
+                                description: None,
+                                constraints: None,
+                            },
+                        )]),
+                        subtypes: None,
+                        parent_type: None, // root
+                    },
+                ),
+                (
+                    "entity".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::from([(
+                            "status".into(),
+                            PropertyDef {
+                                value_type: ValueType::String,
+                                required: false,
+                                description: None,
+                                constraints: None,
+                            },
+                        )]),
+                        subtypes: None,
+                        parent_type: Some("thing".into()), // entity extends thing
+                    },
+                ),
+                (
+                    "server".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::from([(
+                            "ip".into(),
+                            PropertyDef {
+                                value_type: ValueType::String,
+                                required: false,
+                                description: None,
+                                constraints: None,
+                            },
+                        )]),
+                        subtypes: None,
+                        parent_type: Some("entity".into()), // server extends entity
+                    },
+                ),
+                (
+                    "event".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                        parent_type: Some("thing".into()), // event extends thing
+                    },
+                ),
+            ]),
+            edge_types: BTreeMap::from([(
+                "RELATES_TO".into(),
+                EdgeTypeDef {
+                    description: None,
+                    source_types: vec!["thing".into()], // accepts any thing descendant
+                    target_types: vec!["entity".into()], // accepts entity or server
+                    properties: BTreeMap::new(),
+                },
+            )]),
+        }
+    }
+
+    #[test]
+    fn ancestors_empty_for_root() {
+        let ont = hierarchy_ontology();
+        assert!(ont.ancestors("thing").is_empty());
+    }
+
+    #[test]
+    fn ancestors_single_parent() {
+        let ont = hierarchy_ontology();
+        assert_eq!(ont.ancestors("entity"), vec!["thing"]);
+    }
+
+    #[test]
+    fn ancestors_transitive() {
+        let ont = hierarchy_ontology();
+        // server → entity → thing
+        assert_eq!(ont.ancestors("server"), vec!["entity", "thing"]);
+    }
+
+    #[test]
+    fn descendants_of_root() {
+        let ont = hierarchy_ontology();
+        let mut desc = ont.descendants("thing");
+        desc.sort();
+        assert_eq!(desc, vec!["entity", "event", "server"]);
+    }
+
+    #[test]
+    fn descendants_of_entity() {
+        let ont = hierarchy_ontology();
+        assert_eq!(ont.descendants("entity"), vec!["server"]);
+    }
+
+    #[test]
+    fn descendants_of_leaf() {
+        let ont = hierarchy_ontology();
+        assert!(ont.descendants("server").is_empty());
+    }
+
+    #[test]
+    fn is_subtype_of_self() {
+        let ont = hierarchy_ontology();
+        assert!(ont.is_subtype_of("server", "server"));
+    }
+
+    #[test]
+    fn is_subtype_of_parent() {
+        let ont = hierarchy_ontology();
+        assert!(ont.is_subtype_of("server", "entity"));
+        assert!(ont.is_subtype_of("server", "thing"));
+    }
+
+    #[test]
+    fn is_not_subtype_of_sibling() {
+        let ont = hierarchy_ontology();
+        assert!(!ont.is_subtype_of("server", "event"));
+    }
+
+    #[test]
+    fn effective_properties_inherits() {
+        let ont = hierarchy_ontology();
+        let props = ont.effective_properties("server");
+        // server should have: name (from thing), status (from entity), ip (own)
+        assert!(props.contains_key("name"));
+        assert!(props.contains_key("status"));
+        assert!(props.contains_key("ip"));
+    }
+
+    #[test]
+    fn effective_properties_root_has_own_only() {
+        let ont = hierarchy_ontology();
+        let props = ont.effective_properties("thing");
+        assert!(props.contains_key("name"));
+        assert!(!props.contains_key("status"));
+    }
+
+    #[test]
+    fn validate_node_inherits_required_from_ancestor() {
+        let ont = hierarchy_ontology();
+        // server requires "name" (inherited from thing)
+        let err = ont.validate_node("server", None, &BTreeMap::new());
+        assert!(err.is_err());
+
+        let props = BTreeMap::from([("name".into(), Value::String("web-01".into()))]);
+        assert!(ont.validate_node("server", None, &props).is_ok());
+    }
+
+    #[test]
+    fn validate_edge_hierarchy_aware() {
+        let ont = hierarchy_ontology();
+        // RELATES_TO: source=thing, target=entity
+        // server is-a thing, server is-a entity → both should pass
+        let empty = BTreeMap::new();
+        assert!(ont
+            .validate_edge("RELATES_TO", "server", "server", &empty)
+            .is_ok());
+        assert!(ont
+            .validate_edge("RELATES_TO", "event", "entity", &empty)
+            .is_ok());
+        assert!(ont
+            .validate_edge("RELATES_TO", "thing", "entity", &empty)
+            .is_ok());
+    }
+
+    #[test]
+    fn validate_edge_hierarchy_rejects_wrong_branch() {
+        let ont = hierarchy_ontology();
+        // RELATES_TO target must be entity or descendant. event is not entity's descendant.
+        let empty = BTreeMap::new();
+        assert!(ont
+            .validate_edge("RELATES_TO", "thing", "event", &empty)
+            .is_err());
+    }
+
+    #[test]
+    fn validate_self_rejects_dangling_parent() {
+        let ont = Ontology {
+            node_types: BTreeMap::from([(
+                "orphan".into(),
+                NodeTypeDef {
+                    description: None,
+                    properties: BTreeMap::new(),
+                    subtypes: None,
+                    parent_type: Some("ghost".into()), // doesn't exist
+                },
+            )]),
+            edge_types: BTreeMap::new(),
+        };
+        assert!(ont.validate_self().is_err());
     }
 }

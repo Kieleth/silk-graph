@@ -25,6 +25,7 @@ fn test_ontology() -> Ontology {
                     description: None,
                     properties: BTreeMap::new(),
                     subtypes: None,
+                    parent_type: None,
                 },
             ),
             (
@@ -33,6 +34,7 @@ fn test_ontology() -> Ontology {
                     description: None,
                     properties: BTreeMap::new(),
                     subtypes: None,
+                    parent_type: None,
                 },
             ),
         ]),

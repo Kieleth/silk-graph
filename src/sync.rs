@@ -334,6 +334,7 @@ mod tests {
                     description: None,
                     properties: BTreeMap::new(),
                     subtypes: None,
+                    parent_type: None,
                 },
             )]),
             edge_types: BTreeMap::new(),

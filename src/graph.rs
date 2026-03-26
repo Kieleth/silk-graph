@@ -222,12 +222,22 @@ impl MaterializedGraph {
         self.edges.get(edge_id).filter(|e| !e.tombstoned)
     }
 
-    /// Query all live nodes of a given type.
+    /// Query all live nodes of a given type, including descendants (RDFS rdfs9).
+    /// If "entity" has children "server" and "project", querying "entity" returns all three.
     pub fn nodes_by_type(&self, node_type: &str) -> Vec<&Node> {
-        match self.by_type.get(node_type) {
-            Some(ids) => ids.iter().filter_map(|id| self.get_node(id)).collect(),
-            None => vec![],
-        }
+        let mut types = vec![node_type.to_string()];
+        types.extend(
+            self.ontology
+                .descendants(node_type)
+                .into_iter()
+                .map(|s| s.to_string()),
+        );
+        types
+            .iter()
+            .flat_map(|t| self.by_type.get(t.as_str()))
+            .flatten()
+            .filter_map(|id| self.get_node(id))
+            .collect()
     }
 
     /// Query all live nodes of a given subtype.
@@ -513,6 +523,7 @@ mod tests {
                         description: None,
                         properties: BTreeMap::new(),
                         subtypes: None,
+                        parent_type: None,
                     },
                 ),
                 (
@@ -521,6 +532,7 @@ mod tests {
                         description: None,
                         properties: BTreeMap::new(),
                         subtypes: None,
+                        parent_type: None,
                     },
                 ),
             ]),

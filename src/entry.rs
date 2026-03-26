@@ -278,6 +278,7 @@ mod tests {
                             ),
                         ]),
                         subtypes: None,
+                        parent_type: None,
                     },
                 ),
                 (
@@ -286,6 +287,7 @@ mod tests {
                         description: None,
                         properties: BTreeMap::new(),
                         subtypes: None,
+                        parent_type: None,
                     },
                 ),
             ]),
@@ -444,6 +446,7 @@ mod tests {
                             description: Some("A metric observation".into()),
                             properties: BTreeMap::new(),
                             subtypes: None,
+                            parent_type: None,
                         },
                     )]),
                     edge_types: BTreeMap::new(),

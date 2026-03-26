@@ -24,6 +24,7 @@ fn test_ontology() -> Ontology {
                 description: None,
                 properties: BTreeMap::new(),
                 subtypes: None,
+                parent_type: None,
             },
         )]),
         edge_types: BTreeMap::new(),
