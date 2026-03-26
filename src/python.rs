@@ -1141,7 +1141,9 @@ impl PyGraphStore {
                 }
             }
             GraphOp::UpdateProperty {
-                entity_id, key, value,
+                entity_id,
+                key,
+                value,
             } => {
                 // Validate property type against ontology (if node is known)
                 if let Some(node) = self.graph.get_node(entity_id) {

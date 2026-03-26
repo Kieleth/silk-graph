@@ -113,7 +113,10 @@ impl OpLog {
         // I-01: every entry's hash must be valid
         for (hash, entry) in &self.entries {
             if !entry.verify_hash() {
-                errors.push(format!("I-01 violated: entry {} has invalid hash", hex::encode(hash)));
+                errors.push(format!(
+                    "I-01 violated: entry {} has invalid hash",
+                    hex::encode(hash)
+                ));
             }
         }
 
@@ -144,13 +147,26 @@ impl OpLog {
             }
         }
         if computed_heads != self.heads {
-            let extra: Vec<_> = self.heads.difference(&computed_heads).map(hex::encode).collect();
-            let missing: Vec<_> = computed_heads.difference(&self.heads).map(hex::encode).collect();
+            let extra: Vec<_> = self
+                .heads
+                .difference(&computed_heads)
+                .map(hex::encode)
+                .collect();
+            let missing: Vec<_> = computed_heads
+                .difference(&self.heads)
+                .map(hex::encode)
+                .collect();
             if !extra.is_empty() {
-                errors.push(format!("I-04 violated: spurious heads: {}", extra.join(", ")));
+                errors.push(format!(
+                    "I-04 violated: spurious heads: {}",
+                    extra.join(", ")
+                ));
             }
             if !missing.is_empty() {
-                errors.push(format!("I-04 violated: missing heads: {}", missing.join(", ")));
+                errors.push(format!(
+                    "I-04 violated: missing heads: {}",
+                    missing.join(", ")
+                ));
             }
         }
 
