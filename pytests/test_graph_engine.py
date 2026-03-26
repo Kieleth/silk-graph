@@ -69,11 +69,11 @@ class TestGraphQueries:
         store = GraphStore("inst-1", ONTOLOGY)
         store.add_node("s1", "entity", "S1")
         store.add_node("s2", "entity", "S2")
-        store.add_node("sig1", "signal", "Alert")
+        store.add_node("src1", "source", "Source 1")
         entities = store.query_nodes_by_type("entity")
         assert len(entities) == 2
-        signals = store.query_nodes_by_type("signal")
-        assert len(signals) == 1
+        sources = store.query_nodes_by_type("source")
+        assert len(sources) == 1
 
     def test_query_by_property(self):
         store = GraphStore("inst-1", ONTOLOGY)
