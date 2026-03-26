@@ -35,4 +35,4 @@ python-source = "python"
 module-name = "silk._native"
 
 [tool.pytest.ini_options]
-testpaths = ["pytests"]
+testpaths = ["pytests", "experiments"]
