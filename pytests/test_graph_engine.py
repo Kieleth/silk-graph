@@ -10,6 +10,7 @@ ONTOLOGY = json.dumps(
     {
         "node_types": {
             "entity": {"properties": {"status": {"value_type": "string", "required": False}}},
+            "signal": {"properties": {}},
             "source": {"properties": {}},
             "processor": {"properties": {}},
             "queue": {"properties": {}},

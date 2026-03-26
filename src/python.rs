@@ -405,6 +405,13 @@ impl PyGraphStore {
         self.backend.oplog().len()
     }
 
+    /// Verify structural integrity of the oplog (INV-6).
+    /// Returns (ok, errors) where ok is True if no violations found.
+    fn verify_integrity(&self) -> (bool, Vec<String>) {
+        let errors = self.backend.oplog().verify_integrity();
+        (errors.is_empty(), errors)
+    }
+
     /// Instance identifier.
     fn instance_id(&self) -> &str {
         &self.instance_id

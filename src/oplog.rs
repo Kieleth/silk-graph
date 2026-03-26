@@ -104,6 +104,59 @@ impl OpLog {
         self.len == 0
     }
 
+    /// Verify structural integrity of the oplog (INV-6).
+    /// Checks I-01 (hash integrity), I-02 (causal completeness), I-04 (heads accuracy).
+    /// Returns a list of errors (empty = healthy).
+    pub fn verify_integrity(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        // I-01: every entry's hash must be valid
+        for (hash, entry) in &self.entries {
+            if !entry.verify_hash() {
+                errors.push(format!("I-01 violated: entry {} has invalid hash", hex::encode(hash)));
+            }
+        }
+
+        // I-02: every entry's parents must exist (except genesis with next=[])
+        for (hash, entry) in &self.entries {
+            for parent in &entry.next {
+                if !self.entries.contains_key(parent) {
+                    errors.push(format!(
+                        "I-02 violated: entry {} references missing parent {}",
+                        hex::encode(hash),
+                        hex::encode(parent)
+                    ));
+                }
+            }
+        }
+
+        // I-04: heads must be exactly the entries with no successors
+        let mut computed_heads = HashSet::new();
+        let mut has_successor: HashSet<Hash> = HashSet::new();
+        for entry in self.entries.values() {
+            for parent in &entry.next {
+                has_successor.insert(*parent);
+            }
+        }
+        for hash in self.entries.keys() {
+            if !has_successor.contains(hash) {
+                computed_heads.insert(*hash);
+            }
+        }
+        if computed_heads != self.heads {
+            let extra: Vec<_> = self.heads.difference(&computed_heads).map(hex::encode).collect();
+            let missing: Vec<_> = computed_heads.difference(&self.heads).map(hex::encode).collect();
+            if !extra.is_empty() {
+                errors.push(format!("I-04 violated: spurious heads: {}", extra.join(", ")));
+            }
+            if !missing.is_empty() {
+                errors.push(format!("I-04 violated: missing heads: {}", missing.join(", ")));
+            }
+        }
+
+        errors
+    }
+
     /// Return all entries reachable from current heads that are NOT
     /// reachable from (or equal to) `known_hash`.
     ///
