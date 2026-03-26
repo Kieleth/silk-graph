@@ -1075,44 +1075,61 @@ impl PyGraphStore {
         });
         clocks.push(self.clock.clone());
 
-        // 2. All live nodes — use max per-property clock
+        // 2. All live nodes
+        // EXP-02 fix: emit AddNode with last_add_clock (for add-wins) and
+        // empty properties, then individual UpdateProperty ops with per-property
+        // clocks. This preserves per-property LWW granularity through compaction.
         for node in self.graph.all_nodes() {
-            let max_clock = node
-                .property_clocks
-                .values()
-                .chain(std::iter::once(&node.last_clock))
-                .max_by(|a, b| a.cmp_order(b))
-                .cloned()
-                .unwrap_or_else(|| node.last_clock.clone());
-
+            // AddNode with last_add_clock — establishes entity + add-wins clock
             ops.push(GraphOp::AddNode {
                 node_id: node.node_id.clone(),
                 node_type: node.node_type.clone(),
                 subtype: node.subtype.clone(),
                 label: node.label.clone(),
-                properties: node.properties.clone(),
+                properties: BTreeMap::new(),
             });
-            clocks.push(max_clock);
+            clocks.push(node.last_add_clock.clone());
+
+            // Per-property UpdateProperty ops with individual clocks
+            for (key, value) in &node.properties {
+                let prop_clock = node
+                    .property_clocks
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_else(|| node.last_clock.clone());
+                ops.push(GraphOp::UpdateProperty {
+                    entity_id: node.node_id.clone(),
+                    key: key.clone(),
+                    value: value.clone(),
+                });
+                clocks.push(prop_clock);
+            }
         }
 
-        // 3. All live edges — use max per-property clock
+        // 3. All live edges — same pattern: AddEdge + per-property updates
         for edge in self.graph.all_edges() {
-            let max_clock = edge
-                .property_clocks
-                .values()
-                .chain(std::iter::once(&edge.last_clock))
-                .max_by(|a, b| a.cmp_order(b))
-                .cloned()
-                .unwrap_or_else(|| edge.last_clock.clone());
-
             ops.push(GraphOp::AddEdge {
                 edge_id: edge.edge_id.clone(),
                 edge_type: edge.edge_type.clone(),
                 source_id: edge.source_id.clone(),
                 target_id: edge.target_id.clone(),
-                properties: edge.properties.clone(),
+                properties: BTreeMap::new(),
             });
-            clocks.push(max_clock);
+            clocks.push(edge.last_add_clock.clone());
+
+            for (key, value) in &edge.properties {
+                let prop_clock = edge
+                    .property_clocks
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_else(|| edge.last_clock.clone());
+                ops.push(GraphOp::UpdateProperty {
+                    entity_id: edge.edge_id.clone(),
+                    key: key.clone(),
+                    value: value.clone(),
+                });
+                clocks.push(prop_clock);
+            }
         }
 
         (ops, clocks)
