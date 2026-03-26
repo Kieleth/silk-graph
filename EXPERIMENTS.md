@@ -133,3 +133,60 @@ The `receive_ms` is now constant (~1.3ms) regardless of overlap. The improvement
 ```bash
 python experiments/test_sync_overlap.py
 ```
+
+---
+
+## EXP-02: Compaction Per-Property Clock Preservation (F-11)
+
+**Question:** Does compaction preserve enough clock metadata for correct LWW conflict resolution on individual properties?
+
+**Expected:** A compacted peer and an uncompacted peer with concurrent writes should resolve to the same graph state as two uncompacted peers.
+
+**Observed (before fix):** Compaction lost per-property clock granularity. A checkpoint stored one clock per entity (the max of all property clocks). After replay, all properties inherited the max clock, causing concurrent writes with clocks between the original property clocks to lose incorrectly.
+
+### The Bug
+
+Node `s1` has two properties with different clocks:
+- `status=up` set at clock T1
+- `name=beta` set at clock T5
+
+Peer B writes `status=down` at clock T3 (where T1 < T3 < T5).
+
+| Path | status clock | B's update clock | LWW winner | Result |
+|------|-------------|-----------------|------------|--------|
+| No compaction | T1 | T3 | T3 > T1, B wins | status=down (correct) |
+| With compaction (before fix) | T5 (elevated) | T3 | T3 < T5, checkpoint wins | status=up (wrong) |
+| With compaction (after fix) | T1 (preserved) | T3 | T3 > T1, B wins | status=down (correct) |
+
+### Fix
+
+Changed `build_checkpoint_ops()` to emit per-property `UpdateProperty` ops with individual clocks instead of a single `AddNode` with the entity-level max clock.
+
+Before:
+```
+AddNode s1 {status=up, name=beta} @ clock=T5  ← all props get T5
+```
+
+After:
+```
+AddNode s1 {} @ clock=T_add        ← entity structure + add-wins clock
+UpdateProperty s1.status=up @ T1   ← original property clock
+UpdateProperty s1.name=beta @ T5   ← original property clock
+```
+
+### Scenarios Tested
+
+| # | Scenario | Result |
+|---|----------|--------|
+| 1 | Per-property clock preservation | PASS — concurrent write wins when its clock is between two property clocks |
+| 2 | Zombie resurrection (safety precondition violated) | PASS — zombie appears as expected when precondition is violated |
+| 3 | Edge property clocks | PASS — edge properties preserved through compaction |
+| 4 | Double compaction | PASS — compacting twice produces same state |
+| 5 | Add-wins after compaction | PASS — concurrent add wins over prior remove |
+
+### Reproduce
+
+```bash
+python experiments/test_compaction_correctness.py
+pytest experiments/test_compaction_correctness.py -v
+```

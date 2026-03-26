@@ -280,27 +280,57 @@ This proof assumes:
 
 ## 6. Compaction Addendum (R-08)
 
-**Claim**: A compacted OpLog converges with uncompacted peers.
+**Claim**: A compacted OpLog converges with uncompacted peers, provided the safety precondition holds.
 
-**Proof sketch**:
+### 6.1 Safety Precondition
 
-1. A checkpoint at time T is safe iff ALL known peers have synced past T. This means no peer holds entries concurrent with or before T that haven't been seen by the compacting peer.
+A checkpoint at time T is safe iff ALL known peers have synced past T. Formally: for every peer P in the known set, every entry e in the compacting peer's oplog with `clock(e) ≤ T` has been received and processed by P.
 
-2. The checkpoint entry contains synthetic ops (DefineOntology + AddNode + AddEdge) that, when replayed, produce a MaterializedGraph identical to the pre-compaction graph. This follows from the checkpoint construction: it iterates all live nodes and edges and emits the corresponding ops.
+**This precondition is NOT enforced by Silk.** It is the caller's responsibility. Compacting without full peer sync can cause:
+- **Zombie resurrection** (tombstone clock loss): if peer P holds a concurrent add for a deleted entity, and the compacting peer discards the tombstone, the entity reappears after sync. See EXP-02 Scenario 2.
+- **Causal information loss**: if peer P holds operations concurrent with pre-compaction entries, those operations may conflict incorrectly with the checkpoint's clocks.
 
-3. After compaction, the OpLog contains exactly one entry (the checkpoint). New writes have the checkpoint as their parent.
+### 6.2 Checkpoint Construction
 
-4. When an uncompacted peer syncs with a compacted peer:
-   - Delta sync may fail (old parent hashes missing). Fallback to snapshot bootstrap.
-   - Snapshot from checkpoint produces the same graph as the full history (by construction).
-   - After snapshot bootstrap + delta sync of post-compaction entries, both peers converge.
+The checkpoint produces synthetic ops that replay into an identical MaterializedGraph:
 
-5. Two compacted peers with checkpoints at different times still converge, because:
-   - Both checkpoints capture the same logical state (safety rule ensures all entries were synced)
-   - Post-checkpoint entries are identical (same sync protocol)
-   - Materialization is deterministic (Theorem 1)
+1. **DefineOntology** — the fully-merged ontology (all extensions applied).
+2. **AddNode** per live node — with `last_add_clock` (for add-wins semantics) and empty properties.
+3. **UpdateProperty** per property per node — with the property's individual clock from `property_clocks`.
+4. **AddEdge** per live edge — with `last_add_clock` and empty properties.
+5. **UpdateProperty** per property per edge — with the property's individual clock.
 
-Therefore, compaction preserves convergence. ∎
+Tombstoned entities are excluded (dead nodes and edges are not in the checkpoint).
+
+**Why per-property clocks matter (EXP-02):** If a node has `status@clock1` and `name@clock5`, and a concurrent peer writes `status@clock3`, the correct LWW result is `status=peer_value` (clock3 > clock1). If the checkpoint stores a single entity-level clock (clock5), the concurrent write at clock3 loses — this is a correctness bug. Per-property UpdateProperty ops with individual clocks prevent this.
+
+*Reference*: `src/python.rs:build_checkpoint_ops()`, EXP-02 in [EXPERIMENTS.md](EXPERIMENTS.md).
+
+### 6.3 Post-Compaction OpLog
+
+After compaction, the OpLog contains exactly one entry (the checkpoint, with `next=[]`). New writes have the checkpoint as their parent. The DAG structure is preserved going forward.
+
+### 6.4 Sync with Uncompacted Peer
+
+When an uncompacted peer syncs with a compacted peer:
+- Delta sync may fail (old parent hashes missing in the compacted oplog). Fallback to snapshot bootstrap.
+- Snapshot from checkpoint replays the synthetic ops, producing the same graph as the full history (by construction, claim 6.2).
+- After snapshot bootstrap + delta sync of post-compaction entries, both peers converge.
+
+### 6.5 Two Compacted Peers
+
+Two compacted peers with checkpoints at different times still converge, because:
+- Both checkpoints capture the same logical state (safety precondition ensures all entries were synced before compaction).
+- Post-checkpoint entries are exchanged via the normal sync protocol.
+- Materialization is deterministic (Theorem 1).
+
+### 6.6 What Compaction Does NOT Preserve
+
+- **Tombstone clocks** — deleted entities are excluded. If the safety precondition is violated (a peer holds a concurrent add), the tombstone cannot suppress it. This is a documented limitation, not a bug.
+- **Operation history** — the sequence of mutations is collapsed into a state snapshot. Time-travel queries (`as_of`) cannot look before the compaction point.
+- **Quarantine metadata** — quarantined entries are excluded. The compacted peer forgets that certain entries were invalid.
+
+Therefore, under the safety precondition, compaction preserves convergence. ∎
 
 ---
 
