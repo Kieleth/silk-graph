@@ -79,9 +79,22 @@ Silk chose LWW because it is the simplest convergent strategy that works for the
 
 ## Schema & Constraints
 
-### How do I add enum or range validation to properties?
+### What property constraints does Silk support?
 
-Use the `constraints` field on property definitions:
+Use the `constraints` field on property definitions. All constraints are enforced on both `add_node` and `update_property`.
+
+| Constraint | Applies to | Example | SHACL equivalent |
+|---|---|---|---|
+| `enum` | string | `{"enum": ["active", "standby"]}` | `sh:in` |
+| `min` | int, float | `{"min": 1}` | `sh:minInclusive` |
+| `max` | int, float | `{"max": 65535}` | `sh:maxInclusive` |
+| `min_exclusive` | int, float | `{"min_exclusive": 0}` | `sh:minExclusive` |
+| `max_exclusive` | int, float | `{"max_exclusive": 100}` | `sh:maxExclusive` |
+| `min_length` | string | `{"min_length": 1}` | `sh:minLength` |
+| `max_length` | string | `{"max_length": 255}` | `sh:maxLength` |
+| `pattern` | string | `{"pattern": "^[a-z0-9-]+$"}` | `sh:pattern` |
+
+Unknown constraint names are silently ignored (forward compatibility for community-contributed validators).
 
 ```python
 store = GraphStore("test", {
@@ -98,6 +111,18 @@ store = GraphStore("test", {
                 "port": {
                     "value_type": "int",
                     "constraints": {"min": 1, "max": 65535}
+                },
+                "hostname": {
+                    "value_type": "string",
+                    "constraints": {
+                        "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+                        "min_length": 1,
+                        "max_length": 63
+                    }
+                },
+                "cpu_percent": {
+                    "value_type": "float",
+                    "constraints": {"min_exclusive": 0.0, "max_exclusive": 100.0}
                 }
             }
         }
@@ -105,31 +130,25 @@ store = GraphStore("test", {
     "edge_types": {}
 })
 
-store.add_node("s1", "server", "Prod", {"status": "active", "port": 8080})  # OK
-store.add_node("s2", "server", "Bad", {"status": "exploded"})                # ValueError!
-store.add_node("s3", "server", "Bad", {"port": 0})                          # ValueError!
+store.add_node("s1", "server", "Prod", {
+    "status": "active", "port": 8080,
+    "hostname": "web-01", "cpu_percent": 45.5
+})  # OK
+
+store.add_node("s2", "server", "Bad", {"status": "exploded"})     # ValueError: enum
+store.add_node("s3", "server", "Bad", {"port": 0})                # ValueError: min
+store.add_node("s4", "server", "Bad", {"hostname": "UPPER"})      # ValueError: pattern
+store.add_node("s5", "server", "Bad", {"hostname": ""})            # ValueError: min_length
+store.add_node("s6", "server", "Bad", {"cpu_percent": 0.0})       # ValueError: min_exclusive
 ```
 
-Built-in: `enum` (allowed string values), `min`/`max` (numeric range). Unknown constraint names are silently ignored (forward compatibility for community-contributed validators).
+The `pattern` constraint uses full regex via the Rust `regex` crate. Patterns are compiled at validation time. Invalid regex patterns produce a clear `ConstraintViolation` error.
 
 ---
 
 ### How do I add a custom constraint type?
 
-Add a handler to `validate_constraints()` in [`src/ontology.rs`](https://github.com/Kieleth/silk-graph/blob/main/src/ontology.rs). Example — adding `pattern` (regex):
-
-```rust
-if let Some(serde_json::Value::String(pattern)) = constraints.get("pattern") {
-    if let Value::String(s) = value {
-        let re = regex::Regex::new(pattern).map_err(|e| ...)?;
-        if !re.is_match(s) {
-            return Err(ValidationError::ConstraintViolation { ... });
-        }
-    }
-}
-```
-
-Users then write: `{"value_type": "string", "constraints": {"pattern": "^[a-z0-9-]+$"}}`.
+Add a handler to `validate_constraints()` in [`src/ontology.rs`](https://github.com/Kieleth/silk-graph/blob/main/src/ontology.rs). Follow the existing pattern — check if the constraint key exists, match on the value type, return `ConstraintViolation` on failure.
 
 Contributions welcome — open a PR with your constraint type + tests.
 

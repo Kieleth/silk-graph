@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Extended constraint vocabulary** — SHACL-inspired property constraints: `pattern` (full regex via `regex` crate), `min_length`/`max_length` (string length), `min_exclusive`/`max_exclusive` (exclusive numeric bounds). All enforced on both `add_node` and `update_property`. See [FAQ.md](FAQ.md) for the full constraint reference table.
+
 ## [0.1.6] - 2026-03-25
 
 ### Fixed
