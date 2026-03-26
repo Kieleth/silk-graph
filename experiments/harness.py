@@ -133,3 +133,80 @@ def stats_dict(s: Stats) -> dict:
         "stdev_ms": round(s.stdev * 1000, 2),
         "rounds": s.rounds,
     }
+
+
+# ---------------------------------------------------------------------------
+# Metric assertions — structured pass/fail with clear reporting
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Metric:
+    """A named measurement with a threshold.
+
+    Usage:
+        m = Metric("receive_ms_ratio", measured=5.1, threshold=2.0, op="<")
+        m.check()  # raises AssertionError with clear message
+    """
+    name: str
+    measured: float
+    threshold: float
+    op: str = "<"  # "<", ">", "<=", ">=", "==", "!="
+    unit: str = ""
+
+    def passes(self) -> bool:
+        ops = {
+            "<": lambda a, b: a < b,
+            ">": lambda a, b: a > b,
+            "<=": lambda a, b: a <= b,
+            ">=": lambda a, b: a >= b,
+            "==": lambda a, b: a == b,
+            "!=": lambda a, b: a != b,
+        }
+        return ops[self.op](self.measured, self.threshold)
+
+    def check(self):
+        """Assert the metric passes, with a descriptive error message."""
+        if not self.passes():
+            unit = f" {self.unit}" if self.unit else ""
+            raise AssertionError(
+                f"Metric '{self.name}' failed: "
+                f"measured={self.measured}{unit} {self.op} threshold={self.threshold}{unit} "
+                f"→ {self.measured}{unit} is NOT {self.op} {self.threshold}{unit}"
+            )
+
+    def report(self) -> str:
+        """One-line summary: PASS/FAIL name measured op threshold."""
+        status = "PASS" if self.passes() else "FAIL"
+        unit = f" {self.unit}" if self.unit else ""
+        return f"  [{status}] {self.name}: {self.measured}{unit} {self.op} {self.threshold}{unit}"
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "measured": self.measured,
+            "threshold": self.threshold,
+            "op": self.op,
+            "unit": self.unit,
+            "passed": self.passes(),
+        }
+
+
+def check_metrics(metrics: list[Metric], *, label: str = ""):
+    """Check all metrics and report results. Raises on first failure.
+
+    Prints a summary table of all metrics before raising, so you see
+    the full picture even when one fails.
+    """
+    if label:
+        print(f"\n  Metrics: {label}")
+    for m in metrics:
+        print(m.report())
+
+    failures = [m for m in metrics if not m.passes()]
+    if failures:
+        names = ", ".join(f.name for f in failures)
+        raise AssertionError(
+            f"{len(failures)} metric(s) failed: {names}. "
+            f"See output above for details."
+        )

@@ -17,6 +17,9 @@ import sys
 import pytest
 from silk import GraphStore
 
+sys.path.insert(0, ".")
+from experiments.harness import Metric, check_metrics
+
 ONTOLOGY = {
     "node_types": {
         "server": {
@@ -113,18 +116,23 @@ def test_compaction_per_property_clock():
     props = _get_props(a_fresh, "s1")
     assert props is not None, "s1 should exist after sync"
 
+    print(f"  Reference (no compaction): status={ref_props['status']}, name={ref_props['name']}")
     print(f"  Compacted sync: status={props.get('status')}, name={props.get('name')}")
 
-    # The critical assertion: both paths should produce the same result
-    assert props["status"] == ref_props["status"], (
-        f"Per-property clock lost during compaction! "
-        f"Reference: status='{ref_props['status']}', "
-        f"Compacted: status='{props['status']}'. "
-        f"Checkpoint elevated status clock to entity max, causing B's update to lose."
-    )
-    assert props["name"] == ref_props["name"], (
-        f"Name diverged: reference='{ref_props['name']}', compacted='{props['name']}'"
-    )
+    check_metrics([
+        Metric(
+            name="compaction_status_matches_reference",
+            measured=1 if props["status"] == ref_props["status"] else 0,
+            threshold=1,
+            op="==",
+        ),
+        Metric(
+            name="compaction_name_matches_reference",
+            measured=1 if props["name"] == ref_props["name"] else 0,
+            threshold=1,
+            op="==",
+        ),
+    ], label="EXP-02 per-property clock preservation")
 
 
 # ---------------------------------------------------------------------------
@@ -213,11 +221,20 @@ def test_compaction_edge_property_clocks():
     assert edge is not None, "e1 should exist"
     print(f"  edge props after compacted sync: {edge['properties']}")
 
-    # Both properties should be present
-    assert edge["properties"].get("weight") == 99, "weight should be 99"
-    assert edge["properties"].get("label") == "primary", (
-        f"label should be 'primary' from B's update, got '{edge['properties'].get('label')}'"
-    )
+    check_metrics([
+        Metric(
+            name="edge_weight_preserved",
+            measured=1 if edge["properties"].get("weight") == 99 else 0,
+            threshold=1,
+            op="==",
+        ),
+        Metric(
+            name="edge_label_from_concurrent_peer",
+            measured=1 if edge["properties"].get("label") == "primary" else 0,
+            threshold=1,
+            op="==",
+        ),
+    ], label="EXP-02 edge property clocks")
 
 
 # ---------------------------------------------------------------------------

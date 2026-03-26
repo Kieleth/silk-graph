@@ -28,7 +28,9 @@ from silk import GraphStore
 
 sys.path.insert(0, ".")
 from experiments.harness import (
+    Metric,
     SyncMeasurement,
+    check_metrics,
     measure,
     measure_sync_phase,
     print_table,
@@ -143,6 +145,13 @@ def run_all_scenarios(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Metric thresholds — adjust these if hardware or protocol changes
+# ---------------------------------------------------------------------------
+OVERLAP_RATIO_THRESHOLD = 2.0   # max acceptable ratio: time_90% / time_10%
+MAX_RECEIVE_MS_1K_NODES = 10.0  # max receive_ms for 1000 nodes at any overlap
+
+
 def test_sync_overlap_cost_sublinear():
     """Sync receive time should scale with delta (entries to send),
     not with overlap (shared entries).
@@ -152,10 +161,6 @@ def test_sync_overlap_cost_sublinear():
 
     If scaling is proportional to delta (correct):
         90% overlap should be FASTER than 10% overlap
-        ratio = time_90 / time_10 should be < 2.0
-
-    Before fix: ratio is ~5-20x (Phase 2 walks entire shared DAG)
-    After fix: ratio should be < 1.0 (less to send = less work)
     """
     total = 1000
     rounds = 5
@@ -165,12 +170,29 @@ def test_sync_overlap_cost_sublinear():
 
     ratio = high["receive_ms"] / low["receive_ms"] if low["receive_ms"] > 0 else float("inf")
 
-    assert ratio < 2.0, (
-        f"Sync cost scales with overlap, not with delta. "
-        f"10% overlap ({low['unique_a']} to send): {low['receive_ms']:.1f}ms, "
-        f"90% overlap ({high['unique_a']} to send): {high['receive_ms']:.1f}ms, "
-        f"ratio: {ratio:.1f}x (expected < 2.0)"
-    )
+    check_metrics([
+        Metric(
+            name="overlap_scaling_ratio",
+            measured=round(ratio, 2),
+            threshold=OVERLAP_RATIO_THRESHOLD,
+            op="<",
+            unit="x",
+        ),
+        Metric(
+            name="receive_ms_10pct_overlap",
+            measured=low["receive_ms"],
+            threshold=MAX_RECEIVE_MS_1K_NODES,
+            op="<",
+            unit="ms",
+        ),
+        Metric(
+            name="receive_ms_90pct_overlap",
+            measured=high["receive_ms"],
+            threshold=MAX_RECEIVE_MS_1K_NODES,
+            op="<",
+            unit="ms",
+        ),
+    ], label="EXP-01 sync overlap cost")
 
 
 # ---------------------------------------------------------------------------
