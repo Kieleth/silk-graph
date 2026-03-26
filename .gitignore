@@ -13,3 +13,7 @@ dist/
 
 # Internal review docs — not for public repo
 REVIEW*.md
+ANSWER_TO_REVIEW*.md
+
+# Benchmark venv (separate from dev environment)
+.bench-venv/

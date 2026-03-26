@@ -267,7 +267,7 @@ OpLog (append-only Merkle-DAG, content-addressed)
 
 ## Benchmarks
 
-Self-benchmarks on a single machine — not comparative against other systems. Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, release build. Rust benchmarks via [Criterion.rs](https://github.com/bheisler/criterion.rs), Python experiments via the [experiment harness](experiments/). Run on your hardware: `cargo bench --no-default-features` (Rust) or `python experiments/test_sync_overlap.py` (Python).
+Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0, release build. Rust benchmarks via [Criterion.rs](https://github.com/bheisler/criterion.rs), Python experiments via the [experiment harness](experiments/). For comparative benchmarks against Loro and pycrdt (Yjs), see [BENCHMARKS.md](BENCHMARKS.md).
 
 ### Core Operations
 
@@ -842,6 +842,7 @@ cargo bench
 | [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) | Threat model, known limitations, vulnerability reporting |
 | [FAQ.md](https://github.com/Kieleth/silk-graph/blob/main/FAQ.md) | Common questions — algorithms, schema, compaction, partial sync, extending Silk |
 | [QUERY_EXTENSIONS.md](https://github.com/Kieleth/silk-graph/blob/main/QUERY_EXTENSIONS.md) | How to extend the query model — QueryEngine protocol, examples, rationale |
+| [BENCHMARKS.md](https://github.com/Kieleth/silk-graph/blob/main/BENCHMARKS.md) | Comparative benchmarks — Silk vs Loro vs pycrdt (Yjs) on shared CRDT operations |
 | [INVARIANTS.md](https://github.com/Kieleth/silk-graph/blob/main/INVARIANTS.md) | Six structural invariants with automated enforcement (INV-1 through INV-6) |
 | [EXPERIMENTS.md](https://github.com/Kieleth/silk-graph/blob/main/EXPERIMENTS.md) | Reproducible experiments — sync overlap cost, protocol behavior measurements |
 | [CONTRIBUTING.md](https://github.com/Kieleth/silk-graph/blob/main/CONTRIBUTING.md) | Development setup, PR guidelines |

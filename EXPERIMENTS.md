@@ -3,7 +3,8 @@
 Reproducible experiments that measure Silk's behavior under controlled conditions. Each experiment captures evidence (timing, payload sizes, operation counts) to guide engineering decisions.
 
 Run all experiments: `python -m pytest experiments/ -v`
-Run standalone with table output: `python experiments/test_sync_overlap.py`
+Run standalone: `python experiments/test_sync_overlap.py`
+Comparative benchmarks: `python experiments/bench_comparative.py` (requires [bench venv](BENCHMARKS.md#reproduction))
 
 ---
 
@@ -189,4 +190,26 @@ UpdateProperty s1.name=beta @ T5   ← original property clock
 ```bash
 python experiments/test_compaction_correctness.py
 pytest experiments/test_compaction_correctness.py -v
+```
+
+---
+
+## EXP-03: Comparative CRDT Benchmarks (F-06)
+
+**Question:** How does Silk's CRDT performance compare to other Rust+PyO3 CRDT systems on shared operations?
+
+**Systems:** Silk (property graph), Loro (document CRDT), pycrdt/Yjs (document CRDT). All three are Rust cores with Python bindings, pip-installable, MIT-licensed.
+
+**Scenarios:** write throughput, update throughput, sync latency, sync bandwidth, merge correctness.
+
+Full results, methodology, and reproduction instructions: [BENCHMARKS.md](BENCHMARKS.md).
+
+### Reproduce
+
+```bash
+python -m venv .bench-venv
+source .bench-venv/bin/activate
+pip install -r experiments/bench_requirements.txt
+maturin develop --release  # or: pip install silk-graph
+python experiments/bench_comparative.py
 ```
