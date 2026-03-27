@@ -51,6 +51,23 @@ class CRDTAdapter(ABC):
     def fork(self, store: Any, new_id: str) -> Any:
         """Create independent copy of store."""
 
+    def add_relationship(self, store: Any, rel_id: str, rel_type: str,
+                         source_id: str, target_id: str, props: dict | None = None) -> None:
+        """Create a relationship between two entities.
+        Default: store as a nested reference (document CRDTs).
+        Override for graph-native systems."""
+        # Default: add target_id to a list on the source entity
+        self.update_field(store, source_id, f"_{rel_type}", target_id)
+
+    def read_relationships(self, store: Any, entity_id: str, rel_type: str) -> list[str]:
+        """Read relationship targets. Returns list of target entity IDs."""
+        val = self.read_field(store, entity_id, f"_{rel_type}")
+        if val is None:
+            return []
+        if isinstance(val, list):
+            return val
+        return [val]
+
 
 # ---------------------------------------------------------------------------
 # Silk adapter
@@ -64,15 +81,35 @@ class SilkAdapter(CRDTAdapter):
         self.version = getattr(silk, "__version__", "0.1.x")
         self._GraphStore = silk.GraphStore
         self._ontology = {
-            "node_types": {"entity": {"properties": {}}},
-            "edge_types": {},
+            "node_types": {
+                "entity": {"properties": {}},
+                "user": {"properties": {}},
+                "project": {"properties": {}},
+            },
+            "edge_types": {
+                "ASSIGNED_TO": {
+                    "source_types": ["user", "entity"],
+                    "target_types": ["project", "entity"],
+                },
+                "DEPENDS_ON": {
+                    "source_types": ["project", "entity"],
+                    "target_types": ["project", "entity"],
+                },
+            },
         }
 
     def create_store(self, instance_id):
         return self._GraphStore(instance_id, self._ontology)
 
-    def add_entity(self, store, entity_id, props):
-        store.add_node(entity_id, "entity", entity_id, props)
+    def add_entity(self, store, entity_id, props, entity_type="entity"):
+        store.add_node(entity_id, entity_type, entity_id, props)
+
+    def add_relationship(self, store, rel_id, rel_type, source_id, target_id, props=None):
+        store.add_edge(rel_id, rel_type, source_id, target_id, props or {})
+
+    def read_relationships(self, store, entity_id, rel_type):
+        return [e["target_id"] for e in store.all_edges()
+                if e["edge_type"] == rel_type and e["source_id"] == entity_id]
 
     def update_field(self, store, entity_id, key, value):
         store.update_property(entity_id, key, value)

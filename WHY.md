@@ -74,7 +74,9 @@ Ten peers in a ring topology. Each writes 100 nodes. Ring sync propagates data a
 
 ## Benchmarks
 
-Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0. Run `cargo bench --no-default-features` for your hardware.
+Measured on Apple M4 Max, macOS 15.7, Rust 1.94.0. Full details: [BENCHMARKS.md](BENCHMARKS.md).
+
+### Silk self-benchmarks (Criterion.rs)
 
 | What | 100 nodes | 1,000 nodes | 10,000 nodes |
 |------|-----------|-------------|--------------|
@@ -85,13 +87,27 @@ Measured on Apple M4 Max (16 cores, 128 GB RAM), macOS 15.7, Rust 1.94.0. Run `c
 | Partition heal (500/side) | — | 833 µs | — |
 | BFS traversal | — | 564 ns | 580 ns |
 | Shortest path | — | 706 ns | 717 ns |
-| Impact analysis | — | 108 ns | 105 ns |
 
-Key takeaways:
-- **Sub-millisecond sync** for typical workloads (< 1,000 divergent entries)
-- **Graph algorithms don't scale with graph size** for targeted queries (BFS/shortest path access specific subgraphs)
-- **Partition healing is cheap**: 500 divergent writes per side merge in 833 µs
-- **2.2M entries/sec** creation throughput (449 ns/entry)
+### Comparative benchmarks (vs Loro, pycrdt)
+
+Silk compared against two document CRDTs (Loro 1.10.3, pycrdt 0.12.50) on shared CRDT operations. All three are Rust cores with PyO3 bindings. Results from 2026-03-26, silk-graph v0.1.5.
+
+| Scenario | Silk | Loro | pycrdt |
+|----------|------|------|--------|
+| Write 1K entities | 3.95 ms (253K ops/s) | 3.17 ms (315K ops/s) | 4.07 ms (246K ops/s) |
+| Update 1K fields | 1.86 ms (538K ops/s) | 0.98 ms (1.0M ops/s) | 2.92 ms (342K ops/s) |
+| Sync 500 entities | 11.0 ms | 5.5 ms | 7.4 ms |
+| Sync bandwidth (500 entities) | 175 KB | 25 KB | 36 KB |
+| Structured workload (1000 users + 200 projects) | 11.8 ms | 8.0 ms | 2,436 ms |
+| 10-peer ring convergence (500 entities) | 111 ms | 12 ms | 188 ms |
+| Partition heal (1000 shared + 500 divergent) | 94 ms | 3.6 ms | 9.1 ms |
+| Merge correctness | 100% | 100% | 100% |
+
+Silk is slower on raw CRDT operations and uses more bandwidth (7x Loro). This is the cost of content-addressed Merkle-DAG entries — each operation carries a BLAKE3 hash, HLC clock, author identity, and causal parent links. These provide integrity verification, causal ordering, immutable audit trail, and author authentication — capabilities the comparison systems do not offer.
+
+For context: 10,000 entities written in **48ms**. A 500-server infrastructure graph synced between two peers in **11ms**. A 1,500-entity partition healed in **94ms**. For local-first systems syncing on a timer, these are within practical bounds.
+
+Full methodology, per-scenario analysis, and reproduction instructions: [BENCHMARKS.md](BENCHMARKS.md).
 
 ## When Silk Is the Right Tool
 
