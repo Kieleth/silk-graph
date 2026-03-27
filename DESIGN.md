@@ -188,7 +188,7 @@ struct Entry {
     hash: [u8; 32],           // BLAKE3(msgpack(self without hash))
     payload: GraphOp,         // the mutation (add_node, add_edge, etc.)
     next: Vec<[u8; 32]>,      // causal predecessors (heads at time of write)
-    refs: Vec<[u8; 32]>,      // skip-list refs for fast traversal (configurable depth)
+    refs: Vec<[u8; 32]>,      // reserved (currently unused, part of hash for wire compat)
     clock: LamportClock,      // {instance_id, monotonic_counter}
     author: [u8; 32],         // instance public key
     sig: Vec<u8>,             // signature over (payload, next, refs, clock)
@@ -202,7 +202,7 @@ struct LamportClock {  // (R-01: replaced with Hybrid Logical Clock — see ROAD
 
 **`next`**: Links to the current DAG heads at time of write. This encodes causality — if entry B has entry A in its `next`, B happened after A.
 
-**`refs`**: Skip-list pointers into deeper history (default: 16 refs per entry). Accelerate DAG traversal from O(n) to O(log n) for long chains.
+**`refs`**: Reserved field. Currently always empty (`vec![]`). Included in the hash computation for wire format stability. May be used for skip-list traversal acceleration in future versions.
 
 **`sig`**: Signature over the entry content (excluding hash and sig themselves). Allows any peer to verify the entry was created by a legitimate fleet instance.
 

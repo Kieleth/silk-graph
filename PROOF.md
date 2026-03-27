@@ -222,7 +222,9 @@ Therefore `G_A = Materialize(T(L_A)) = Materialize(T(L_B)) = G_B`. ∎
 
 **Proof**: Quarantine operates at the MaterializedGraph layer, not the OpLog layer. `graph.apply()` adds entries to the quarantined set; the OpLog is unaffected. Since OpLog convergence (Theorem 3) depends only on entry sets, and quarantine does not add or remove entries from the OpLog, convergence is preserved.
 
-**Note**: Two peers with identical OpLogs produce identical quarantined sets — topological ordering is deterministic (Section 5, Case 2). Quarantined sets can only differ if peers have genuinely different entry sets (e.g., mid-sync, before full convergence). After bidirectional sync, quarantine sets converge along with the OpLog.
+**Quarantine lifecycle**: The quarantined set is grow-only within a single materialization pass. When `rebuild()` is called (triggered by ExtendOntology or Checkpoint entries during sync), the set is cleared and all entries are re-evaluated against the current ontology. This means a previously-quarantined entry can be un-quarantined if the ontology has evolved to accept it — for example, when an ExtendOntology entry adds the type that was missing. This is correct: the quarantine decision depends on the ontology at materialization time, and `rebuild()` ensures the ontology and quarantine set are always consistent.
+
+**Note**: Two peers with identical OpLogs produce identical quarantined sets — topological ordering is deterministic (Section 5, Case 2), and `rebuild()` replays all entries in that order against the same evolved ontology. Quarantined sets can only differ if peers have genuinely different entry sets (e.g., mid-sync, before full convergence). After bidirectional sync, quarantine sets converge along with the OpLog.
 
 ---
 

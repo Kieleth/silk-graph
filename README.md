@@ -11,6 +11,14 @@ Silk is a replicated graph store with schema enforcement and automatic conflict 
 
 > **Terminology note:** Silk uses "ontology" to mean a typed property-graph schema with RDFS-level class hierarchy — node types, edge type constraints, property validation, and `parent_type` inheritance. It does not perform OWL-style open-world reasoning or subsumption. Think "schema with class hierarchy and graph-aware constraints."
 
+## Origin and Authorship
+
+Silk was extracted from [Shelob](https://shelob.kieleth.com), a self-healing DevOps platform that needed fast peer-to-peer sync of infrastructure knowledge graphs between control nodes. The replication problem — converging typed, schema-enforced graphs across independent peers without coordination — had no existing solution. Silk was built to solve it, then extracted as a standalone library.
+
+The library is designed and maintained by [Kieleth](https://github.com/Kieleth), implemented primarily using Claude Code (Anthropic's Opus model). Architecture, design decisions, and validation are human-directed; code generation, documentation, and test implementation are AI-assisted. The git history begins at open-source extraction — prior development occurred in a private repository.
+
+All convergence claims are backed by a [semi-formal proof](PROOF.md) with [automated invariant checks](INVARIANTS.md). Performance claims are backed by [reproducible experiments](EXPERIMENTS.md) and [comparative benchmarks](BENCHMARKS.md). Both are independently verifiable.
+
 ## Quick Start
 
 ### Python

@@ -68,7 +68,10 @@ pub struct MaterializedGraph {
     pub ontology: Ontology,
     /// R-02: entries that failed ontology validation during apply().
     /// These entries exist in the oplog (for CRDT convergence) but are
-    /// invisible in the materialized graph. Grow-only set — monotonic, safe.
+    /// invisible in the materialized graph. Grow-only within a single
+    /// materialization pass. Cleared and rebuilt on `rebuild()` — this
+    /// allows previously-quarantined entries to be re-evaluated when the
+    /// ontology evolves (e.g., after ExtendOntology arrives via sync).
     pub quarantined: HashSet<Hash>,
 }
 

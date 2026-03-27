@@ -93,7 +93,9 @@ pub struct Entry {
     pub payload: GraphOp,
     /// Causal predecessors — hashes of the DAG heads at time of write
     pub next: Vec<Hash>,
-    /// Skip-list references for O(log n) traversal into deeper history
+    /// Reserved. Currently unused (always empty). Part of the hash computation
+    /// for wire format stability. May be used for skip-list traversal in future versions.
+    #[serde(default)]
     pub refs: Vec<Hash>,
     /// Lamport clock at time of creation
     pub clock: LamportClock,

@@ -321,7 +321,7 @@ impl OpLog {
                         queue.push_back(*parent);
                     }
                 }
-                // Also follow refs (skip-list) for completeness.
+                // Also follow refs (reserved, currently empty).
                 for r in &entry.refs {
                     if !visited.contains(r) {
                         queue.push_back(*r);
