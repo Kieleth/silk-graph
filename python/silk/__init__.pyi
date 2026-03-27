@@ -183,6 +183,14 @@ class GraphStore:
     ) -> list[str]:
         """BFS traversal from a start node. Returns list of node IDs."""
         ...
+    def dfs(
+        self,
+        start: str,
+        max_depth: int | None = None,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        """DFS traversal from a start node. Returns list of node IDs."""
+        ...
     def shortest_path(self, start: str, end: str) -> list[str] | None:
         """Shortest path between two nodes. Returns list of node IDs or None."""
         ...
@@ -423,6 +431,14 @@ class GraphSnapshot:
         edge_type: str | None = None,
     ) -> list[str]:
         """BFS traversal from a start node. Returns list of node IDs."""
+        ...
+    def dfs(
+        self,
+        start: str,
+        max_depth: int | None = None,
+        edge_type: str | None = None,
+    ) -> list[str]:
+        """DFS traversal from a start node. Returns list of node IDs."""
         ...
     def shortest_path(self, start: str, end: str) -> list[str] | None:
         """Shortest path between two nodes. Returns list of node IDs or None."""

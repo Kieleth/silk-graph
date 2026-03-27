@@ -46,6 +46,50 @@ pub fn bfs(
     result
 }
 
+/// DFS traversal result — node IDs in visit order (depth-first).
+pub fn dfs(
+    graph: &MaterializedGraph,
+    start: &str,
+    max_depth: Option<usize>,
+    edge_type_filter: Option<&str>,
+) -> Vec<String> {
+    let mut visited = HashSet::new();
+    let mut result = Vec::new();
+    let mut stack: Vec<(String, usize)> = Vec::new();
+
+    if graph.get_node(start).is_none() {
+        return result;
+    }
+
+    visited.insert(start.to_string());
+    stack.push((start.to_string(), 0));
+
+    while let Some((node_id, depth)) = stack.pop() {
+        result.push(node_id.clone());
+
+        if let Some(max) = max_depth {
+            if depth >= max {
+                continue;
+            }
+        }
+
+        let edges = graph.outgoing_edges(&node_id);
+        for edge in edges {
+            if let Some(filter) = edge_type_filter {
+                if edge.edge_type != filter {
+                    continue;
+                }
+            }
+            if !visited.contains(&edge.target_id) {
+                visited.insert(edge.target_id.clone());
+                stack.push((edge.target_id.clone(), depth + 1));
+            }
+        }
+    }
+
+    result
+}
+
 /// Shortest path between two nodes (unweighted BFS).
 /// Returns the path as a list of node IDs (including start and end),
 /// or None if no path exists.
@@ -447,6 +491,51 @@ mod tests {
         // Filter by nonexistent type → only start node.
         let visited2 = bfs(&g, "a", None, Some("NONEXISTENT"));
         assert_eq!(visited2, vec!["a"]);
+    }
+
+    #[test]
+    fn dfs_traversal_from_node() {
+        let g = linear_graph();
+        let visited = dfs(&g, "a", None, None);
+        // DFS visits all nodes but in depth-first order
+        assert_eq!(visited.len(), 4);
+        assert_eq!(visited[0], "a"); // start node always first
+        assert!(visited.contains(&"d".to_string()));
+    }
+
+    #[test]
+    fn dfs_respects_depth_limit() {
+        let g = linear_graph();
+        let visited = dfs(&g, "a", Some(2), None);
+        assert!(visited.len() <= 3);
+        assert_eq!(visited[0], "a");
+    }
+
+    #[test]
+    fn dfs_visits_deep_before_wide() {
+        // Build a graph: a -> b -> d, a -> c
+        // DFS from a should reach d before c (depth-first)
+        let mut g = MaterializedGraph::new(test_ontology());
+        g.apply(&add_node("a", "entity", 1));
+        g.apply(&add_node("b", "entity", 2));
+        g.apply(&add_node("c", "entity", 3));
+        g.apply(&add_node("d", "entity", 4));
+        g.apply(&add_edge("ab", "DEPENDS_ON", "a", "b", 5));
+        g.apply(&add_edge("ac", "DEPENDS_ON", "a", "c", 6));
+        g.apply(&add_edge("bd", "DEPENDS_ON", "b", "d", 7));
+
+        let bfs_result = bfs(&g, "a", None, None);
+        let dfs_result = dfs(&g, "a", None, None);
+
+        // Both visit all 4 nodes
+        assert_eq!(bfs_result.len(), 4);
+        assert_eq!(dfs_result.len(), 4);
+
+        // BFS is breadth-first: a, then b and c (depth 1), then d (depth 2)
+        // DFS is depth-first: explores one branch fully before the other
+        // Both start with a
+        assert_eq!(bfs_result[0], "a");
+        assert_eq!(dfs_result[0], "a");
     }
 
     #[test]

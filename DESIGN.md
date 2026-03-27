@@ -185,18 +185,19 @@ Each graph operation is an entry in the Merkle-DAG:
 
 ```rust
 struct Entry {
-    hash: [u8; 32],           // BLAKE3(msgpack(self without hash))
-    payload: GraphOp,         // the mutation (add_node, add_edge, etc.)
-    next: Vec<[u8; 32]>,      // causal predecessors (heads at time of write)
-    refs: Vec<[u8; 32]>,      // reserved (currently unused, part of hash for wire compat)
-    clock: LamportClock,      // {instance_id, monotonic_counter}
-    author: [u8; 32],         // instance public key
-    sig: Vec<u8>,             // signature over (payload, next, refs, clock)
+    hash: [u8; 32],              // BLAKE3(msgpack(payload, next, refs, clock, author))
+    payload: GraphOp,            // the mutation (add_node, add_edge, etc.)
+    next: Vec<[u8; 32]>,         // causal predecessors (heads at time of write)
+    refs: Vec<[u8; 32]>,         // reserved (currently unused, part of hash for wire compat)
+    clock: HybridClock,          // R-01: wall clock + logical counter + instance ID
+    author: String,              // instance identifier
+    signature: Option<Vec<u8>>,  // D-027: ed25519 signature (None for unsigned entries)
 }
 
-struct LamportClock {  // (R-01: replaced with Hybrid Logical Clock — see ROADMAP.md)
-    id: String,               // instance identifier
-    time: u64,                // monotonic, incremented on each local op
+struct HybridClock {             // R-01: replaced LamportClock
+    id: String,                  // instance identifier
+    physical_ms: u64,            // wall-clock milliseconds
+    logical: u32,                // logical counter (disambiguates within same ms)
 }
 ```
 
@@ -1352,13 +1353,11 @@ Any Silk consumer could use ObservationLog for time-series data, audit trails, o
 
 **Design**:
 - Each Silk instance holds an ed25519 keypair (generated on first boot or provided)
-- `Entry` gains a `signature: Option<[u8; 64]>` field — signature over SignableContent
-- `author` becomes the hex-encoded public key (32 bytes → 64 hex chars)
-- Local writes: sign with the instance's private key
-- Remote merge: verify signature before accepting. Invalid signatures → entry rejected.
+- `Entry` has `signature: Option<Vec<u8>>` — ed25519 signature over the entry hash. `None` for unsigned entries (backward compatible).
+- `author` remains a String instance identifier (not a public key). The signing key is separate from the author identity.
+- Local writes: sign with the instance's private key if configured
+- Remote merge: verify signature against registered trusted authors. Invalid signatures → entry rejected. Unsigned entries accepted by default; strict mode rejects them.
 - Key distribution: out of band (same trust model as ontology distribution)
-
-**Wire format impact**: Breaking change. Entry struct gains a new field. Requires major version bump (v0.3.0). Old entries without signatures can be accepted via a migration flag.
 
 **What this unlocks**:
 - Provenance: "who created this entry?" is cryptographically verifiable

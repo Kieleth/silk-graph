@@ -122,6 +122,11 @@ impl PyGraphSnapshot {
         engine::bfs(&self.graph, start, max_depth, edge_type)
     }
 
+    #[pyo3(signature = (start, max_depth=None, edge_type=None))]
+    fn dfs(&self, start: &str, max_depth: Option<usize>, edge_type: Option<&str>) -> Vec<String> {
+        engine::dfs(&self.graph, start, max_depth, edge_type)
+    }
+
     fn shortest_path(&self, start: &str, end: &str) -> Option<Vec<String>> {
         engine::shortest_path(&self.graph, start, end)
     }

@@ -557,6 +557,12 @@ impl PyGraphStore {
         engine::bfs(&self.graph, start, max_depth, edge_type)
     }
 
+    /// DFS traversal from a start node. Returns list of node IDs.
+    #[pyo3(signature = (start, max_depth=None, edge_type=None))]
+    fn dfs(&self, start: &str, max_depth: Option<usize>, edge_type: Option<&str>) -> Vec<String> {
+        engine::dfs(&self.graph, start, max_depth, edge_type)
+    }
+
     /// Shortest path between two nodes. Returns list of node IDs or None.
     fn shortest_path(&self, start: &str, end: &str) -> Option<Vec<String>> {
         engine::shortest_path(&self.graph, start, end)
