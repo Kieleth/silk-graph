@@ -111,6 +111,8 @@ Full methodology, per-scenario analysis, and reproduction instructions: [BENCHMA
 
 ## When Silk Is the Right Tool
 
+Silk is a replicated graph store that validates your schema, works offline, and fits in your process. No server, no coordinator, no external database.
+
 **Good fit:**
 - **Local-first applications** — offline-capable apps that sync when connected (note-taking, task management, field data collection)
 - **Edge computing** — devices that operate independently and sync periodically (IoT gateways, drones, retail POS)

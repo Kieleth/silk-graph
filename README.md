@@ -158,6 +158,8 @@ store.merge_sync_payload(&payload)?;
 - Systems with evolving schemas (extend ontology without migrations — R-03)
 - Systems that need historical queries (time-travel to any point in the past — R-06)
 
+Silk is a replicated graph store that validates your schema, works offline, and fits in your process.
+
 **Not the right tool:**
 - High-throughput analytics — use DuckDB or ClickHouse
 - SQL queries — use SQLite or Postgres
