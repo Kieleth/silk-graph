@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Extended constraint vocabulary** — SHACL-inspired property constraints: `pattern` (full regex via `regex` crate), `min_length`/`max_length` (string length), `min_exclusive`/`max_exclusive` (exclusive numeric bounds). All enforced on both `add_node` and `update_property`. See [FAQ.md](FAQ.md) for the full constraint reference table.
 - **Compaction safety enforcement** — `compact()` now checks all registered peers have synced before compacting. Raises `RuntimeError` if any peer hasn't synced. `verify_compaction_safe()` for explicit checks. Pass `safe=False` to override.
 - **`memory_usage()`** — returns Rust-side heap estimates (`oplog_bytes`, `graph_bytes`, `total_bytes`).
+- **Sync compression** — optional, pluggable `SyncCompression` protocol. Built-in: `ZlibCompression(level=1)` (68% bandwidth savings, 29% latency overhead), `NoCompression`. Custom compressors implement `compress()` + `decompress()`. See [FAQ.md](FAQ.md).
 
 ### Changed
 - **Refactor: python.rs split into modules** — `src/python.rs` (1,983 lines) split into `python/mod.rs` (1,473), `python/conversions.rs` (297), `python/snapshot.rs` (166), `python/obslog.rs` (91). No API changes.

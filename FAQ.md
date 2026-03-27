@@ -427,6 +427,47 @@ view = GraphView(receiver, node_types=["server"])
 
 ---
 
+### Can I compress sync payloads?
+
+Yes. Compression is optional, applied at the transport boundary. Silk's sync methods produce and consume raw bytes — compression wraps those bytes.
+
+```python
+from silk.compression import ZlibCompression
+
+comp = ZlibCompression()  # level=1 by default
+
+# Sender
+payload = store_a.receive_sync_offer(offer_bytes)
+compressed = comp.compress(payload)       # 68% smaller
+# send compressed over network
+
+# Receiver
+payload = comp.decompress(compressed)
+store_b.merge_sync_payload(payload)
+```
+
+Built-in compressors:
+
+| Compressor | Bandwidth | Latency overhead | When to use |
+|-----------|-----------|-----------------|-------------|
+| `NoCompression()` | 100% | 0% | LAN, local sync |
+| `ZlibCompression(1)` | 32% | ~29% | WAN, metered connections |
+| `ZlibCompression(6)` | 31% | ~59% | Bandwidth-constrained, CPU available |
+
+Custom compressors implement the `SyncCompression` protocol:
+
+```python
+class LZ4Compression:
+    def compress(self, data: bytes) -> bytes:
+        return lz4.frame.compress(data)
+    def decompress(self, data: bytes) -> bytes:
+        return lz4.frame.decompress(data)
+```
+
+> **Measured in [EXP-05](EXPERIMENTS.md).** At 1000 entities, zlib-1 reduces payloads from 202 KB to 65 KB at a cost of 1.9ms. Higher zlib levels give <1% extra compression at 2-3x more CPU.
+
+---
+
 ## Contributing
 
 ### How do I extend Silk?
@@ -438,5 +479,6 @@ Three extension points, all Python protocols:
 | Query engines | [`QueryEngine`](QUERY_EXTENSIONS.md) | Fluent `Query` builder | `python/silk/query.py` |
 | Compaction policies | [`CompactionPolicy`](https://github.com/Kieleth/silk-graph/blob/main/python/silk/compaction.py) | `IntervalPolicy`, `ThresholdPolicy` | `python/silk/compaction.py` |
 | Graph views | [`GraphView`](https://github.com/Kieleth/silk-graph/blob/main/python/silk/views.py) | Type/subtype/predicate filters | `python/silk/views.py` |
+| Sync compression | [`SyncCompression`](https://github.com/Kieleth/silk-graph/blob/main/python/silk/compression.py) | `ZlibCompression`, `NoCompression` | `python/silk/compression.py` |
 
 For Rust-level contributions (new constraint types, new graph algorithms, sync optimizations): see [CONTRIBUTING.md](CONTRIBUTING.md).

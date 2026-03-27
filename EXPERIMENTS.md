@@ -246,3 +246,32 @@ Python-side overhead is ~2% of Rust-side (1.14 MB at 30K nodes). Negligible.
 ```bash
 python experiments/test_memory_footprint.py
 ```
+
+---
+
+## EXP-05: Sync Payload Compression
+
+**Question:** What is the bandwidth/latency trade-off for compressing sync payloads?
+
+**Setup:** Two peers, sender has N entities (3 properties each). Measure full sync cycle (offer → receive → compress → decompress → merge) with different compressors. 20 rounds per configuration, median reported.
+
+### Results (1000 entities)
+
+| Compressor | Payload | Ratio | Sync time | Overhead |
+|-----------|---------|-------|-----------|----------|
+| None | 202 KB | 100% | 6.4 ms | — |
+| zlib-1 | 65 KB | 32% | 8.3 ms | +29% |
+| zlib-6 | 63 KB | 31% | 10.2 ms | +59% |
+| zlib-9 | 63 KB | 31% | 11.7 ms | +83% |
+
+### Observations
+
+- **zlib-1 is the clear winner**: 68% bandwidth savings for 29% latency overhead. Higher levels give <1% extra compression at 2-3x more CPU.
+- **Compression ratio is stable across scales**: ~32% at 100, 500, and 1000 entities. The MessagePack-encoded Merkle-DAG entries have consistent structure (hashes, clocks, property maps).
+- **Decompression is negligible**: ~0.3ms regardless of payload size. The overhead is almost entirely in compression.
+
+### Reproduce
+
+```bash
+python experiments/test_compression.py
+```
