@@ -280,6 +280,44 @@ impl MaterializedGraph {
         }
     }
 
+    /// Estimated heap memory used by the materialized graph (bytes).
+    pub fn estimated_memory_bytes(&self) -> usize {
+        let mut total = 0;
+        // Nodes: id string + type string + label + properties + clocks + overhead
+        for node in self.nodes.values() {
+            total += node.node_id.len() + node.node_type.len() + node.label.len();
+            total += node.subtype.as_ref().map_or(0, |s| s.len());
+            // Properties: key + estimated value size + clock per property
+            for (k, v) in &node.properties {
+                total += k.len() + std::mem::size_of_val(v) + 48; // key + value + clock overhead
+            }
+            total += 128; // fixed struct overhead (clocks, bools, HashMap shells)
+        }
+        // Edges: similar structure
+        for edge in self.edges.values() {
+            total += edge.edge_id.len() + edge.edge_type.len();
+            total += edge.source_id.len() + edge.target_id.len();
+            for (k, v) in &edge.properties {
+                total += k.len() + std::mem::size_of_val(v) + 48;
+            }
+            total += 128;
+        }
+        // Adjacency indexes: outgoing + incoming (id strings + HashSet overhead)
+        for (k, set) in &self.outgoing {
+            total += k.len() + set.len() * 32;
+        }
+        for (k, set) in &self.incoming {
+            total += k.len() + set.len() * 32;
+        }
+        // Type index
+        for (k, set) in &self.by_type {
+            total += k.len() + set.len() * 32;
+        }
+        // Quarantine set
+        total += self.quarantined.len() * 48;
+        total
+    }
+
     /// All live nodes.
     pub fn all_nodes(&self) -> Vec<&Node> {
         self.nodes.values().filter(|n| !n.tombstoned).collect()

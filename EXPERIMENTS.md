@@ -213,3 +213,36 @@ pip install -r experiments/bench_requirements.txt
 maturin develop --release  # or: pip install silk-graph
 python experiments/bench_comparative.py
 ```
+
+---
+
+## EXP-04: Memory Footprint at Scale
+
+**Question:** How much memory does Silk use as graph size grows? Is the in-memory model practical at 10K–100K nodes?
+
+**Setup:** Realistic infrastructure graph — servers (5 properties), services (3 properties), RUNS_ON and DEPENDS_ON edges. Each server has 2-3 services, services have 1-2 dependency edges. Measured both Rust-side heap (`store.memory_usage()`) and Python-side overhead (`tracemalloc`).
+
+### Results
+
+| Nodes | Edges | Oplog | Graph | Rust Total | Per Node | Snapshot |
+|-------|-------|-------|-------|-----------|----------|----------|
+| 400 | 749 | 0.42 MB | 0.35 MB | 0.77 MB | 2.0 KB | 0.21 MB |
+| 2,000 | 3,769 | 2.14 MB | 1.77 MB | 3.91 MB | 2.0 KB | 1.08 MB |
+| 4,000 | 7,513 | 4.28 MB | 3.53 MB | 7.80 MB | 2.0 KB | 2.17 MB |
+| 20,000 | 37,436 | 21.5 MB | 17.8 MB | 39.2 MB | 2.1 KB | 11.0 MB |
+| 30,000 | 49,963 | 30.1 MB | 25.7 MB | 55.8 MB | 1.95 KB | 15.4 MB |
+
+Python-side overhead is ~2% of Rust-side (1.14 MB at 30K nodes). Negligible.
+
+### Observations
+
+- **Linear scaling** — ~2 KB per node (including edges, properties, per-property clocks, adjacency indexes). 10x nodes = 10x memory.
+- **Oplog is 55% of total** — the Merkle-DAG entry storage dominates. Compaction reduces this to a single checkpoint entry.
+- **Projected at 100K nodes: ~186 MB** — practical on servers and laptops, tight on mobile/IoT.
+- **Snapshot is ~28% of in-memory size** — MessagePack serialization is compact relative to in-memory representation.
+
+### Reproduce
+
+```bash
+python experiments/test_memory_footprint.py
+```

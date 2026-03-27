@@ -412,6 +412,18 @@ impl PyGraphStore {
         (errors.is_empty(), errors)
     }
 
+    /// Estimated memory usage in bytes (Rust heap).
+    /// Returns dict with oplog_bytes, graph_bytes, total_bytes.
+    fn memory_usage(&self) -> std::collections::HashMap<String, usize> {
+        let oplog_bytes = self.backend.oplog().estimated_memory_bytes();
+        let graph_bytes = self.graph.estimated_memory_bytes();
+        let mut result = std::collections::HashMap::new();
+        result.insert("oplog_bytes".to_string(), oplog_bytes);
+        result.insert("graph_bytes".to_string(), graph_bytes);
+        result.insert("total_bytes".to_string(), oplog_bytes + graph_bytes);
+        result
+    }
+
     /// Instance identifier.
     fn instance_id(&self) -> &str {
         &self.instance_id

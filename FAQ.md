@@ -348,6 +348,35 @@ Each compaction: N entries → 1 checkpoint. Call periodically. See [`Compaction
 
 ---
 
+### How much memory does Silk use?
+
+Silk stores both the oplog (Merkle-DAG of all entries) and the materialized graph (nodes, edges, indexes) in memory. Measured on a realistic infrastructure workload (servers with 5 properties, services with 3 properties, RUNS_ON + DEPENDS_ON edges):
+
+| Graph Size | Memory | Per Node | Snapshot |
+|-----------|--------|----------|----------|
+| 400 nodes / 750 edges | 0.8 MB | 2.0 KB | 0.2 MB |
+| 4,000 nodes / 7,500 edges | 7.8 MB | 2.0 KB | 2.2 MB |
+| 30,000 nodes / 50,000 edges | 55.8 MB | 1.95 KB | 15.4 MB |
+
+Scaling is linear — ~2 KB per node (including edges, properties, per-property clocks, and adjacency indexes). Projected at 100K nodes: ~186 MB.
+
+The oplog accounts for ~55% of memory (serialized entries + hash index), the materialized graph for ~45% (node/edge structs + adjacency indexes + type indexes).
+
+Inspect memory at runtime:
+
+```python
+mem = store.memory_usage()
+print(f"Oplog: {mem['oplog_bytes'] / 1024:.0f} KB")
+print(f"Graph: {mem['graph_bytes'] / 1024:.0f} KB")
+print(f"Total: {mem['total_bytes'] / 1024:.0f} KB")
+```
+
+There is no lazy loading, mmap, or eviction. The full graph lives in the process. For graphs under ~50K nodes, this is practical on any modern machine. For larger graphs, consider separate stores per domain or compaction to reduce oplog size.
+
+> **Measured in [EXP-04](EXPERIMENTS.md).** Reproduce: `python experiments/test_memory_footprint.py`
+
+---
+
 ## Sync & Partial Replication
 
 ### Can I sync only part of the graph?

@@ -104,6 +104,23 @@ impl OpLog {
         self.len == 0
     }
 
+    /// Estimated heap memory used by the oplog (bytes).
+    /// Counts serialized entry sizes + HashMap/HashSet overhead.
+    pub fn estimated_memory_bytes(&self) -> usize {
+        let mut total = 0;
+        // Entry storage: each entry's serialized size + hash key (32 bytes) + HashMap overhead (~64 bytes)
+        for entry in self.entries.values() {
+            total += entry.to_bytes().len() + 32 + 64;
+        }
+        // Heads set: 32 bytes per hash + HashSet overhead
+        total += self.heads.len() * (32 + 16);
+        // Children map: hash key + HashSet of hashes
+        for children in self.children.values() {
+            total += 32 + 16 + children.len() * (32 + 16);
+        }
+        total
+    }
+
     /// Verify structural integrity of the oplog (INV-6).
     /// Checks I-01 (hash integrity), I-02 (causal completeness), I-04 (heads accuracy).
     /// Returns a list of errors (empty = healthy).
