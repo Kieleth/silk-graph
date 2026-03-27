@@ -939,6 +939,15 @@ impl PyGraphStore {
         self.gossip.record_sync(peer_id);
     }
 
+    /// Check if compaction is safe: all known peers must have synced
+    /// since the most recent entry. Returns (safe, reasons).
+    fn verify_compaction_safe(&self) -> (bool, Vec<String>) {
+        // Find the latest entry's physical clock
+        let all = self.backend.oplog().entries_since(None);
+        let latest_ms = all.iter().map(|e| e.clock.physical_ms).max().unwrap_or(0);
+        self.gossip.verify_compaction_safe(latest_ms)
+    }
+
     // -- Signing (D-027) --
 
     /// Generate a new random ed25519 keypair, store the private key, return hex public key.
@@ -1030,7 +1039,20 @@ impl PyGraphStore {
     /// replaces entire oplog with the checkpoint entry.
     /// Returns the hex hash of the checkpoint entry.
     /// SAFETY: Only call when ALL peers have synced to current state.
-    fn compact(&mut self) -> PyResult<String> {
+    /// Compact the oplog into a single checkpoint entry.
+    /// If `safe` is true (default), verifies all known peers have synced
+    /// before compacting. Returns the checkpoint hash.
+    #[pyo3(signature = (safe = true))]
+    fn compact(&mut self, safe: bool) -> PyResult<String> {
+        if safe {
+            let (is_safe, reasons) = self.verify_compaction_safe();
+            if !is_safe {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "compaction is unsafe: {}. Pass safe=False to force.",
+                    reasons.join("; ")
+                )));
+            }
+        }
         let (ops, clocks) = self.build_checkpoint_ops();
         let op_clocks: Vec<(u64, u32)> = clocks.iter().map(|c| c.as_tuple()).collect();
         self.clock.tick();

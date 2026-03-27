@@ -4,6 +4,8 @@ Tests verifying that compact() creates a checkpoint entry,
 replaces the oplog, and preserves the full graph state.
 """
 
+import pytest
+
 import json
 from silk import GraphStore
 
@@ -233,3 +235,82 @@ def test_create_checkpoint_returns_bytes():
     assert isinstance(checkpoint_bytes, bytes)
     assert len(checkpoint_bytes) > 0
     assert store.len() == before  # store unchanged
+
+
+# -- Compaction safety (P3) --
+
+
+def test_compact_safe_no_peers():
+    """No registered peers → compaction is trivially safe."""
+    store = _store()
+    store.add_node("n1", "entity", "Node")
+    safe, reasons = store.verify_compaction_safe()
+    assert safe
+    assert reasons == []
+    # compact() should succeed
+    store.compact()
+    assert store.len() == 1
+
+
+def test_compact_unsafe_with_unsynced_peer():
+    """Registered peer that hasn't synced → compaction is unsafe."""
+    store = _store()
+    store.add_node("n1", "entity", "Node")
+    store.register_peer("remote-1", "tcp://remote:7701")
+    # remote-1 has never synced (last_seen_ms = 0)
+    safe, reasons = store.verify_compaction_safe()
+    assert not safe
+    assert len(reasons) == 1
+    assert "remote-1" in reasons[0]
+    assert "never synced" in reasons[0]
+
+
+def test_compact_rejects_when_unsafe():
+    """compact(safe=True) raises when peers haven't synced."""
+    store = _store()
+    store.add_node("n1", "entity", "Node")
+    store.register_peer("remote-1", "tcp://remote:7701")
+    with pytest.raises(RuntimeError, match="compaction is unsafe"):
+        store.compact()  # safe=True by default
+
+
+def test_compact_force_bypasses_safety():
+    """compact(safe=False) compacts even with unsynced peers."""
+    store = _store()
+    store.add_node("n1", "entity", "Node")
+    store.register_peer("remote-1", "tcp://remote:7701")
+    # Force compaction despite unsynced peer
+    store.compact(safe=False)
+    assert store.len() == 1
+
+
+def test_compact_safe_after_sync():
+    """After recording sync with all peers, compaction is safe."""
+    store = _store()
+    store.add_node("n1", "entity", "Node")
+    store.register_peer("remote-1", "tcp://remote:7701")
+
+    # Record sync — peer is now up to date
+    store.record_sync("remote-1")
+
+    safe, reasons = store.verify_compaction_safe()
+    assert safe
+    assert reasons == []
+    store.compact()
+    assert store.len() == 1
+
+
+def test_compact_unsafe_partial_sync():
+    """Some peers synced, some haven't → unsafe."""
+    store = _store()
+    store.add_node("n1", "entity", "Node")
+    store.register_peer("peer-a", "tcp://a:7701")
+    store.register_peer("peer-b", "tcp://b:7701")
+
+    store.record_sync("peer-a")
+    # peer-b hasn't synced
+
+    safe, reasons = store.verify_compaction_safe()
+    assert not safe
+    assert len(reasons) == 1
+    assert "peer-b" in reasons[0]

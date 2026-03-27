@@ -143,6 +143,32 @@ impl PeerRegistry {
     pub fn get(&self, peer_id: &str) -> Option<&PeerInfo> {
         self.peers.get(peer_id)
     }
+
+    /// Check if compaction is safe: all known peers must have synced
+    /// since `latest_entry_ms` (the physical clock of the most recent entry).
+    /// Returns (safe, reasons) where reasons lists peers that haven't synced.
+    pub fn verify_compaction_safe(&self, latest_entry_ms: u64) -> (bool, Vec<String>) {
+        if self.peers.is_empty() {
+            // No known peers — compaction is trivially safe (single-node system)
+            return (true, vec![]);
+        }
+
+        let mut reasons = Vec::new();
+        for peer in self.peers.values() {
+            if peer.last_seen_ms < latest_entry_ms {
+                if peer.last_seen_ms == 0 {
+                    reasons.push(format!("peer '{}' has never synced", peer.peer_id));
+                } else {
+                    reasons.push(format!(
+                        "peer '{}' last synced at {}ms, but latest entry is at {}ms",
+                        peer.peer_id, peer.last_seen_ms, latest_entry_ms
+                    ));
+                }
+            }
+        }
+
+        (reasons.is_empty(), reasons)
+    }
 }
 
 #[cfg(test)]

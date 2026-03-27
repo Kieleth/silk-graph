@@ -344,7 +344,22 @@ class MyPolicy:
 
 Each compaction: N entries → 1 checkpoint. Call periodically. See [`CompactionPolicy`](https://github.com/Kieleth/silk-graph/blob/main/python/silk/compaction.py) for the extension protocol.
 
-> **Multi-peer safety:** only compact when all peers have synced. The policies don't know about peers — your application handles the safety check.
+> **Multi-peer safety:** `compact()` checks that all registered peers have synced before compacting. If any peer hasn't synced, it raises `RuntimeError`. Pass `safe=False` to override.
+
+```python
+# Check safety explicitly
+safe, reasons = store.verify_compaction_safe()
+if not safe:
+    print(f"Unsafe: {reasons}")
+
+# Default: raises if any peer hasn't synced
+store.compact()           # safe=True (default)
+
+# Force compaction (e.g., peer is permanently gone)
+store.compact(safe=False)
+```
+
+Register peers via `store.register_peer(id, address)` and record syncs via `store.record_sync(id)`. If no peers are registered, compaction is always safe (single-node system).
 
 ---
 
