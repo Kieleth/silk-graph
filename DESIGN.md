@@ -516,7 +516,7 @@ silk/
 ├── Cargo.toml                  # crate-type = ["cdylib", "rlib"]
 ├── pyproject.toml              # maturin build config
 ├── README.md                   # standalone documentation
-├── LICENSE                     # open-source license (TBD)
+├── LICENSE.md                  # FSL-1.0-Apache-2.0 (converts to Apache-2.0 after two years)
 ├── deny.toml                   # cargo-deny config (license + vulnerability audit)
 │
 ├── src/

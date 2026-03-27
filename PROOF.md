@@ -222,7 +222,7 @@ Therefore `G_A = Materialize(T(L_A)) = Materialize(T(L_B)) = G_B`. ∎
 
 **Proof**: Quarantine operates at the MaterializedGraph layer, not the OpLog layer. `graph.apply()` adds entries to the quarantined set; the OpLog is unaffected. Since OpLog convergence (Theorem 3) depends only on entry sets, and quarantine does not add or remove entries from the OpLog, convergence is preserved.
 
-**Note**: Two peers may have different quarantined sets if they have different ontologies (due to `ExtendOntology` ordering). The OpLogs are identical; the materialized graphs may differ. This is by design — quarantine is local policy (R-02).
+**Note**: Two peers with identical OpLogs produce identical quarantined sets — topological ordering is deterministic (Section 5, Case 2). Quarantined sets can only differ if peers have genuinely different entry sets (e.g., mid-sync, before full convergence). After bidirectional sync, quarantine sets converge along with the OpLog.
 
 ---
 
