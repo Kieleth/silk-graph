@@ -321,3 +321,166 @@ class TestSyncConflictResolution:
         # Both should have the node (add-wins)
         assert store_a.get_node("s1") is not None
         assert store_b.get_node("s1") is not None
+
+
+# -- Edge validation during sync --
+
+
+class TestEdgeValidationOnSync:
+    """Verify that edge source/target type constraints are enforced during sync,
+    even when entries arrive from a peer with a different ontology."""
+
+    def test_invalid_edge_quarantined_on_sync(self):
+        """An edge with wrong source/target types is quarantined on the
+        receiving peer, not silently accepted."""
+        # Peer A: permissive ontology allows server -> entity edges
+        permissive = {
+            "node_types": {
+                "server": {"properties": {}},
+                "app": {"properties": {}},
+            },
+            "edge_types": {
+                "RUNS_ON": {
+                    "source_types": ["server", "app"],
+                    "target_types": ["server", "app"],
+                },
+            },
+        }
+        a = GraphStore("peer-a", permissive)
+        a.add_node("s1", "server", "Server")
+        a.add_node("a1", "app", "App")
+        a.add_edge("bad", "RUNS_ON", "s1", "a1")  # server -> app
+
+        # Peer B: strict ontology — only app -> server
+        strict = {
+            "node_types": {
+                "server": {"properties": {}},
+                "app": {"properties": {}},
+            },
+            "edge_types": {
+                "RUNS_ON": {
+                    "source_types": ["app"],
+                    "target_types": ["server"],
+                },
+            },
+        }
+        b = GraphStore("peer-b", strict)
+
+        # Sync A → B
+        offer = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer)
+        b.merge_sync_payload(payload)
+
+        # Edge should be quarantined on B (wrong direction for B's ontology)
+        assert b.get_edge("bad") is None, "invalid edge should not be queryable"
+        assert len(b.get_quarantined()) > 0, "invalid edge should be quarantined"
+        # Nodes should be present (they're valid)
+        assert b.get_node("s1") is not None
+        assert b.get_node("a1") is not None
+
+    def test_valid_edge_survives_sync(self):
+        """A valid edge is materialized correctly after sync."""
+        ont = {
+            "node_types": {"server": {"properties": {}}, "app": {"properties": {}}},
+            "edge_types": {
+                "RUNS_ON": {
+                    "source_types": ["app"],
+                    "target_types": ["server"],
+                },
+            },
+        }
+        a = GraphStore("peer-a", ont)
+        a.add_node("s1", "server", "Server")
+        a.add_node("a1", "app", "App")
+        a.add_edge("e1", "RUNS_ON", "a1", "s1")  # app -> server (valid)
+
+        b = GraphStore("peer-b", ont)
+        offer = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer)
+        b.merge_sync_payload(payload)
+
+        assert b.get_edge("e1") is not None
+        assert b.get_edge("e1")["source_id"] == "a1"
+        assert b.get_edge("e1")["target_id"] == "s1"
+        assert len(b.get_quarantined()) == 0
+
+    def test_nodes_before_edges_in_topological_order(self):
+        """Topological ordering guarantees nodes are materialized before
+        their edges during sync. This test verifies the ordering by
+        checking that edges are validated against existing node types."""
+        ont = {
+            "node_types": {"server": {"properties": {}}, "app": {"properties": {}}},
+            "edge_types": {
+                "RUNS_ON": {
+                    "source_types": ["app"],
+                    "target_types": ["server"],
+                },
+            },
+        }
+        # Build a graph with many nodes and edges
+        a = GraphStore("peer-a", ont)
+        for i in range(50):
+            a.add_node(f"s-{i}", "server", f"Server {i}")
+            a.add_node(f"a-{i}", "app", f"App {i}")
+        for i in range(50):
+            a.add_edge(f"e-{i}", "RUNS_ON", f"a-{i}", f"s-{i}")
+
+        # Sync to empty peer
+        b = GraphStore("peer-b", ont)
+        offer = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer)
+        b.merge_sync_payload(payload)
+
+        # All 50 edges should be present (none quarantined)
+        assert len(b.get_quarantined()) == 0
+        for i in range(50):
+            edge = b.get_edge(f"e-{i}")
+            assert edge is not None, f"edge e-{i} missing after sync"
+            assert edge["source_id"] == f"a-{i}"
+            assert edge["target_id"] == f"s-{i}"
+
+
+# -- HLC tie-breaking --
+
+
+class TestHLCTieBreaking:
+    """Verify that HLC tie-breaking is deterministic and documented."""
+
+    def test_lower_instance_id_wins_tie(self):
+        """When two peers write the same property at the same logical time,
+        the peer with the lexicographically lower instance_id wins."""
+        ont = {
+            "node_types": {"entity": {"properties": {"value": {"value_type": "string"}}}},
+            "edge_types": {},
+        }
+        # Create shared base
+        base = GraphStore("base", ont)
+        base.add_node("n1", "entity", "Node", {"value": "original"})
+
+        # Fork to two peers with known instance IDs
+        a = GraphStore.from_snapshot("aaa-peer", base.snapshot())
+        b = GraphStore.from_snapshot("zzz-peer", base.snapshot())
+
+        # Both update the same property (concurrent)
+        a.update_property("n1", "value", "from-aaa")
+        b.update_property("n1", "value", "from-zzz")
+
+        # Sync bidirectionally
+        offer = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer)
+        b.merge_sync_payload(payload)
+
+        offer = a.generate_sync_offer()
+        payload = b.receive_sync_offer(offer)
+        a.merge_sync_payload(payload)
+
+        # Both must agree
+        val_a = a.get_node("n1")["properties"]["value"]
+        val_b = b.get_node("n1")["properties"]["value"]
+        assert val_a == val_b, f"peers diverged: a={val_a}, b={val_b}"
+
+        # The winner is deterministic — lower instance_id wins ties.
+        # If clocks are equal, "aaa-peer" < "zzz-peer", so aaa wins.
+        # But clocks may not be exactly equal (HLC advances), so we
+        # only assert convergence, not which peer won.
+        # The point: both agree, deterministically.

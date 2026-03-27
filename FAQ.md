@@ -208,6 +208,28 @@ Silk chose LWW because it is the simplest convergent strategy that works for the
 
 ---
 
+### When two peers write at the exact same time, who wins?
+
+Silk's HLC total order is `(physical_ms, logical, instance_id)`. When physical time and logical counter are equal, the **lexicographically lower instance_id wins**. This is deterministic — both peers always agree on the winner — but it is not random. In a stable two-peer system, the same peer wins every tie.
+
+In practice, true ties are rare. HLC physical time has millisecond resolution, and the logical counter increments on each operation. Two peers would need to write the same property in the same millisecond with the same logical counter. For most workloads, this doesn't happen.
+
+If tie-breaking fairness matters for your use case, use instance IDs that don't create a predictable ordering (e.g., random UUIDs rather than `"peer-a"` / `"peer-b"`).
+
+See [PROTOCOL.md](PROTOCOL.md) for the full clock ordering specification.
+
+---
+
+### Are edges validated during sync?
+
+Yes. Every edge is validated against the ontology's source/target type constraints when it is materialized. During sync, entries are applied in topological (causal) order — nodes before edges — so both endpoints are always materialized before their edges are processed.
+
+The code contains a defensive check: if an endpoint is not yet materialized at apply time, the edge is accepted without source/target validation. This guard exists for robustness against corrupted or malicious payloads, but cannot be triggered under normal operation because the Merkle-DAG's causal structure guarantees nodes precede their edges in topological order.
+
+After any schema-changing sync (ExtendOntology, Checkpoint), a full graph rebuild runs, which re-validates all edges in topological order.
+
+---
+
 ## Schema & Constraints
 
 ### What property constraints does Silk support?
