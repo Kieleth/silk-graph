@@ -394,6 +394,25 @@ There is no lazy loading, mmap, or eviction. The full graph lives in the process
 
 ## Sync & Partial Replication
 
+### What happens if sync messages are lost or corrupted?
+
+Silk handles all common network failure modes:
+
+| Condition | Behavior |
+|-----------|----------|
+| **Message lost** | Next sync round delivers the missing entries. Bloom filter detects what the peer still lacks. |
+| **Duplicate delivery** | Idempotent — entries already in the oplog are skipped (0 new entries merged). |
+| **Corrupted bytes** | BLAKE3 hash verification rejects tampered entries. Graph is unchanged. |
+| **Truncated payload** | Deserialization fails. Graph is unchanged. |
+| **50% random loss** | Converges within ~20 rounds of bidirectional sync (tested in [EXP-06](EXPERIMENTS.md)). |
+| **Network partition** | Peers diverge independently. After reconnection, a single bidirectional sync converges all state. |
+
+No special recovery mode is needed. The sync protocol is designed for unreliable delivery — each round is self-contained and makes progress toward convergence.
+
+> **Tested in [EXP-06](EXPERIMENTS.md).** 8 fault injection scenarios including three-peer partitions, concurrent property conflicts, and rapid-fire writes interleaved with syncs.
+
+---
+
 ### Can I sync only part of the graph?
 
 Two approaches, used together:

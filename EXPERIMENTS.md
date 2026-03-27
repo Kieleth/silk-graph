@@ -275,3 +275,33 @@ python experiments/test_memory_footprint.py
 ```bash
 python experiments/test_compression.py
 ```
+
+---
+
+## EXP-06: Fault Injection
+
+**Question:** Does Silk converge correctly under adversarial network conditions — message loss, corruption, truncation, partitions, concurrent conflicts?
+
+**Setup:** Two or three peers with shared history + divergent writes. Adversarial conditions applied at the transport layer (between `receive_sync_offer` and `merge_sync_payload`).
+
+### Scenarios
+
+| # | Scenario | Condition | Result |
+|---|----------|-----------|--------|
+| F1 | Message loss recovery | A→B delivered, B→A dropped. Next round recovers. | PASS — second sync round delivers missing entries |
+| F2 | Duplicate delivery | Same payload merged twice | PASS — idempotent, 0 entries on second merge |
+| F3 | Corrupted payload | 3 bytes flipped in payload middle | PASS — hash verification rejects corrupted entries, graph unchanged |
+| F4 | Truncated payload | Payload cut to 50% | PASS — deserialization fails cleanly, graph unchanged |
+| F5 | 50% random loss | Each direction has 50% delivery probability | PASS — converges within 20 rounds |
+| F6 | Three-peer partition | C isolated while A-B sync, then heals | PASS — all three converge after reconnection |
+| F7 | Concurrent property conflict | Two peers update same property during partition | PASS — LWW resolves deterministically, both agree |
+| F8 | Rapid fire | 100 writes interleaved with syncs every 10 ops | PASS — no corruption, full convergence, integrity verified |
+
+All scenarios verify convergence (identical node/property sets across peers) and structural integrity (`verify_integrity()` passes).
+
+### Reproduce
+
+```bash
+python experiments/test_fault_injection.py
+pytest experiments/test_fault_injection.py -v
+```
