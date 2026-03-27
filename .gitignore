@@ -12,9 +12,7 @@ dist/
 /venv/
 
 # Internal planning/review docs — not for public repo
-REVIEW*.md
-ANSWER_TO_REVIEW*.md
-NEXT_MOVES*.md
+/internal/
 
 # Benchmark venv (separate from dev environment)
 .bench-venv/
