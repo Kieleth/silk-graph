@@ -2,9 +2,9 @@
 
 Reproducible experiments that measure Silk's behavior under controlled conditions. Each experiment captures evidence (timing, payload sizes, operation counts) to guide engineering decisions.
 
-Run all experiments: `python -m pytest experiments/ -v`
-Run standalone: `python experiments/test_sync_overlap.py`
-Comparative benchmarks: `python experiments/bench_comparative.py` (requires [bench venv](BENCHMARKS.md#reproduction))
+Run all experiments: `docker run --rm silk-bench` (or `pytest experiments/ -v` locally)
+Build the Docker image: `docker build -f Dockerfile.bench -t silk-bench .`
+See [BENCHMARKS.md](BENCHMARKS.md#reproduction) for local setup without Docker.
 
 ---
 

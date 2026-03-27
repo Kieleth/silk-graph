@@ -1,7 +1,8 @@
 # Comparative CRDT Benchmarks
 
-> Measured 2026-03-26. silk-graph v0.1.5 (PyPI/crates.io), Loro 1.10.3, pycrdt 0.12.50.
-> All measurements in-memory, single-threaded, same hardware.
+> Measured 2026-03-27. silk-graph v0.1.6, Loro 1.10.3, pycrdt 0.12.50.
+> All measurements in-memory, single-threaded. Verified across 3 local + 3 Docker runs.
+> Reproducible: `docker build -f Dockerfile.bench -t silk-bench . && docker run --rm silk-bench`
 
 ---
 
@@ -42,9 +43,9 @@ Create N entities, each with 3 properties (`name: str`, `status: str`, `seq: int
 
 | System | N=100 | N=1,000 | N=10,000 |
 |--------|-------|---------|----------|
-| silk | 0.36 ms (278K ops/s) | 3.95 ms (253K ops/s) | 47.66 ms (210K ops/s) |
-| loro | 0.28 ms (357K ops/s) | 3.17 ms (315K ops/s) | 31.22 ms (320K ops/s) |
-| pycrdt | 0.47 ms (213K ops/s) | 4.07 ms (246K ops/s) | 43.64 ms (229K ops/s) |
+| silk | 0.43 ms (233K ops/s) | 4.3 ms (233K ops/s) | 50.2 ms (199K ops/s) |
+| loro | 0.25 ms (400K ops/s) | 2.4 ms (417K ops/s) | 27.2 ms (368K ops/s) |
+| pycrdt | 0.42 ms (238K ops/s) | 3.8 ms (263K ops/s) | 40.2 ms (249K ops/s) |
 
 ### S2: Update Throughput
 
@@ -52,9 +53,9 @@ Update one field on a single entity N times.
 
 | System | N=100 | N=1,000 | N=10,000 |
 |--------|-------|---------|----------|
-| silk | 0.18 ms (556K ops/s) | 1.86 ms (538K ops/s) | 18.96 ms (527K ops/s) |
-| loro | 0.10 ms (1.0M ops/s) | 0.98 ms (1.0M ops/s) | 10.44 ms (958K ops/s) |
-| pycrdt | 0.30 ms (333K ops/s) | 2.92 ms (342K ops/s) | 31.03 ms (322K ops/s) |
+| silk | 0.17 ms (588K ops/s) | 1.75 ms (571K ops/s) | 18.1 ms (552K ops/s) |
+| loro | 0.08 ms (1.25M ops/s) | 0.75 ms (1.33M ops/s) | 7.5 ms (1.33M ops/s) |
+| pycrdt | 0.30 ms (333K ops/s) | 2.8 ms (357K ops/s) | 27.0 ms (370K ops/s) |
 
 ### S3: Sync Latency
 
@@ -62,9 +63,9 @@ Two peers each write M unique entities, then sync bidirectionally. Includes stor
 
 | System | M=100 | M=500 |
 |--------|-------|-------|
-| silk | 1.98 ms | 10.98 ms |
-| loro | 0.94 ms | 5.50 ms |
-| pycrdt | 1.31 ms | 7.44 ms |
+| silk | 2.0 ms | 10.9 ms |
+| loro | 0.9 ms | 4.7 ms |
+| pycrdt | 1.4 ms | 7.1 ms |
 
 ### S4: Sync Bandwidth
 
@@ -72,7 +73,7 @@ Bytes transferred for bidirectional sync of M entities (3 properties each).
 
 | System | M=100 (total) | M=500 (total) |
 |--------|--------------|--------------|
-| silk | 34,549 | 175,143 |
+| silk | 34,650 | 175,300 |
 | loro | 4,692 | 25,494 |
 | pycrdt | 6,631 | 36,232 |
 
@@ -92,15 +93,15 @@ Users + projects + assignments + status updates. Each user assigned to 1–3 pro
 
 | System | 50 users / 10 projects | 200 / 40 | 1000 / 200 |
 |--------|----------------------|----------|------------|
-| silk | 0.67 ms (257K ops/s) | 2.32 ms (289K ops/s) | 11.84 ms (289K ops/s) |
-| loro | 0.42 ms (408K ops/s) | 2.13 ms (315K ops/s) | 7.95 ms (430K ops/s) |
-| pycrdt | 4.15 ms (41K ops/s) | 71.25 ms (9K ops/s) | 2,436 ms (1.4K ops/s) |
+| silk | 0.57 ms (302K ops/s) | 2.2 ms (305K ops/s) | 12.5 ms (274K ops/s) |
+| loro | 0.36 ms (478K ops/s) | 1.4 ms (479K ops/s) | 7.0 ms (489K ops/s) |
+| pycrdt | 4.4 ms (39K ops/s) | 73.2 ms (9K ops/s) | 2,711 ms (1.3K ops/s) |
 
 Snapshot sizes at 1000 users / 200 projects:
 
 | System | Snapshot |
 |--------|---------|
-| silk | 641 KB |
+| silk | 642 KB |
 | loro | 69 KB |
 | pycrdt | 92 KB |
 
@@ -110,9 +111,9 @@ N peers each write unique entities, then ring-sync (0→1→2→...→N-1→0) u
 
 | System | 3 peers × 100 | 5 × 100 | 10 × 50 |
 |--------|--------------|---------|---------|
-| silk | 7.2 ms / 6 rounds / 119 KB | 30.8 ms / 10 rounds / 394 KB | 111 ms / 20 rounds / 898 KB |
-| loro | 1.5 ms / 6 rounds / 19 KB | 5.1 ms / 10 rounds / 62 KB | 11.6 ms / 20 rounds / 140 KB |
-| pycrdt | 8.1 ms / 6 rounds / 28 KB | 43.5 ms / 10 rounds / 95 KB | 188 ms / 20 rounds / 211 KB |
+| silk | 7.2 ms / 6 rounds / 119 KB | 32.0 ms / 10 rounds / 394 KB | 119 ms / 20 rounds / 898 KB |
+| loro | 1.4 ms / 6 rounds / 19 KB | 4.5 ms / 10 rounds / 62 KB | 10.5 ms / 20 rounds / 140 KB |
+| pycrdt | 10.1 ms / 6 rounds / 28 KB | 43.8 ms / 10 rounds / 95 KB | 175 ms / 20 rounds / 211 KB |
 
 All systems converge in the same number of rounds (2 × N for ring topology).
 
@@ -122,9 +123,9 @@ Two peers fork from shared state, each writes independently, then sync to heal t
 
 | System | 100 shared + 50 divergent | 500 + 200 | 1000 + 500 |
 |--------|--------------------------|-----------|------------|
-| silk | 2.53 ms / 55 KB | 25.2 ms / 261 KB | 93.6 ms / 559 KB |
-| loro | 0.27 ms / 2 KB | 1.21 ms / 10 KB | 3.56 ms / 26 KB |
-| pycrdt | 0.68 ms / 3 KB | 2.94 ms / 14 KB | 9.07 ms / 36 KB |
+| silk | 1.6 ms / 55 KB | 8.6 ms / 261 KB | 18.6 ms / 559 KB |
+| loro | 0.29 ms / 2 KB | 1.1 ms / 10 KB | 3.3 ms / 26 KB |
+| pycrdt | 0.65 ms / 3 KB | 3.0 ms / 14 KB | 9.3 ms / 36 KB |
 
 ---
 
@@ -136,9 +137,9 @@ Silk creates a content-addressed Merkle-DAG entry for every mutation: BLAKE3 has
 
 | System | Write ops/s (N=1K) | Update ops/s (N=1K) | Update/Write ratio |
 |--------|-------------------|--------------------|--------------------|
-| silk | 253K | 538K | 2.1x |
-| loro | 315K | 1.0M | 3.2x |
-| pycrdt | 246K | 342K | 1.4x |
+| silk | 233K | 571K | 2.5x |
+| loro | 417K | 1.33M | 3.2x |
+| pycrdt | 263K | 357K | 1.4x |
 
 Loro's updates are in-place map mutations with near-zero per-operation overhead until commit. Silk's updates still create DAG entries but skip graph node creation. pycrdt's ratio is low because its writes are already lightweight (no per-write hashing).
 
@@ -146,15 +147,15 @@ Loro's updates are in-place map mutations with near-zero per-operation overhead 
 
 | System | N=100 ops/s | N=10K ops/s | Degradation |
 |--------|-------------|-------------|-------------|
-| silk | 278K | 210K | -24% |
-| loro | 357K | 320K | -10% |
-| pycrdt | 213K | 229K | flat |
+| silk | 233K | 199K | -15% |
+| loro | 400K | 368K | -8% |
+| pycrdt | 238K | 249K | flat |
 
 Silk degrades slightly as the oplog grows — HashMap lookup and head tracking cost increases with entry count. Loro and pycrdt maintain throughput.
 
 ### Structured workload scaling (S6)
 
-pycrdt's throughput drops from 213K ops/s (S1 flat writes) to 1.4K ops/s (S6 at 1000 users). Creating 1,200+ top-level maps causes per-operation overhead to grow non-linearly. Silk and Loro maintain throughput — Silk at 289K ops/s, Loro at 430K ops/s. For workloads with many distinct entities and relationships, pycrdt's architecture is not suited.
+pycrdt's throughput drops from 249K ops/s (S1 flat writes) to 1.3K ops/s (S6 at 1000 users). Creating 1,200+ top-level maps causes per-operation overhead to grow non-linearly. Silk and Loro maintain throughput — Silk at 274K ops/s, Loro at 489K ops/s. For workloads with many distinct entities and relationships, pycrdt's architecture is not suited.
 
 ### Sync bandwidth
 
@@ -177,21 +178,21 @@ Loro and pycrdt send compact CRDT deltas without per-operation identity, integri
 
 | System | Sync latency (M=500) | Bandwidth (M=500) | Throughput |
 |--------|---------------------|-------------------|------------|
-| silk | 11.0 ms | 175 KB | 15.9 KB/ms |
-| loro | 5.5 ms | 25 KB | 4.6 KB/ms |
-| pycrdt | 7.4 ms | 36 KB | 4.9 KB/ms |
+| silk | 10.9 ms | 175 KB | 16.1 KB/ms |
+| loro | 4.7 ms | 25 KB | 5.3 KB/ms |
+| pycrdt | 7.1 ms | 36 KB | 5.1 KB/ms |
 
 Silk processes 3x more bytes per millisecond. The latency gap is dominated by serialization volume, not compute.
 
 ### Multi-peer scaling (S7)
 
-All systems need the same number of sync rounds for ring convergence (2 × peer count — information propagates one hop per round). The per-round cost is proportional to each system's sync latency. At 10 peers, pycrdt (188ms) is slower than Silk (111ms) due to per-sync overhead accumulation.
+All systems need the same number of sync rounds for ring convergence (2 × peer count — information propagates one hop per round). The per-round cost is proportional to each system's sync latency. At 10 peers, pycrdt (175ms) is slower than Silk (119ms) due to per-sync overhead accumulation.
 
 ### Partition heal cost (S8)
 
-At 1000 shared + 500 divergent entries per peer, Silk heals in 94ms transferring 559 KB. Loro heals in 3.6ms transferring 26 KB. The 22x bandwidth ratio is higher than the 7x in S4 because S8's payload includes ancestor closure metadata for the shared prefix.
+At 1000 shared + 500 divergent entries per peer, Silk heals in 18.6ms transferring 559 KB. Loro heals in 3.3ms transferring 26 KB. The bandwidth ratio (22x) is higher than the 7x in S4 because S8's payload includes ancestor closure metadata for the shared prefix.
 
-For context: a 1,500-entity partition heal in 94ms is practical for any sync interval above ~200ms. The bandwidth (559 KB) is a single HTTP response on any modern connection.
+For context: a 1,500-entity partition heal in 18.6ms is practical for any sync interval. The bandwidth (559 KB) is a single HTTP response on any modern connection.
 
 ### What Silk's overhead buys
 
@@ -210,14 +211,14 @@ These are architectural properties, not benchmarkable as throughput. The bandwid
 
 ### Practical context
 
-At 10,000 entities with 3 properties each, Silk writes the full graph in **48ms**. For the use cases Silk targets — infrastructure graphs, configuration sync, knowledge graphs syncing between devices or services — these numbers are within practical bounds:
+At 10,000 entities with 3 properties each, Silk writes the full graph in **50ms**. For the use cases Silk targets — infrastructure graphs, configuration sync, knowledge graphs syncing between devices or services — these numbers are within practical bounds:
 
 - A 500-server infrastructure graph (servers, services, edges, properties): well under 10K entities. Full write in under 50ms.
 - Periodic sync between two peers with 500 divergent entities: **11ms**. At sync intervals of 1–10 seconds, this is <1% of the sync window.
-- A 1,500-entity partition heal (1000 shared + 500 divergent): **94ms**. Imperceptible in any system that syncs on a timer.
+- A 1,500-entity partition heal (1000 shared + 500 divergent): **18.6ms**. Imperceptible at any sync interval.
 - A 10K-entity sync over WAN: Silk transfers ~3.5 MB vs Loro's ~500 KB. On a 10 Mbps link, that's 2.8 seconds vs 0.4 seconds. On LAN, the difference is imperceptible.
 
-The bandwidth gap is the primary engineering trade-off. For metered or highly constrained connections, payload compression (gzip/zstd over the MessagePack entries) or compact delta encoding are future optimization paths.
+The bandwidth gap is the primary engineering trade-off. For metered or highly constrained connections, optional payload compression (`ZlibCompression(level=1)`) reduces payloads by 68% at 29% latency overhead. See [EXP-05](EXPERIMENTS.md).
 
 ---
 
@@ -235,29 +236,32 @@ This benchmark does **not** measure:
 
 ## Reproduction
 
+### Docker (recommended — fully isolated, reproducible)
+
 ```bash
-# Create isolated environment
+docker build -f Dockerfile.bench -t silk-bench .
+
+# Run all experiments (19 tests)
+docker run --rm silk-bench
+
+# Run comparative benchmarks with table output
+docker run --rm silk-bench python experiments/bench_comparative.py
+
+# JSON output
+docker run --rm silk-bench python experiments/bench_comparative.py --json
+
+# Single scenario
+docker run --rm silk-bench python experiments/bench_comparative.py --scenario=S6
+```
+
+### Local (requires Rust toolchain + Python 3.12)
+
+```bash
 python -m venv .bench-venv
 source .bench-venv/bin/activate
 pip install -r experiments/bench_requirements.txt
-
-# Build silk from source (or: pip install silk-graph)
 maturin develop --release
-
-# Run all benchmarks
 python experiments/bench_comparative.py
-
-# Run a single scenario
-python experiments/bench_comparative.py --scenario=S6
-
-# Run specific systems
-python experiments/bench_comparative.py --only=silk,loro
-
-# JSON output
-python experiments/bench_comparative.py --json
-
-# Correctness test only
-pytest experiments/bench_comparative.py -v
 ```
 
-Source: [`experiments/bench_comparative.py`](experiments/bench_comparative.py), [`experiments/adapters.py`](experiments/adapters.py).
+Source: [`experiments/bench_comparative.py`](experiments/bench_comparative.py), [`experiments/adapters.py`](experiments/adapters.py), [`Dockerfile.bench`](Dockerfile.bench).

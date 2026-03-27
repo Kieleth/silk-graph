@@ -1,0 +1,12 @@
+target/
+.bench-venv/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+internal/
+.git/
+.cache/

@@ -90,22 +90,22 @@ Measured on Apple M4 Max, macOS 15.7, Rust 1.94.0. Full details: [BENCHMARKS.md]
 
 ### Comparative benchmarks (vs Loro, pycrdt)
 
-Silk compared against two document CRDTs (Loro 1.10.3, pycrdt 0.12.50) on shared CRDT operations. All three are Rust cores with PyO3 bindings. Results from 2026-03-26, silk-graph v0.1.5.
+Silk compared against two document CRDTs (Loro 1.10.3, pycrdt 0.12.50) on shared CRDT operations. All three are Rust cores with PyO3 bindings. Results from 2026-03-27, silk-graph v0.1.6. Verified across 3 local + 3 Docker runs.
 
 | Scenario | Silk | Loro | pycrdt |
 |----------|------|------|--------|
-| Write 1K entities | 3.95 ms (253K ops/s) | 3.17 ms (315K ops/s) | 4.07 ms (246K ops/s) |
-| Update 1K fields | 1.86 ms (538K ops/s) | 0.98 ms (1.0M ops/s) | 2.92 ms (342K ops/s) |
-| Sync 500 entities | 11.0 ms | 5.5 ms | 7.4 ms |
+| Write 1K entities | 4.3 ms (233K ops/s) | 2.4 ms (417K ops/s) | 3.8 ms (263K ops/s) |
+| Update 1K fields | 1.75 ms (571K ops/s) | 0.75 ms (1.33M ops/s) | 2.8 ms (357K ops/s) |
+| Sync 500 entities | 10.9 ms | 4.7 ms | 7.1 ms |
 | Sync bandwidth (500 entities) | 175 KB | 25 KB | 36 KB |
-| Structured workload (1000 users + 200 projects) | 11.8 ms | 8.0 ms | 2,436 ms |
-| 10-peer ring convergence (500 entities) | 111 ms | 12 ms | 188 ms |
-| Partition heal (1000 shared + 500 divergent) | 94 ms | 3.6 ms | 9.1 ms |
+| Structured workload (1000 users + 200 projects) | 12.5 ms | 7.0 ms | 2,711 ms |
+| 10-peer ring convergence (500 entities) | 119 ms | 10.5 ms | 175 ms |
+| Partition heal (1000 shared + 500 divergent) | 18.6 ms | 3.3 ms | 9.3 ms |
 | Merge correctness | 100% | 100% | 100% |
 
 Silk is slower on raw CRDT operations and uses more bandwidth (7x Loro). This is the cost of content-addressed Merkle-DAG entries — each operation carries a BLAKE3 hash, HLC clock, author identity, and causal parent links. These provide integrity verification, causal ordering, immutable audit trail, and author authentication — capabilities the comparison systems do not offer.
 
-For context: 10,000 entities written in **48ms**. A 500-server infrastructure graph synced between two peers in **11ms**. A 1,500-entity partition healed in **94ms**. For local-first systems syncing on a timer, these are within practical bounds.
+For context: 10,000 entities written in **50ms**. A 500-server infrastructure graph synced between two peers in **11ms**. A 1,500-entity partition healed in **18.6ms**. For local-first systems syncing on a timer, these are within practical bounds.
 
 Full methodology, per-scenario analysis, and reproduction instructions: [BENCHMARKS.md](BENCHMARKS.md).
 

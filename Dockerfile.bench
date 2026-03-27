@@ -1,0 +1,51 @@
+# Reproducible benchmark environment for silk-graph.
+#
+# Builds silk from source, installs comparison CRDT systems,
+# runs all experiments and benchmarks in a controlled environment.
+#
+# Usage:
+#   docker build -f Dockerfile.bench -t silk-bench .
+#   docker run silk-bench                                           # all experiments
+#   docker run silk-bench python experiments/bench_comparative.py   # comparative only
+#   docker run silk-bench python experiments/bench_comparative.py --json
+#   docker run silk-bench pytest experiments/ -v
+
+FROM python:3.12-slim
+
+# Install Rust toolchain
+RUN apt-get update && apt-get install -y curl build-essential && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    rm -rf /var/lib/apt/lists/*
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /silk
+
+# Copy everything needed to build
+COPY Cargo.toml Cargo.lock pyproject.toml README.md LICENSE.md ./
+COPY src/ src/
+COPY python/ python/
+COPY benches/ benches/
+COPY tests/ tests/
+
+# Build and install silk
+RUN pip install maturin && maturin build --release --out /wheels && \
+    pip install /wheels/*.whl && rm -rf /wheels
+
+# Install benchmark dependencies (pinned versions)
+COPY experiments/bench_requirements.txt /tmp/
+RUN pip install -r /tmp/bench_requirements.txt
+
+# Install pytest
+RUN pip install pytest
+
+# Copy experiment, test, and doc files
+COPY experiments/ experiments/
+COPY pytests/ pytests/
+COPY PROOF.md INVARIANTS.md EXPERIMENTS.md BENCHMARKS.md ./
+
+# Metadata
+LABEL org.opencontainers.image.source="https://github.com/Kieleth/silk-graph"
+LABEL org.opencontainers.image.description="silk-graph reproducible benchmark environment"
+
+# Default: run all experiments
+CMD ["pytest", "experiments/", "-v", "--tb=short"]
