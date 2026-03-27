@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **RDFS-level class hierarchy** — `parent_type` on NodeTypeDef declares is-a relationships. Property inheritance from ancestors, hierarchy-aware queries (`query_nodes_by_type` returns descendants), hierarchy-aware edge validation (`source_types: ["entity"]` accepts server). Fully CRDT-compatible. See [FAQ.md](FAQ.md#does-silk-support-class-hierarchies-or-type-inheritance).
 - **Extended constraint vocabulary** — SHACL-inspired property constraints: `pattern` (full regex via `regex` crate), `min_length`/`max_length` (string length), `min_exclusive`/`max_exclusive` (exclusive numeric bounds). All enforced on both `add_node` and `update_property`. See [FAQ.md](FAQ.md) for the full constraint reference table.
 
+### Changed
+- **Refactor: python.rs split into modules** — `src/python.rs` (1,983 lines) split into `python/mod.rs` (1,473), `python/conversions.rs` (297), `python/snapshot.rs` (166), `python/obslog.rs` (91). No API changes.
+- **Refactor: ontology constraint validation** — `validate_constraints()` (162 lines) refactored to 55 lines via extracted helpers (`check_numeric_bound`, `check_string_length`, `constraint_err`).
+- **Refactor: graph LWW deduplication** — `merge_properties_lww()` extracted as single source of truth for per-property LWW, used by both `apply_add_node()` and `apply_add_edge()`.
+
 ## [0.1.6] - 2026-03-25
 
 ### Fixed

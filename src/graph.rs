@@ -373,19 +373,12 @@ impl MaterializedGraph {
                 existing.subtype = subtype.map(|s| s.to_string());
                 existing.last_clock = clock.clone();
             }
-            // Per-property LWW: each property from add_node competes
-            // only with writes to the same key.
-            for (k, v) in properties {
-                let dominated = existing
-                    .property_clocks
-                    .get(k)
-                    .map(|c| clock_wins(clock, c))
-                    .unwrap_or(true);
-                if dominated {
-                    existing.properties.insert(k.clone(), v.clone());
-                    existing.property_clocks.insert(k.clone(), clock.clone());
-                }
-            }
+            merge_properties_lww(
+                &mut existing.properties,
+                &mut existing.property_clocks,
+                properties,
+                clock,
+            );
         } else {
             let property_clocks: HashMap<String, LamportClock> = properties
                 .keys()
@@ -428,18 +421,12 @@ impl MaterializedGraph {
             if clock_wins(clock, &existing.last_clock) {
                 existing.last_clock = clock.clone();
             }
-            // Per-property LWW for edge properties.
-            for (k, v) in properties {
-                let dominated = existing
-                    .property_clocks
-                    .get(k)
-                    .map(|c| clock_wins(clock, c))
-                    .unwrap_or(true);
-                if dominated {
-                    existing.properties.insert(k.clone(), v.clone());
-                    existing.property_clocks.insert(k.clone(), clock.clone());
-                }
-            }
+            merge_properties_lww(
+                &mut existing.properties,
+                &mut existing.property_clocks,
+                properties,
+                clock,
+            );
         } else {
             let property_clocks: HashMap<String, LamportClock> = properties
                 .keys()
@@ -537,6 +524,26 @@ impl MaterializedGraph {
             .get(node_id)
             .map(|n| !n.tombstoned)
             .unwrap_or(false)
+    }
+}
+
+/// Per-property LWW merge: each property from `new_props` competes with
+/// existing properties. Higher clock wins per key.
+fn merge_properties_lww(
+    existing_props: &mut BTreeMap<String, Value>,
+    existing_clocks: &mut HashMap<String, LamportClock>,
+    new_props: &BTreeMap<String, Value>,
+    clock: &LamportClock,
+) {
+    for (k, v) in new_props {
+        let dominated = existing_clocks
+            .get(k)
+            .map(|c| clock_wins(clock, c))
+            .unwrap_or(true);
+        if dominated {
+            existing_props.insert(k.clone(), v.clone());
+            existing_clocks.insert(k.clone(), clock.clone());
+        }
     }
 }
 

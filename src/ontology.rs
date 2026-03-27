@@ -685,157 +685,167 @@ fn validate_constraints(
         if let Value::String(s) = value {
             let allowed_strs: Vec<&str> = allowed.iter().filter_map(|v| v.as_str()).collect();
             if !allowed_strs.contains(&s.as_str()) {
-                return Err(ValidationError::ConstraintViolation {
-                    type_name: type_name.to_string(),
-                    property: prop_name.to_string(),
-                    constraint: "enum".to_string(),
-                    message: format!("value '{}' not in allowed set {:?}", s, allowed_strs),
-                });
+                return constraint_err(
+                    type_name,
+                    prop_name,
+                    "enum",
+                    format!("value '{}' not in allowed set {:?}", s, allowed_strs),
+                );
             }
         }
     }
 
-    // "min": minimum numeric value (inclusive)
-    if let Some(min_val) = constraints.get("min") {
-        if let Some(min) = min_val.as_f64() {
-            let num = match value {
-                Value::Int(n) => Some(*n as f64),
-                Value::Float(n) => Some(*n),
-                _ => None,
-            };
-            if let Some(n) = num {
-                if n < min {
-                    return Err(ValidationError::ConstraintViolation {
-                        type_name: type_name.to_string(),
-                        property: prop_name.to_string(),
-                        constraint: "min".to_string(),
-                        message: format!("value {} is less than minimum {}", n, min),
-                    });
-                }
-            }
-        }
-    }
+    // Numeric bounds (4 variants share the same extract-compare pattern)
+    check_numeric_bound(
+        type_name,
+        prop_name,
+        value,
+        constraints,
+        "min",
+        |n, b| n < b,
+        |n, b| format!("value {} is less than minimum {}", n, b),
+    )?;
+    check_numeric_bound(
+        type_name,
+        prop_name,
+        value,
+        constraints,
+        "max",
+        |n, b| n > b,
+        |n, b| format!("value {} exceeds maximum {}", n, b),
+    )?;
+    check_numeric_bound(
+        type_name,
+        prop_name,
+        value,
+        constraints,
+        "min_exclusive",
+        |n, b| n <= b,
+        |n, b| format!("value {} must be greater than {}", n, b),
+    )?;
+    check_numeric_bound(
+        type_name,
+        prop_name,
+        value,
+        constraints,
+        "max_exclusive",
+        |n, b| n >= b,
+        |n, b| format!("value {} must be less than {}", n, b),
+    )?;
 
-    // "max": maximum numeric value (inclusive)
-    if let Some(max_val) = constraints.get("max") {
-        if let Some(max) = max_val.as_f64() {
-            let num = match value {
-                Value::Int(n) => Some(*n as f64),
-                Value::Float(n) => Some(*n),
-                _ => None,
-            };
-            if let Some(n) = num {
-                if n > max {
-                    return Err(ValidationError::ConstraintViolation {
-                        type_name: type_name.to_string(),
-                        property: prop_name.to_string(),
-                        constraint: "max".to_string(),
-                        message: format!("value {} exceeds maximum {}", n, max),
-                    });
-                }
-            }
-        }
-    }
+    // String length bounds
+    check_string_length(
+        type_name,
+        prop_name,
+        value,
+        constraints,
+        "min_length",
+        |len, bound| len < bound,
+        |len, bound| format!("string length {} is less than minimum {}", len, bound),
+    )?;
+    check_string_length(
+        type_name,
+        prop_name,
+        value,
+        constraints,
+        "max_length",
+        |len, bound| len > bound,
+        |len, bound| format!("string length {} exceeds maximum {}", len, bound),
+    )?;
 
-    // "min_exclusive": exclusive lower bound
-    if let Some(min_val) = constraints.get("min_exclusive") {
-        if let Some(min) = min_val.as_f64() {
-            let num = match value {
-                Value::Int(n) => Some(*n as f64),
-                Value::Float(n) => Some(*n),
-                _ => None,
-            };
-            if let Some(n) = num {
-                if n <= min {
-                    return Err(ValidationError::ConstraintViolation {
-                        type_name: type_name.to_string(),
-                        property: prop_name.to_string(),
-                        constraint: "min_exclusive".to_string(),
-                        message: format!("value {} must be greater than {}", n, min),
-                    });
-                }
-            }
-        }
-    }
-
-    // "max_exclusive": exclusive upper bound
-    if let Some(max_val) = constraints.get("max_exclusive") {
-        if let Some(max) = max_val.as_f64() {
-            let num = match value {
-                Value::Int(n) => Some(*n as f64),
-                Value::Float(n) => Some(*n),
-                _ => None,
-            };
-            if let Some(n) = num {
-                if n >= max {
-                    return Err(ValidationError::ConstraintViolation {
-                        type_name: type_name.to_string(),
-                        property: prop_name.to_string(),
-                        constraint: "max_exclusive".to_string(),
-                        message: format!("value {} must be less than {}", n, max),
-                    });
-                }
-            }
-        }
-    }
-
-    // "min_length": minimum string length
-    if let Some(serde_json::Value::Number(n)) = constraints.get("min_length") {
-        if let (Some(min_len), Value::String(s)) = (n.as_u64(), value) {
-            if (s.len() as u64) < min_len {
-                return Err(ValidationError::ConstraintViolation {
-                    type_name: type_name.to_string(),
-                    property: prop_name.to_string(),
-                    constraint: "min_length".to_string(),
-                    message: format!("string length {} is less than minimum {}", s.len(), min_len),
-                });
-            }
-        }
-    }
-
-    // "max_length": maximum string length
-    if let Some(serde_json::Value::Number(n)) = constraints.get("max_length") {
-        if let (Some(max_len), Value::String(s)) = (n.as_u64(), value) {
-            if (s.len() as u64) > max_len {
-                return Err(ValidationError::ConstraintViolation {
-                    type_name: type_name.to_string(),
-                    property: prop_name.to_string(),
-                    constraint: "max_length".to_string(),
-                    message: format!("string length {} exceeds maximum {}", s.len(), max_len),
-                });
-            }
-        }
-    }
-
-    // "pattern": regex match on string values (full regex via `regex` crate)
+    // "pattern": regex match on string values
     if let Some(serde_json::Value::String(pattern)) = constraints.get("pattern") {
         if let Value::String(s) = value {
             match regex::Regex::new(pattern) {
-                Ok(re) => {
-                    if !re.is_match(s) {
-                        return Err(ValidationError::ConstraintViolation {
-                            type_name: type_name.to_string(),
-                            property: prop_name.to_string(),
-                            constraint: "pattern".to_string(),
-                            message: format!("value '{}' does not match pattern '{}'", s, pattern),
-                        });
-                    }
+                Ok(re) if !re.is_match(s) => {
+                    return constraint_err(
+                        type_name,
+                        prop_name,
+                        "pattern",
+                        format!("value '{}' does not match pattern '{}'", s, pattern),
+                    );
                 }
                 Err(e) => {
-                    return Err(ValidationError::ConstraintViolation {
-                        type_name: type_name.to_string(),
-                        property: prop_name.to_string(),
-                        constraint: "pattern".to_string(),
-                        message: format!("invalid regex pattern '{}': {}", pattern, e),
-                    });
+                    return constraint_err(
+                        type_name,
+                        prop_name,
+                        "pattern",
+                        format!("invalid regex pattern '{}': {}", pattern, e),
+                    );
                 }
+                _ => {}
             }
         }
     }
 
     // Unknown constraint names are silently ignored (forward compat).
-
     Ok(())
+}
+
+/// Helper: extract numeric value from a Value.
+fn value_as_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Int(n) => Some(*n as f64),
+        Value::Float(n) => Some(*n),
+        _ => None,
+    }
+}
+
+/// Helper: check a numeric bound constraint.
+fn check_numeric_bound(
+    type_name: &str,
+    prop_name: &str,
+    value: &Value,
+    constraints: &BTreeMap<String, serde_json::Value>,
+    key: &str,
+    violates: impl Fn(f64, f64) -> bool,
+    msg: impl Fn(f64, f64) -> String,
+) -> Result<(), ValidationError> {
+    if let Some(bound_val) = constraints.get(key) {
+        if let Some(bound) = bound_val.as_f64() {
+            if let Some(n) = value_as_f64(value) {
+                if violates(n, bound) {
+                    return constraint_err(type_name, prop_name, key, msg(n, bound));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Helper: check a string length constraint.
+fn check_string_length(
+    type_name: &str,
+    prop_name: &str,
+    value: &Value,
+    constraints: &BTreeMap<String, serde_json::Value>,
+    key: &str,
+    violates: impl Fn(u64, u64) -> bool,
+    msg: impl Fn(u64, u64) -> String,
+) -> Result<(), ValidationError> {
+    if let Some(serde_json::Value::Number(n)) = constraints.get(key) {
+        if let (Some(bound), Value::String(s)) = (n.as_u64(), value) {
+            if violates(s.len() as u64, bound) {
+                return constraint_err(type_name, prop_name, key, msg(s.len() as u64, bound));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Helper: construct a ConstraintViolation error.
+fn constraint_err(
+    type_name: &str,
+    prop_name: &str,
+    constraint: &str,
+    message: String,
+) -> Result<(), ValidationError> {
+    Err(ValidationError::ConstraintViolation {
+        type_name: type_name.to_string(),
+        property: prop_name.to_string(),
+        constraint: constraint.to_string(),
+        message,
+    })
 }
 
 fn value_matches_type(value: &Value, expected: &ValueType) -> bool {
