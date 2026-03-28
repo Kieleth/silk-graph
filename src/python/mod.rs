@@ -1671,43 +1671,66 @@ impl PyOperationBuffer {
     ///
     /// Each operation is applied through the store's internal append():
     /// ontology validation, HLC clock, DAG parents, subscriptions all fire.
-    /// After successful drain, the buffer is cleared.
+    /// Drain buffered operations into a live store.
     ///
+    /// Applies ops in order. If all succeed, the buffer is cleared.
+    /// If any op fails (e.g., ontology validation), draining stops at that point.
+    /// Successfully applied ops are removed from the buffer; remaining ops stay.
     /// Returns the number of operations applied.
     fn drain(&self, store: &mut PyGraphStore) -> PyResult<usize> {
         let ops = self
             .inner
             .read_all()
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))?;
-        let count = ops.len();
-        for op in &ops {
+        let total = ops.len();
+        let mut applied = 0;
+        for (i, op) in ops.iter().enumerate() {
             match op {
                 GraphOp::DefineOntology { .. }
                 | GraphOp::ExtendOntology { .. }
                 | GraphOp::Checkpoint { .. } => {
-                    return Err(pyo3::exceptions::PyValueError::new_err(
-                        "buffer contains non-bufferable operation",
-                    ));
-                }
-                GraphOp::AddNode {
-                    node_id, node_type, ..
-                } => {
-                    store.node_types.insert(node_id.clone(), node_type.clone());
-                    store.append(op.clone())?;
-                }
-                GraphOp::RemoveNode { node_id } => {
-                    store.node_types.remove(node_id);
-                    store.append(op.clone())?;
+                    // Rewrite buffer with remaining ops (including this one)
+                    self.rewrite_remaining(&ops[i..])
+                        .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))?;
+                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "buffer contains non-bufferable operation at position {}. \
+                         {} ops applied before failure. Buffer rewritten with {} remaining ops.",
+                        i,
+                        applied,
+                        total - i
+                    )));
                 }
                 _ => {
-                    store.append(op.clone())?;
+                    match store.append(op.clone()) {
+                        Ok(_hex) => {
+                            match op {
+                                GraphOp::AddNode {
+                                    node_id, node_type, ..
+                                } => {
+                                    store.node_types.insert(node_id.clone(), node_type.clone());
+                                }
+                                GraphOp::RemoveNode { node_id } => {
+                                    store.node_types.remove(node_id);
+                                }
+                                _ => {}
+                            }
+                            applied += 1;
+                        }
+                        Err(e) => {
+                            // Partial failure: rewrite buffer with remaining ops
+                            self.rewrite_remaining(&ops[i..])
+                                .map_err(|er| pyo3::exceptions::PyIOError::new_err(er))?;
+                            return Err(e);
+                        }
+                    }
                 }
             }
         }
+        // All ops applied — clear buffer
         self.inner
             .clear()
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))?;
-        Ok(count)
+        Ok(applied)
     }
 
     /// Read all buffered operations as Python dicts (without draining).
@@ -1740,6 +1763,17 @@ impl PyOperationBuffer {
     #[getter]
     fn path(&self) -> String {
         self.inner.path().to_string_lossy().to_string()
+    }
+}
+
+impl PyOperationBuffer {
+    /// Rewrite the buffer file with only the remaining (unapplied) operations.
+    fn rewrite_remaining(&self, remaining: &[GraphOp]) -> Result<(), String> {
+        self.inner.clear()?;
+        for op in remaining {
+            self.inner.append(op)?;
+        }
+        Ok(())
     }
 }
 

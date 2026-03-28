@@ -66,8 +66,20 @@ impl OperationBuffer {
     }
 
     /// Number of buffered operations.
+    /// Counts non-empty lines without parsing JSON (O(n) I/O, no deserialization).
     pub fn len(&self) -> usize {
-        self.read_all().map(|ops| ops.len()).unwrap_or(0)
+        if !self.path.exists() {
+            return 0;
+        }
+        let file = match fs::File::open(&self.path) {
+            Ok(f) => f,
+            Err(_) => return 0,
+        };
+        std::io::BufReader::new(file)
+            .lines()
+            .map_while(Result::ok)
+            .filter(|l| !l.trim().is_empty())
+            .count()
     }
 
     /// Whether the buffer is empty.
