@@ -337,3 +337,29 @@ docker run -d --name terminusdb-bench -p 6363:6363 -e TERMINUSDB_ADMIN_PASS=benc
 python experiments/test_graph_comparison.py
 docker stop terminusdb-bench && docker rm terminusdb-bench
 ```
+
+---
+
+## EXP-08: Persistence Overhead
+
+**Question:** How much does redb persistence cost compared to in-memory operation?
+
+**Setup:** Write N entities to in-memory vs persistent stores. Measure sync between persistent stores. Measure startup (oplog reconstruction + graph rebuild).
+
+### Results
+
+| Operation | In-memory | Persistent | Overhead |
+|-----------|-----------|-----------|----------|
+| Write 1000 entities (individual) | 4.6 ms | 4,456 ms | ~1000x |
+| Sync 1000 entities (batched) | 11.3 ms | 13.8 ms | 1.2x |
+| Startup (open 1000-entity store) | N/A | 31 ms | — |
+
+Per-write persistence is expensive (redb commit + fsync per entry). Sync batches entries into a single transaction, reducing overhead to 1.2-3x. Startup is constant (~30ms) for this graph size.
+
+**Recommendation:** Write-heavy paths should use in-memory stores and sync to persistent stores at boundaries. This matches the local-first pattern.
+
+### Reproduce
+
+```bash
+python experiments/test_persistence_perf.py
+```

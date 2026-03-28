@@ -293,13 +293,31 @@ TerminusDB and Silk are not interchangeable. TerminusDB is a database server; Si
 
 ## Limitations
 
-This benchmark does **not** measure:
-- **Text editing** — Silk has no sequence CRDT. Loro and pycrdt are designed for collaborative text. Comparing text operations would be misleading.
-- **Graph operations** — Silk provides BFS, shortest path, impact analysis, pattern matching, and schema-enforced traversal. The comparison systems have no graph primitives. Comparing graph queries would be equally one-sided.
-- **Persistent storage** — all measurements are in-memory. Disk I/O characteristics differ across systems.
-- **Network latency** — sync measures serialization + merge cost, not TCP round trips.
-- **Memory usage** — not instrumented in this pass.
-- **Automerge** — excluded because the Python bindings (v0.1.2) do not support mutation or merge operations needed for benchmarking.
+### Persistence overhead (EXP-08)
+
+All benchmarks above are in-memory. Persistent storage (redb) adds I/O cost:
+
+| Operation | In-memory | Persistent | Overhead | Notes |
+|-----------|-----------|-----------|----------|-------|
+| Write 1000 entities (individual) | 4.6 ms | 4,456 ms | ~1000x | Each write = redb commit + fsync |
+| Sync 1000 entities (batched) | 11.3 ms | 13.8 ms | 1.2x | Sync batches all entries in one transaction |
+| Startup (open 1000-entity store) | N/A | 31 ms | — | Oplog reconstruction + graph rebuild |
+
+The per-write overhead is extreme because each `append()` commits a redb transaction (atomic fsync). For burst writes, use in-memory stores and sync to persistent, or batch via `merge_sync_payload()`. Sync batches entries into a single transaction, so the persistent overhead drops to 1.2-3x.
+
+**Recommendation:** Use in-memory stores for write-heavy paths. Use persistent stores for durability at sync boundaries. This matches the local-first pattern: write locally (fast), sync periodically (durable).
+
+### Evaluation scope and limitations
+
+**What these benchmarks are:** Engineering evidence for the performance characteristics of silk-graph's CRDT operations, measured on a single machine with controlled workloads. They are honest about where Silk is slower and why.
+
+**What these benchmarks are NOT:** A comprehensive academic evaluation. Specifically:
+
+- **No like-for-like graph-replication baseline exists.** Silk is the only embedded CRDT property graph we are aware of. Loro, pycrdt, and Automerge are document CRDTs (different data model). TerminusDB is a server-based versioned graph (different deployment model). NetworkX is a plain graph library (no sync). We compare against what exists, but the comparison is inherently cross-category.
+- **No multi-machine or WAN measurements.** All sync benchmarks measure serialization + merge cost, not network round-trip time. Real-world sync latency includes network I/O, which depends on deployment topology and is independent of the CRDT engine.
+- **No fault-injection during benchmarks.** Fault injection is tested separately ([EXP-06](EXPERIMENTS.md)) for correctness, but not for performance under adversarial conditions (e.g., sync throughput during message loss).
+- **Single hardware platform.** All measurements on Apple M4 Max. Results on x86, ARM servers, or resource-constrained devices may differ.
+- **Automerge excluded.** Python bindings (v0.1.2) do not support mutation or merge operations needed for benchmarking.
 
 ---
 
