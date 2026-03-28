@@ -147,6 +147,7 @@ store.merge_sync_payload(&payload)?;
 - **Persistent storage** — backed by [redb](https://github.com/cberner/redb) (embedded, transactional, pure Rust). In-memory mode also available.
 - **Real-time subscriptions** — register callbacks that fire on every graph mutation (local or merged from sync).
 - **Observation log** — append-only, TTL-pruned time-series store for metrics alongside the graph. Same redb backend.
+- **Operation buffer** — `OperationBuffer` stores graph ops as JSONL when the store isn't available (boot time, pre-init). Drain into a live store when ready. Same operations, same format — no translation layer.
 - **Zero runtime dependencies** — no Postgres, no Redis, no network required. Silk is a library, not a service.
 - **Author authentication** — ed25519 signatures on every entry. Auto-sign on write, verify on merge. Trust registry for known peers. Strict mode rejects unsigned entries. (D-027)
 - **Evolvable schema** — extend the ontology at runtime with new types, properties, and subtypes via `extend_ontology()`. Only additive changes — no migrations, no store recreation. (R-03)

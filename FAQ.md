@@ -8,6 +8,25 @@ Answers to real questions from expert reviews and early users.
 
 ## Architecture & Scope
 
+### How does Silk compare to NetworkX / TerminusDB / Neo4j?
+
+Different tools for different jobs:
+
+| | Silk | NetworkX | TerminusDB | Neo4j |
+|---|---|---|---|---|
+| **What it is** | Embedded CRDT graph library | In-memory graph library | Server-based versioned graph DB | Server-based graph DB |
+| **Sync** | Automatic, conflict-free (CRDT) | None | Git-style (push/pull, manual conflict resolution) | Enterprise replication only |
+| **Schema** | Write-time validation | None | OWL-based | Labels + indexes |
+| **Offline** | Yes (fully local) | Yes (fully local) | No (requires server) | No (requires server) |
+| **Graph algorithms** | BFS, DFS, shortest path, impact analysis, pattern match | 100+ (PageRank, centrality, Dijkstra, community detection) | WOQL/GraphQL queries | Cypher + GDS library |
+| **Install** | `pip install silk-graph` | `pip install networkx` | Docker + pip | Docker or installer |
+
+**Use Silk** when you need sync between peers, schema enforcement, and offline operation. **Use NetworkX** for graph analytics — on top of Silk's data if needed. **Use TerminusDB** when you need a server-side versioned graph with WOQL/GraphQL. **Use Neo4j** when you need Cypher, the GDS algorithm library, and enterprise infrastructure.
+
+Silk + NetworkX is the intended pairing for applications that need both sync and analytics. See [BENCHMARKS.md](BENCHMARKS.md) for measured performance comparisons.
+
+---
+
 ### Why doesn't Silk have Dijkstra / PageRank / weighted graph algorithms?
 
 Silk is a distributed sync layer, not a graph analytics engine. The built-in algorithms (`bfs`, `shortest_path`, `impact_analysis`, `pattern_match`) are navigation primitives — they answer "what's connected?" not "what's the optimal route?"
@@ -484,6 +503,39 @@ class LZ4Compression:
 ```
 
 > **Measured in [EXP-05](EXPERIMENTS.md).** At 1000 entities, zlib-1 reduces payloads from 202 KB to 65 KB at a cost of 1.9ms. Higher zlib levels give <1% extra compression at 2-3x more CPU.
+
+---
+
+### How do I buffer operations before the store is open?
+
+Use `OperationBuffer` — a filesystem-backed write-ahead buffer for graph operations. Operations are buffered as JSONL when the store isn't available (e.g., boot time), then drained into the store when it opens.
+
+```python
+from silk import OperationBuffer, GraphStore
+
+# Pre-store: buffer operations (no store needed)
+buffer = OperationBuffer("/var/lib/myapp/pending_ops.jsonl")
+buffer.add_node("evt-1", "event", "Boot started", {"timestamp_ms": 1711526400000})
+buffer.add_node("evt-2", "event", "Health check", {"timestamp_ms": 1711526401000})
+
+# Later: store becomes available
+store = GraphStore.open("/var/lib/myapp/graph.redb")
+
+# Drain: apply all buffered ops through the normal store API
+count = buffer.drain(store)  # → 2 ops applied
+# Buffer is cleared after drain. Ontology validated. Subscriptions fire. HLC assigned.
+```
+
+**Key properties:**
+- Buffer stores raw `GraphOp` payloads (no hash, no clock, no DAG parents — those are assigned at drain time)
+- Ontology validation happens at drain, not at buffer time — invalid ops fail clearly
+- D-023 subscriptions fire at drain time — EventBus sees buffered ops as normal events
+- HLC timestamps reflect drain time, not event time — store real timestamps in properties for audit accuracy
+- Buffer is local-only — no sync participation (buffered ops aren't entries until drained)
+- `drain()` is explicit — the application controls when and what drains
+- Buffer file is append-only JSONL, survives crashes, reopenable by new `OperationBuffer` instances
+
+**Use cases:** Boot-time events (before Silk opens), pre-store initialization, offline operation queuing.
 
 ---
 

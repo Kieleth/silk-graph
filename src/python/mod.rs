@@ -1381,7 +1381,7 @@ impl PyGraphStore {
         Entry::new(payload, next, refs, clock, author)
     }
 
-    fn append(&mut self, op: GraphOp) -> PyResult<String> {
+    pub(crate) fn append(&mut self, op: GraphOp) -> PyResult<String> {
         self.clock.tick();
         let heads = self.backend.oplog().heads();
         let entry = self.create_entry(op, heads, vec![], self.clock.clone(), &self.instance_id);
@@ -1492,9 +1492,175 @@ impl PyGraphStore {
     }
 }
 
+// -- OperationBuffer (pre-store write-ahead buffer) --
+
+/// Filesystem-backed buffer for graph operations.
+///
+/// Stores operations as JSONL when the GraphStore isn't available yet
+/// (e.g., boot time). Drain into a live store when it becomes available.
+///
+/// Operations are raw payloads — no hash, no clock, no DAG parents.
+/// These are assigned at drain time through the normal store API.
+/// Ontology validation, subscriptions, and HLC timestamps all happen at drain.
+#[pyclass(name = "OperationBuffer")]
+struct PyOperationBuffer {
+    inner: crate::buffer::OperationBuffer,
+}
+
+#[pymethods]
+impl PyOperationBuffer {
+    #[new]
+    fn new(path: String) -> Self {
+        Self {
+            inner: crate::buffer::OperationBuffer::new(path),
+        }
+    }
+
+    /// Buffer an add_node operation.
+    #[pyo3(signature = (node_id, node_type, label, properties=None, subtype=None))]
+    fn add_node(
+        &self,
+        node_id: String,
+        node_type: String,
+        label: String,
+        properties: Option<&pyo3::Bound<'_, PyDict>>,
+        subtype: Option<String>,
+    ) -> PyResult<()> {
+        let props = match properties {
+            Some(d) => convert_props(Some(d))?,
+            None => BTreeMap::new(),
+        };
+        let op = GraphOp::AddNode {
+            node_id,
+            node_type,
+            subtype,
+            label,
+            properties: props,
+        };
+        self.inner
+            .append(&op)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))
+    }
+
+    /// Buffer an add_edge operation.
+    #[pyo3(signature = (edge_id, edge_type, source_id, target_id, properties=None))]
+    fn add_edge(
+        &self,
+        edge_id: String,
+        edge_type: String,
+        source_id: String,
+        target_id: String,
+        properties: Option<&pyo3::Bound<'_, PyDict>>,
+    ) -> PyResult<()> {
+        let props = match properties {
+            Some(d) => convert_props(Some(d))?,
+            None => BTreeMap::new(),
+        };
+        let op = GraphOp::AddEdge {
+            edge_id,
+            edge_type,
+            source_id,
+            target_id,
+            properties: props,
+        };
+        self.inner
+            .append(&op)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))
+    }
+
+    /// Buffer an update_property operation.
+    fn update_property(
+        &self,
+        entity_id: String,
+        key: String,
+        value: &pyo3::Bound<'_, pyo3::PyAny>,
+    ) -> PyResult<()> {
+        let val = py_to_value(value)?;
+        let op = GraphOp::UpdateProperty {
+            entity_id,
+            key,
+            value: val,
+        };
+        self.inner
+            .append(&op)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))
+    }
+
+    /// Buffer a remove_node operation.
+    fn remove_node(&self, node_id: String) -> PyResult<()> {
+        let op = GraphOp::RemoveNode { node_id };
+        self.inner
+            .append(&op)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))
+    }
+
+    /// Buffer a remove_edge operation.
+    fn remove_edge(&self, edge_id: String) -> PyResult<()> {
+        let op = GraphOp::RemoveEdge { edge_id };
+        self.inner
+            .append(&op)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))
+    }
+
+    /// Drain all buffered operations into a live store.
+    ///
+    /// Each operation is applied through the store's internal append():
+    /// ontology validation, HLC clock, DAG parents, subscriptions all fire.
+    /// After successful drain, the buffer is cleared.
+    ///
+    /// Returns the number of operations applied.
+    fn drain(&self, store: &mut PyGraphStore) -> PyResult<usize> {
+        let ops = self
+            .inner
+            .read_all()
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))?;
+        let count = ops.len();
+        for op in &ops {
+            match op {
+                GraphOp::DefineOntology { .. }
+                | GraphOp::ExtendOntology { .. }
+                | GraphOp::Checkpoint { .. } => {
+                    return Err(pyo3::exceptions::PyValueError::new_err(
+                        "buffer contains non-bufferable operation",
+                    ));
+                }
+                GraphOp::AddNode {
+                    node_id, node_type, ..
+                } => {
+                    store.node_types.insert(node_id.clone(), node_type.clone());
+                    store.append(op.clone())?;
+                }
+                GraphOp::RemoveNode { node_id } => {
+                    store.node_types.remove(node_id);
+                    store.append(op.clone())?;
+                }
+                _ => {
+                    store.append(op.clone())?;
+                }
+            }
+        }
+        self.inner
+            .clear()
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))?;
+        Ok(count)
+    }
+
+    /// Number of buffered operations.
+    fn __len__(&self) -> usize {
+        self.inner.len()
+    }
+
+    /// Path to the buffer file.
+    #[getter]
+    fn path(&self) -> String {
+        self.inner.path().to_string_lossy().to_string()
+    }
+}
+
 pub fn register(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<PyGraphStore>()?;
     m.add_class::<snapshot::PyGraphSnapshot>()?;
     m.add_class::<obslog::PyObservationLog>()?;
+    m.add_class::<PyOperationBuffer>()?;
     Ok(())
 }

@@ -1,4 +1,5 @@
 pub mod bloom;
+pub mod buffer;
 pub mod clock;
 pub mod engine;
 pub mod entry;
@@ -14,6 +15,7 @@ pub mod sync;
 
 // Re-exports for ergonomic Rust usage
 pub use bloom::BloomFilter;
+pub use buffer::OperationBuffer;
 pub use clock::LamportClock;
 pub use entry::{Entry, GraphOp, Hash, Value};
 pub use gossip::PeerRegistry;
