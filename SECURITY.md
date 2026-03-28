@@ -20,6 +20,7 @@ Silk is designed for **trusted peer networks** — devices and services you cont
 - **File permissions** — redb databases created with 0600 on Unix (S-09)
 - **Source name validation** — ObservationLog rejects names > 65535 bytes (S-13)
 - **Zero unsafe blocks** — entire Rust codebase
+- **Regex constraint safety** — the `pattern` constraint uses the Rust `regex` crate, which is RE2-based and guarantees linear-time matching. Catastrophic backtracking (e.g., `(a+)+b`) is not possible. This safety depends on the crate, not on Silk's own input validation. If the regex crate were ever replaced with a PCRE-based engine, pattern constraints would become a DoS vector.
 
 ### What's NOT protected (known limitations)
 

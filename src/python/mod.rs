@@ -35,7 +35,11 @@ pub struct PyGraphStore {
     backend: Backend,
     /// Materialized graph — updated incrementally on each append.
     graph: MaterializedGraph,
-    /// node_id → node_type, used for edge source/target validation
+    /// node_id → node_type, used for edge source/target validation.
+    /// Redundant with graph.nodes — kept in sync manually during append/merge/rebuild.
+    /// Only tracks live (non-tombstoned) nodes. Compaction excludes tombstoned nodes,
+    /// so this map stays consistent as long as add/remove operations update both
+    /// graph.nodes and node_types in the same code path.
     node_types: HashMap<String, String>,
     instance_id: String,
     clock: LamportClock,

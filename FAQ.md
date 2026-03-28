@@ -133,6 +133,29 @@ If you need reasoning, run a reasoner (Pellet, HermiT) on top of Silk's graph da
 
 ---
 
+### Can open properties (D-026) cause type conflicts?
+
+Yes. Open properties — properties not declared in the ontology — are accepted without type validation. If Peer A writes `update_property("node-1", "score", Int(42))` and Peer B writes `update_property("node-1", "score", String("high"))`, LWW resolves the conflict (later clock wins), but the surviving value might be of a type the application doesn't expect.
+
+This is a deliberate trade-off (open-world assumption). The ontology enforces a typed core; unknown properties are the application's responsibility.
+
+If you need type safety for a property after the fact, extend the ontology:
+```python
+store.extend_ontology({
+    "node_type_updates": {
+        "entity": {
+            "add_properties": {
+                "score": {"value_type": "int", "required": False}
+            }
+        }
+    }
+})
+```
+
+This validates `score` going forward. Existing values with the wrong type remain in the graph — they won't be retroactively validated unless you rebuild (e.g., via compaction + re-sync).
+
+---
+
 ### How do I enforce graph-level invariants? ("Every server must have a RUNS_ON edge")
 
 Silk validates **per-node** and **per-edge** at write time: types exist, properties match, constraints pass. It does NOT validate **cross-node** rules like "every server must have at least one RUNS_ON edge" or "if status is 'critical', there must be an assigned action."
@@ -365,7 +388,9 @@ class MyPolicy:
 
 Each compaction: N entries → 1 checkpoint. Call periodically. See [`CompactionPolicy`](https://github.com/Kieleth/silk-graph/blob/main/python/silk/compaction.py) for the extension protocol.
 
-> **Multi-peer safety:** `compact()` checks that all registered peers have synced before compacting. If any peer hasn't synced, it raises `RuntimeError`. Pass `safe=False` to override.
+> **Multi-peer safety:** `compact()` checks that all **registered** peers have synced before compacting. If any peer hasn't synced, it raises `RuntimeError`. Pass `safe=False` to override.
+>
+> **Limitation:** the safety check only knows about peers you've registered via `register_peer()`. Peers that exist but aren't registered (just came online, or were never registered) are invisible to the check. After compaction, unregistered peers that try to sync will need a full snapshot transfer instead of incremental sync. In a dynamic peer-to-peer system, this is a fundamental limitation — without consensus or a reliable membership protocol, you can't know all peers have converged. For static peer sets (known fleet), `verify_compaction_safe()` is reliable.
 
 ```python
 # Check safety explicitly
