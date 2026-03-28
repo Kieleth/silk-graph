@@ -317,7 +317,7 @@ Invalid entries (failing ontology validation) are accepted into the oplog for CR
 - Entry arrives -> hash verified -> appended to oplog (always)
 - During materialization: validate payload against current ontology
 - If invalid -> hash added to `quarantined` set, entry skipped for materialization
-- Quarantine is grow-only (monotonic). Entries never leave quarantine.
+- Quarantine is grow-only within a materialization pass. `rebuild()` (triggered by schema changes) clears and re-evaluates — entries may be un-quarantined if the ontology evolved.
 - Queries (`get_node`, `all_nodes`, etc.) never return quarantined data
 
 ## Version Compatibility

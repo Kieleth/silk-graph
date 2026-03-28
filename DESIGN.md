@@ -212,7 +212,7 @@ struct HybridClock {             // R-01: replaced LamportClock
 ```rust
 enum GraphOp {
     // Genesis — must be the first entry in the DAG (next = []).
-    // Defines the immutable ontology for this graph.
+    // Defines the initial ontology for this graph (extendable via R-03).
     DefineOntology {
         ontology: Ontology,
     },
@@ -421,7 +421,7 @@ The op log is the source of truth. Everything else is derived and recoverable.
 | `alert_rules` table (PRIMARY) | Rule nodes in the graph | Alert rules become first-class Rule entities. Event-sourced via Silk ops. No more CRUD bypass. |
 | `deploy_logs` table (PRIMARY) | Alert nodes linked to Deployment | Deploy log lines become alerts, edges link them to the deployment. No more direct psql writes from bash scripts. |
 | `retention_settings` | Graph property on a config Entity | Configuration as data in the graph. |
-| `alembic_version` | Not needed | No schema migrations — the graph ontology is immutable. New graphs get new ontologies. |
+| `alembic_version` | Not needed | No schema migrations — the graph ontology is monotonically extensible (R-03). No removals, no narrowing. |
 
 ### What the migration fixes
 
@@ -1115,7 +1115,7 @@ Schemaless, compact, Serde integration. No codegen, no schema files. For sub-KB 
 Silk replaces PostgreSQL entirely. Events → op log. Projections → materialized graph. KG → native. Queue → graph transitions. SSE → subscriptions.
 
 ### D-008: TDD — Tests Are the Specification
-Every feature is test-first. Tests grow in five levels of complexity: unit → component → integration → stress → Docker scenarios. If it's not tested, it doesn't exist. The test suite IS the specification of correct behavior. Convergence, commutativity, associativity, idempotency, causality, integrity, persistence, recovery, and liveness are all mechanically verified.
+Every feature is test-first. Tests grow in five levels of complexity: unit → component → integration → stress → Docker scenarios. If it's not tested, it doesn't exist. The test suite IS the specification of correct behavior. Convergence, commutativity, associativity, idempotency, causality, integrity, persistence, and recovery are tested. Liveness (sync will eventually complete) is NOT proven — it depends on network connectivity and the gossip protocol. See [PROOF.md](PROOF.md) Section 8 for what the proof does and does not cover.
 
 ### D-009: Silk is Standalone — Zero Consumer Dependencies
 Silk imports nothing from any consumer project. No shared types, no shared config, no shared database. Silk is a general-purpose distributed knowledge graph engine. The boundary is the public API: `GraphStore.open()`, `add_node()`, `query()`, `ops_since()`, `merge()`. This separation enables independent versioning, independent testing, and independent publication.
@@ -1124,9 +1124,9 @@ Silk imports nothing from any consumer project. No shared types, no shared confi
 Silk is designed for open-source publication. The crate has its own README, LICENSE, and documentation. A whitepaper is planned documenting the Merkle-CRDT graph store design, the ontology-first approach, and the distributed sync protocol. With the ontology abstracted out (D-012), Silk is a general-purpose distributed graph engine usable in any domain — not tied to DevOps.
 
 ### D-012: Ontology-First — No Built-in Types
-Silk has no built-in node types or edge types. The ontology is defined by the consumer and passed at graph creation as the immutable genesis entry (first entry in the DAG, `DefineOntology` op). Two design decisions:
+Silk has no built-in node types or edge types. The ontology is defined by the consumer and passed at graph creation as the genesis entry (first entry in the DAG, `DefineOntology` op). Two design decisions:
 
-1. **Ontology is immutable** — defined once at genesis, locked forever. No migration, no versioning. Changing the rules mid-game invalidates all prior state. Do your research before committing. This guarantees system integrity.
+1. **Ontology is monotonically extensible** — the genesis ontology defines the initial schema. It can be extended at runtime via `ExtendOntology` entries (R-03): add new node types, edge types, properties, and subtypes. Only additive changes are allowed — types and properties can never be removed or narrowed. This preserves CRDT convergence while allowing schema evolution. See R-03 in [ROADMAP.md](ROADMAP.md).
 2. **Connection constraints are strict** — edge types enforce exactly which node types can be source/target. Like Conway's Game of Life: simple, fixed rules create complex emergent behavior. The rules define the space of possible interactions; complexity emerges from the data, not from evolving the rules.
 
 Early prototypes hardcoded node types as a Rust enum. This was removed. `node_type` is now a `String` validated against the ontology. Edge types were already strings. `ontology.rs` was added with `Ontology`, `NodeTypeDef`, `EdgeTypeDef`, `PropertyDef`, and `ValueType` structs plus full validation logic.

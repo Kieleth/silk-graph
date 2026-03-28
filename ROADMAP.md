@@ -91,7 +91,7 @@ The fix: check the rules when stapling in pages too. If a page breaks the rules,
 
 Rejecting entries breaks the CRDT. If peer A rejects an entry that peer B accepted, their oplogs diverge and convergence is violated. The oplog must contain the same entries everywhere. The *view* can differ (quarantine is local policy), but the *log* cannot.
 
-The quarantine set is itself a grow-only set — a valid CRDT. Entries enter quarantine. They never leave. Monotonic. Safe.
+The quarantine set is grow-only within a single materialization pass. When `rebuild()` runs (triggered by `ExtendOntology` or `Checkpoint` entries during sync), the set is cleared and all entries are re-evaluated against the evolved ontology. This means previously-quarantined entries can become valid if the ontology has been extended to accept them. After bidirectional sync, two peers with identical oplogs produce identical quarantine sets — the decision is deterministic (see [PROOF.md](PROOF.md) Section 4).
 
 ### What Changes
 
@@ -147,7 +147,7 @@ Concurrent extensions from different peers merge by union. Two peers add differe
 
 ### Why It Needs R-02
 
-If the ontology can evolve, sync validation becomes more complex. Entries must be validated against the ontology *as it existed when the entry was created*, not the current ontology. The quarantine model gives a clean answer: validate against the current ontology, quarantine if invalid. If a future `ExtendOntology` entry makes it valid, the application can re-evaluate (or simply accept that quarantine is permanent — simpler, still safe).
+If the ontology can evolve, sync validation becomes more complex. The quarantine model gives a clean answer: validate against the current ontology, quarantine if invalid. When an `ExtendOntology` entry arrives via sync, `rebuild()` re-evaluates all entries against the evolved ontology. Previously-quarantined entries that now validate are un-quarantined and materialized into the graph. Subscribers are notified for un-quarantined entries.
 
 ### Depends On
 

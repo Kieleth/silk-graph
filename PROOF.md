@@ -135,11 +135,11 @@ Two implementations with the same entry set produce the same topological order.
 
 *Reference*: `src/oplog.rs:125-185`
 
-### I-06: Quarantine Monotonicity
+### I-06: Quarantine Determinism
 
-`G.quarantined` is a grow-only set. Entries are added on validation failure but never removed.
+`G.quarantined` is grow-only within a single materialization pass. On `rebuild()` (triggered by `ExtendOntology` or `Checkpoint` during sync), the set is cleared and all entries are re-evaluated against the evolved ontology. Two peers with identical oplogs produce identical quarantine sets after rebuild — the decision is deterministic (see Section 4).
 
-*Reference*: `src/graph.rs:72, 102, 117, 140`
+*Reference*: `src/graph.rs:69-74` (comment), `src/graph.rs:209` (`rebuild()` clears quarantine)
 
 ---
 
