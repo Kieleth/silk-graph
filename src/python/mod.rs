@@ -698,20 +698,22 @@ impl PyGraphStore {
         }
 
         // Phase 2: causal closure — add all ancestors of kept entries
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for entry in &full_payload.entries {
-                if !keep.contains(&entry.hash) {
-                    continue;
-                }
-                for parent in &entry.next {
-                    if !keep.contains(parent) {
-                        for e2 in &full_payload.entries {
-                            if e2.hash == *parent {
-                                keep.insert(e2.hash);
-                                changed = true;
-                            }
+        // Review 4 fix (issue #9): BFS queue instead of O(n²*d) nested loop.
+        // Same pattern as the EXP-01 fix for entries_missing.
+        {
+            let entry_map: HashMap<Hash, usize> = full_payload
+                .entries
+                .iter()
+                .enumerate()
+                .map(|(i, e)| (e.hash, i))
+                .collect();
+            let mut queue: std::collections::VecDeque<Hash> = keep.iter().copied().collect();
+            while let Some(hash) = queue.pop_front() {
+                if let Some(&idx) = entry_map.get(&hash) {
+                    for parent in &full_payload.entries[idx].next {
+                        if !keep.contains(parent) {
+                            keep.insert(*parent);
+                            queue.push_back(*parent);
                         }
                     }
                 }
@@ -875,16 +877,53 @@ impl PyGraphStore {
     // -- Time-Travel (R-06) --
 
     /// R-06: Create a read-only snapshot of the graph at a historical time.
+    ///
+    /// Review 4 fix (issue #15): builds the ontology from entries within the
+    /// time window, not the current (potentially post-extension) ontology.
+    /// This ensures quarantine decisions match the ontology state at that time.
     #[pyo3(signature = (physical_ms, logical=0))]
     fn as_of(&self, physical_ms: u64, logical: u32) -> PyResult<snapshot::PyGraphSnapshot> {
         let entries = self.backend.oplog().entries_as_of(physical_ms, logical);
 
-        // Get ontology from genesis (DefineOntology or Checkpoint)
-        let all = self.backend.oplog().entries_since(None);
-        let genesis = all
-            .first()
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("no entries in oplog"))?;
-        let ontology = extract_ontology_from_genesis(genesis)?;
+        // Build ontology from entries within the time window only.
+        // Start with the genesis ontology, then apply ExtendOntology entries
+        // that fall within the cutoff. This ensures the historical snapshot
+        // uses the ontology as it existed at that time.
+        let mut ontology: Option<Ontology> = None;
+        for entry in &entries {
+            match &entry.payload {
+                GraphOp::DefineOntology { ontology: ont } => {
+                    ontology = Some(ont.clone());
+                }
+                GraphOp::Checkpoint { ops, .. } => {
+                    for op in ops {
+                        if let GraphOp::DefineOntology { ontology: ont } = op {
+                            ontology = Some(ont.clone());
+                            break;
+                        }
+                    }
+                }
+                GraphOp::ExtendOntology { extension } => {
+                    if let Some(ref mut ont) = ontology {
+                        let _ = ont.merge_extension(extension);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // If no ontology found in the time window (cutoff before genesis),
+        // fall back to the current genesis ontology for an empty snapshot.
+        let ontology = match ontology {
+            Some(ont) => ont,
+            None => {
+                let all = self.backend.oplog().entries_since(None);
+                let genesis = all.first().ok_or_else(|| {
+                    pyo3::exceptions::PyRuntimeError::new_err("no entries in oplog")
+                })?;
+                extract_ontology_from_genesis(genesis)?
+            }
+        };
 
         let mut graph = MaterializedGraph::new(ontology);
         let refs: Vec<&Entry> = entries.iter().copied().collect();
@@ -1288,14 +1327,10 @@ impl PyGraphStore {
             .cloned()
             .collect();
 
-        // Collect existing hashes before merge so we can identify new entries.
-        let existing: HashSet<Hash> = self
-            .backend
-            .oplog()
-            .entries_since(None)
-            .iter()
-            .map(|e| e.hash)
-            .collect();
+        // Review 4 fix (issue #10): track candidate hashes from the payload
+        // instead of walking the entire DAG to build an "existing" set.
+        // The candidates are exactly the entries we're about to merge.
+        let candidate_hashes: HashSet<Hash> = valid_entries.iter().map(|e| e.hash).collect();
 
         // Merge into oplog (and redb for persistent backend).
         let inserted = match &mut self.backend {
@@ -1310,10 +1345,9 @@ impl PyGraphStore {
             let all = self.backend.oplog().entries_since(None);
 
             // Bug 5 fix: check if any new entry is ExtendOntology or Checkpoint.
-            // If so, full rebuild is required for deterministic quarantine resolution.
-            // Incremental apply can diverge when concurrent schema extensions conflict.
-            let has_schema_change = all.iter().any(|e| {
-                !existing.contains(&e.hash)
+            // A new entry = one from our candidate set that's now in the oplog.
+            let has_schema_change = valid_entries.iter().any(|e| {
+                candidate_hashes.contains(&e.hash)
                     && matches!(
                         e.payload,
                         GraphOp::ExtendOntology { .. } | GraphOp::Checkpoint { .. }
@@ -1348,7 +1382,7 @@ impl PyGraphStore {
             } else {
                 // Incremental apply: safe when no schema changes
                 for entry in &all {
-                    if !existing.contains(&entry.hash) {
+                    if candidate_hashes.contains(&entry.hash) {
                         self.graph.apply(entry);
                         match &entry.payload {
                             GraphOp::AddNode {
@@ -1367,7 +1401,7 @@ impl PyGraphStore {
 
             // Update clock and notify subscribers for all new entries
             for entry in &all {
-                if !existing.contains(&entry.hash) {
+                if candidate_hashes.contains(&entry.hash) {
                     self.clock.merge(&entry.clock);
                     self.notify_subscribers(entry, false);
                 }
@@ -1404,11 +1438,14 @@ impl PyGraphStore {
         if let Err(reason) = self.validate_entry_payload(&entry) {
             return Err(pyo3::exceptions::PyValueError::new_err(reason));
         }
-        // Apply to materialized graph before backend (graph needs the entry ref).
-        self.graph.apply(&entry);
+        // Review 4 fix (issue #11): persist before apply.
+        // If persist fails (I/O error), the graph is unchanged.
+        // Previously: graph was modified before persist, creating
+        // inconsistent state on I/O failure.
         self.backend
             .append(entry.clone())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+        self.graph.apply(&entry);
         // D-023: notify subscribers (local write → local=true)
         self.notify_subscribers(&entry, true);
         Ok(hex)
