@@ -64,23 +64,22 @@ impl Store {
         let genesis = genesis.ok_or(StoreError::NoGenesis)?;
         let oplog = OpLog::new(genesis.clone());
 
-        // Persist genesis.
+        // Persist genesis (single transaction).
         let store = Self { db, oplog };
-        store.persist_entry(&genesis)?;
-        store.persist_heads()?;
+        store.persist_entry_and_heads(&genesis)?;
 
         Ok(store)
     }
 
     /// Append an entry — writes to both OpLog and redb.
+    /// Review 4 fix: single redb transaction for entry + heads (was 2 transactions).
     pub fn append(&mut self, entry: Entry) -> Result<bool, StoreError> {
         let inserted = self
             .oplog
             .append(entry.clone())
             .map_err(StoreError::OpLog)?;
         if inserted {
-            self.persist_entry(&entry)?;
-            self.persist_heads()?;
+            self.persist_entry_and_heads(&entry)?;
         }
         Ok(inserted)
     }
@@ -89,8 +88,10 @@ impl Store {
     ///
     /// Handles out-of-order entries by retrying those with missing parents.
     /// Returns the number of new entries merged.
+    /// Review 4 fix: batches all entry writes + heads into fewer transactions.
     pub fn merge(&mut self, entries: &[Entry]) -> Result<usize, StoreError> {
         let mut inserted = 0;
+        let mut new_entries: Vec<Entry> = Vec::new();
         let mut remaining: Vec<&Entry> = entries.iter().collect();
         let mut max_passes = remaining.len() + 1;
 
@@ -99,7 +100,7 @@ impl Store {
             for entry in &remaining {
                 match self.oplog.append((*entry).clone()) {
                     Ok(true) => {
-                        self.persist_entry(entry)?;
+                        new_entries.push((*entry).clone());
                         inserted += 1;
                     }
                     Ok(false) => {
@@ -126,8 +127,8 @@ impl Store {
             max_passes -= 1;
         }
 
-        if inserted > 0 {
-            self.persist_heads()?;
+        if !new_entries.is_empty() {
+            self.persist_entries_and_heads(&new_entries)?;
         }
 
         Ok(inserted)
@@ -177,39 +178,62 @@ impl Store {
         Ok(())
     }
 
-    /// Persist a single entry to redb.
-    fn persist_entry(&self, entry: &Entry) -> Result<(), StoreError> {
+    /// Persist a single entry + updated heads in one redb transaction.
+    fn persist_entry_and_heads(&self, entry: &Entry) -> Result<(), StoreError> {
         let txn = self
             .db
             .begin_write()
             .map_err(|e| StoreError::Io(e.to_string()))?;
         {
-            let mut table = txn
+            let mut entries_table = txn
                 .open_table(ENTRIES_TABLE)
                 .map_err(|e| StoreError::Io(e.to_string()))?;
             let bytes = entry.to_bytes();
-            table
+            entries_table
                 .insert(entry.hash.as_slice(), bytes.as_slice())
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+        }
+        {
+            let mut meta_table = txn
+                .open_table(META_TABLE)
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+            let heads = self.oplog.heads();
+            let heads_bytes =
+                rmp_serde::to_vec(&heads).map_err(|e| StoreError::Io(e.to_string()))?;
+            meta_table
+                .insert("heads", heads_bytes.as_slice())
                 .map_err(|e| StoreError::Io(e.to_string()))?;
         }
         txn.commit().map_err(|e| StoreError::Io(e.to_string()))?;
         Ok(())
     }
 
-    /// Persist current heads to redb meta table.
-    fn persist_heads(&self) -> Result<(), StoreError> {
-        let heads = self.oplog.heads();
-        let bytes = rmp_serde::to_vec(&heads).map_err(|e| StoreError::Io(e.to_string()))?;
+    /// Persist multiple entries + updated heads in one redb transaction.
+    fn persist_entries_and_heads(&self, entries: &[Entry]) -> Result<(), StoreError> {
         let txn = self
             .db
             .begin_write()
             .map_err(|e| StoreError::Io(e.to_string()))?;
         {
-            let mut table = txn
+            let mut entries_table = txn
+                .open_table(ENTRIES_TABLE)
+                .map_err(|e| StoreError::Io(e.to_string()))?;
+            for entry in entries {
+                let bytes = entry.to_bytes();
+                entries_table
+                    .insert(entry.hash.as_slice(), bytes.as_slice())
+                    .map_err(|e| StoreError::Io(e.to_string()))?;
+            }
+        }
+        {
+            let mut meta_table = txn
                 .open_table(META_TABLE)
                 .map_err(|e| StoreError::Io(e.to_string()))?;
-            table
-                .insert("heads", bytes.as_slice())
+            let heads = self.oplog.heads();
+            let heads_bytes =
+                rmp_serde::to_vec(&heads).map_err(|e| StoreError::Io(e.to_string()))?;
+            meta_table
+                .insert("heads", heads_bytes.as_slice())
                 .map_err(|e| StoreError::Io(e.to_string()))?;
         }
         txn.commit().map_err(|e| StoreError::Io(e.to_string()))?;

@@ -4,9 +4,11 @@
 
 Knowledge graphs today force a choice:
 
-**Centralized engines** (Neo4j, TigerGraph, Amazon Neptune) give you schema, queries, and algorithms — but require a server. Every write goes through a coordinator. Offline operation is not a concept. Multi-region means replication lag, conflict resolution is your problem, and the server is a single point of failure.
+**Graph libraries** (NetworkX, igraph) give you algorithms and analysis — but no sync, no schema, no persistence. They're tools for working with graph data that's already in memory, not for distributing or enforcing it.
 
-**Distributed CRDTs** (Automerge, Yjs, cr-sqlite) give you offline-first, conflict-free replication — but they are document-oriented or row-oriented. No schema enforcement at write time. No graph traversal primitives. You bolt on your own validation, your own BFS, your own impact analysis. The CRDT handles merge; everything else is your responsibility.
+**Centralized graph databases** (Neo4j, TerminusDB, Amazon Neptune) give you schema, queries, and version history — but require a server. Offline operation is not a concept. Sync requires a coordinator (git-style push/pull for TerminusDB, enterprise replication for Neo4j). Conflicts must be resolved manually.
+
+**Distributed CRDTs** (Automerge, Yjs/pycrdt, Loro) give you offline-first, conflict-free replication — but they are document-oriented. No schema enforcement at write time. No graph traversal primitives. You bolt on your own validation, your own BFS, your own impact analysis. The CRDT handles merge; everything else is your responsibility.
 
 **No tool combines all six:**
 1. Distributed (no server required)

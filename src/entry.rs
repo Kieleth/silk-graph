@@ -616,4 +616,69 @@ mod tests {
             assert!(entry.verify_signature(&key.verifying_key())); // returns true (no sig = ok)
         }
     }
+
+    // -- Value JSON round-trip tests (Review 4, Issue #1) --
+
+    #[test]
+    fn value_int_json_roundtrip_preserves_type() {
+        let val = Value::Int(1);
+        let json = serde_json::to_string(&val).unwrap();
+        let back: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back,
+            Value::Int(1),
+            "Int(1) -> JSON -> back should stay Int, got {:?}",
+            back
+        );
+    }
+
+    #[test]
+    fn value_float_json_roundtrip_preserves_type() {
+        let val = Value::Float(1.0);
+        let json = serde_json::to_string(&val).unwrap();
+        let back: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back,
+            Value::Float(1.0),
+            "Float(1.0) -> JSON -> back should stay Float, got {:?}",
+            back
+        );
+    }
+
+    #[test]
+    fn value_float_json_includes_decimal() {
+        // serde_json must serialize 1.0_f64 as "1.0" (not "1")
+        // to ensure untagged deserialization picks Float, not Int
+        let json = serde_json::to_string(&Value::Float(1.0)).unwrap();
+        assert!(
+            json.contains('.'),
+            "Float(1.0) must serialize with decimal point, got: {}",
+            json
+        );
+    }
+
+    #[test]
+    fn graphop_with_mixed_values_json_roundtrip() {
+        let mut props = BTreeMap::new();
+        props.insert("count".into(), Value::Int(42));
+        props.insert("ratio".into(), Value::Float(1.0));
+        props.insert("name".into(), Value::String("test".into()));
+
+        let op = GraphOp::UpdateProperty {
+            entity_id: "e1".into(),
+            key: "data".into(),
+            value: Value::Map(props),
+        };
+
+        let json = serde_json::to_string(&op).unwrap();
+        let back: GraphOp = serde_json::from_str(&json).unwrap();
+
+        // Verify the round-tripped op produces the same hash
+        let entry1 = Entry::new(op, vec![], vec![], sample_clock(), "a");
+        let entry2 = Entry::new(back, vec![], vec![], sample_clock(), "a");
+        assert_eq!(
+            entry1.hash, entry2.hash,
+            "JSON round-trip changed the hash!"
+        );
+    }
 }

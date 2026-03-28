@@ -305,3 +305,35 @@ All scenarios verify convergence (identical node/property sets across peers) and
 python experiments/test_fault_injection.py
 pytest experiments/test_fault_injection.py -v
 ```
+
+---
+
+## EXP-07: Graph System Comparison — Silk vs NetworkX vs TerminusDB
+
+**Question:** How does Silk compare to a plain graph library (NetworkX) and a server-based graph database (TerminusDB) on shared operations?
+
+**Setup:** NetworkX runs in-process (baseline — no sync, no schema, no persistence). TerminusDB runs in Docker (server-based, git-style sync, OWL schema). Silk runs in-process (embedded CRDT, schema enforcement, peer-to-peer sync).
+
+### Results (1000 entities)
+
+| System | Write | Query all | Traversal (BFS) | Snapshot |
+|--------|-------|-----------|----------------|----------|
+| NetworkX | 0.52 ms (1.9M ops/s) | 0.01 ms | 0.68 ms | 54 KB |
+| Silk | 5.2 ms (193K ops/s) | 0.39 ms | 0.20 ms | 272 KB |
+| TerminusDB | 199 ms (5K ops/s) | 18.0 ms | N/A (server) | N/A |
+
+Silk is ~8x slower than NetworkX on writes (cost of CRDT + schema + hashing) but 3.4x faster on traversal (Rust vs Python). TerminusDB is ~40x slower than Silk (cost of HTTP + server-side processing).
+
+Full analysis and "which tool for which job" guidance: [BENCHMARKS.md](BENCHMARKS.md#graph-system-comparison-exp-07).
+
+### Reproduce
+
+```bash
+# NetworkX (always available)
+python experiments/test_graph_comparison.py
+
+# With TerminusDB (requires Docker)
+docker run -d --name terminusdb-bench -p 6363:6363 -e TERMINUSDB_ADMIN_PASS=bench123 terminusdb/terminusdb-server:v12.0.5
+python experiments/test_graph_comparison.py
+docker stop terminusdb-bench && docker rm terminusdb-bench
+```

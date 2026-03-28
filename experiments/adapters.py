@@ -231,6 +231,64 @@ class PycrdtAdapter(CRDTAdapter):
 
 
 # ---------------------------------------------------------------------------
+# NetworkX adapter (baseline — plain graph, no CRDT, no sync)
+# ---------------------------------------------------------------------------
+
+class NetworkXAdapter(CRDTAdapter):
+    name = "networkx"
+
+    def __init__(self):
+        import networkx
+        self.version = networkx.__version__
+        self._nx = networkx
+
+    def create_store(self, instance_id):
+        return self._nx.DiGraph()
+
+    def add_entity(self, store, entity_id, props, entity_type="entity"):
+        store.add_node(entity_id, _type=entity_type, **props)
+
+    def update_field(self, store, entity_id, key, value):
+        store.nodes[entity_id][key] = value
+
+    def read_field(self, store, entity_id, key):
+        try:
+            return store.nodes[entity_id].get(key)
+        except KeyError:
+            return None
+
+    def add_relationship(self, store, rel_id, rel_type, source_id, target_id, props=None):
+        store.add_edge(source_id, target_id, key=rel_id, _type=rel_type, **(props or {}))
+
+    def read_relationships(self, store, entity_id, rel_type):
+        return [t for _, t, d in store.edges(entity_id, data=True) if d.get("_type") == rel_type]
+
+    def sync_one_way(self, store_a, store_b):
+        # NetworkX has no sync — simulate by copying missing nodes/edges
+        import pickle
+        data = pickle.dumps(store_a)
+        restored = pickle.loads(data)
+        added = 0
+        for n, d in restored.nodes(data=True):
+            if n not in store_b:
+                store_b.add_node(n, **d)
+                added += 1
+        for u, v, d in restored.edges(data=True):
+            if not store_b.has_edge(u, v):
+                store_b.add_edge(u, v, **d)
+                added += 1
+        return SyncResult(bytes_sent=len(data), entries_merged=added)
+
+    def snapshot_size(self, store):
+        import pickle
+        return len(pickle.dumps(store))
+
+    def fork(self, store, new_id):
+        import copy
+        return copy.deepcopy(store)
+
+
+# ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
 
@@ -251,6 +309,11 @@ def available_adapters() -> list[CRDTAdapter]:
 
     try:
         adapters.append(PycrdtAdapter())
+    except ImportError:
+        pass
+
+    try:
+        adapters.append(NetworkXAdapter())
     except ImportError:
         pass
 

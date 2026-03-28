@@ -222,6 +222,75 @@ The bandwidth gap is the primary engineering trade-off. For metered or highly co
 
 ---
 
+## Graph System Comparison (EXP-07)
+
+Silk compared against NetworkX (plain in-memory graph, no sync) and TerminusDB (server-based versioned graph database). These are not competing products — they solve different problems. The comparison shows where each fits.
+
+### Systems
+
+| System | Type | Sync | Schema | Persistence | Install |
+|--------|------|------|--------|-------------|---------|
+| Silk | Embedded CRDT graph | Automatic (conflict-free) | Write-time validation | redb (embedded) | `pip install silk-graph` |
+| NetworkX | In-memory graph library | None | None | None | `pip install networkx` |
+| TerminusDB | Server graph database | Git-style (push/pull/clone) | OWL-based | Built-in | Docker + `pip install terminusdb` |
+
+### Write / Query Performance (1000 entities, 3 properties each)
+
+| System | Write | Query all | Update 100 | Snapshot |
+|--------|-------|-----------|------------|----------|
+| NetworkX | 0.52 ms (1.9M ops/s) | 0.01 ms | 0.01 ms | 54 KB |
+| Silk | 5.2 ms (193K ops/s) | 0.39 ms | 0.23 ms | 272 KB |
+| TerminusDB | 199 ms (5K ops/s) | 18.0 ms | 18.3 ms | N/A (server) |
+
+### Traversal (1000-node chain)
+
+| Algorithm | Silk (Rust) | NetworkX (Python) | Ratio |
+|-----------|------------|-------------------|-------|
+| BFS | 0.20 ms | 0.68 ms | Silk 3.4x faster |
+| DFS | 0.20 ms | 0.71 ms | Silk 3.5x faster |
+
+Silk's Rust-native traversal outperforms NetworkX's pure Python implementation despite carrying CRDT metadata per node.
+
+### Cost of each feature layer
+
+| Transition | Overhead | What you gain |
+|-----------|----------|---------------|
+| NetworkX → Silk | ~8x write cost | CRDT sync, schema enforcement, persistence, content addressing, audit trail, author authentication |
+| Silk → TerminusDB | ~40x write cost | WOQL/GraphQL query language, git-style branching, OWL reasoning, full ACID, server-side compute |
+
+### Which tool for which job
+
+**Use NetworkX when:**
+- You need graph algorithms (PageRank, centrality, community detection, Dijkstra) on data that's already in your process
+- Single-process, single-user, no sync needed
+- Exploration, analysis, visualization of graph data
+- You have another system (Silk, a database, CSV files) providing the data, and NetworkX is the analytics layer on top
+
+**Use Silk when:**
+- Multiple devices or services need the same graph and must work offline
+- You need schema enforcement at write time — invalid data rejected before it enters the system
+- You need an audit trail — every mutation is an immutable, content-addressed entry
+- You need sync without a server — any two Silk instances converge automatically
+- The graph fits in memory (<50K nodes on typical hardware, <100K on servers)
+- Examples: infrastructure knowledge graphs, configuration sync, field data collection, local-first collaborative apps
+
+**Use TerminusDB when:**
+- You need a server-side graph database with a query language (WOQL, GraphQL)
+- You need git-style branching, merging, and history management for graph data
+- You need OWL-level schema reasoning (inference, subsumption)
+- You have a central server and clients that push/pull — the git model fits your workflow
+- You can accept that conflicts require manual resolution (rebase), not automatic merge
+- Examples: data product versioning, collaborative ontology management, regulated environments needing full ACID
+
+**Use Silk + NetworkX together when:**
+- Silk handles storage, sync, and schema enforcement across peers
+- NetworkX runs analytics (PageRank, community detection, Dijkstra) on the synced graph
+- This is the intended architecture: Silk is the sync/storage layer, NetworkX (or igraph, or any graph library) is the analytics layer
+
+TerminusDB and Silk are not interchangeable. TerminusDB is a database server; Silk is an embedded library. Choosing between them is like choosing between PostgreSQL and SQLite — different deployment models for different constraints.
+
+---
+
 ## Limitations
 
 This benchmark does **not** measure:
