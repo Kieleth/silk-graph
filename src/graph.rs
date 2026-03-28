@@ -283,7 +283,10 @@ impl MaterializedGraph {
         }
     }
 
-    /// Estimated heap memory used by the materialized graph (bytes).
+    /// Approximate heap memory used by the materialized graph (bytes).
+    /// Uses fixed overhead estimates per node/edge. Does not account for heap
+    /// allocations behind String/Vec in property values or allocator fragmentation.
+    /// Actual memory may be 2-3x higher for string-heavy graphs.
     pub fn estimated_memory_bytes(&self) -> usize {
         let mut total = 0;
         // Nodes: id string + type string + label + properties + clocks + overhead

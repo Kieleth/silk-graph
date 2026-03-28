@@ -261,47 +261,112 @@ impl Store {
 
     /// Reconstruct an OpLog from a flat list of entries.
     ///
-    /// Finds the genesis (entry with empty `next`), builds the OpLog,
-    /// then appends remaining entries in topological order.
+    /// Finds the genesis (entry with empty `next`), topologically sorts
+    /// remaining entries by their `next` links, then appends in order.
+    /// Review 4 fix: O(n) via topo sort instead of O(n²) retry loop.
     fn reconstruct_oplog(entries: Vec<Entry>) -> Result<OpLog, StoreError> {
-        // Find genesis (entry with next=[]).
-        let genesis_idx = entries
-            .iter()
-            .position(|e| e.next.is_empty())
-            .ok_or(StoreError::Io("no genesis entry found".into()))?;
+        use std::collections::{HashMap, HashSet, VecDeque};
 
-        let genesis = entries[genesis_idx].clone();
-        let mut oplog = OpLog::new(genesis);
-
-        // Remaining entries need topological ordering.
-        // Simple approach: keep trying to append until all are inserted.
-        let mut remaining: Vec<Entry> = entries
-            .into_iter()
-            .enumerate()
-            .filter(|(i, _)| *i != genesis_idx)
-            .map(|(_, e)| e)
-            .collect();
-
-        let mut max_iterations = remaining.len() * remaining.len() + 1;
-        while !remaining.is_empty() && max_iterations > 0 {
-            let mut next_remaining = Vec::new();
-            for entry in remaining {
-                match oplog.append(entry.clone()) {
-                    Ok(_) => {} // inserted or duplicate
-                    Err(OpLogError::MissingParent(_)) => {
-                        next_remaining.push(entry); // try later
-                    }
-                    Err(e) => return Err(StoreError::Io(format!("reconstruct failed: {e}"))),
-                }
-            }
-            remaining = next_remaining;
-            max_iterations -= 1;
+        if entries.is_empty() {
+            return Err(StoreError::Io("no entries to reconstruct".into()));
         }
 
-        if !remaining.is_empty() {
+        // Index entries by hash, find all roots (entries with next=[])
+        let mut by_hash: HashMap<crate::entry::Hash, Entry> = HashMap::new();
+        let mut roots: Vec<Entry> = Vec::new();
+        for entry in entries {
+            if entry.next.is_empty() {
+                roots.push(entry.clone());
+            }
+            by_hash.insert(entry.hash, entry);
+        }
+
+        if roots.is_empty() {
+            return Err(StoreError::Io("no genesis entry found".into()));
+        }
+
+        // Use the first root as genesis for the OpLog
+        // (multi-peer stores may have multiple roots after sync)
+        let genesis = roots[0].clone();
+        let genesis_hash = genesis.hash;
+        let mut oplog = OpLog::new(genesis);
+
+        // Track all root hashes as "resolved"
+        let mut resolved: HashSet<crate::entry::Hash> = HashSet::new();
+        resolved.insert(genesis_hash);
+
+        // Append additional roots (other peers' genesis entries)
+        // These have next=[] and are handled by oplog.append() as Checkpoint entries
+        // or accepted as additional roots.
+        for root in &roots[1..] {
+            resolved.insert(root.hash);
+            // These are already handled by the oplog (Checkpoint replace or duplicate skip)
+            let _ = oplog.append(root.clone());
+        }
+
+        // Build reverse index: parent_hash → children that depend on it
+        let mut children_of: HashMap<crate::entry::Hash, Vec<crate::entry::Hash>> = HashMap::new();
+        let mut pending_parents: HashMap<crate::entry::Hash, HashSet<crate::entry::Hash>> =
+            HashMap::new();
+
+        for (hash, entry) in &by_hash {
+            if resolved.contains(hash) {
+                continue;
+            }
+            let parents: HashSet<_> = entry.next.iter().copied().collect();
+            pending_parents.insert(*hash, parents.clone());
+            for parent in &parents {
+                children_of.entry(*parent).or_default().push(*hash);
+            }
+        }
+
+        // BFS from all resolved roots: process entries whose parents are all resolved
+        let mut ready: VecDeque<crate::entry::Hash> = VecDeque::new();
+
+        for root_hash in &resolved {
+            if let Some(kids) = children_of.get(root_hash) {
+                for kid in kids {
+                    if let Some(pp) = pending_parents.get_mut(kid) {
+                        pp.remove(root_hash);
+                        if pp.is_empty() {
+                            ready.push_back(*kid);
+                        }
+                    }
+                }
+            }
+        }
+
+        while let Some(hash) = ready.pop_front() {
+            if let Some(entry) = by_hash.get(&hash) {
+                match oplog.append(entry.clone()) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        return Err(StoreError::Io(format!("reconstruct failed: {e}")));
+                    }
+                }
+                // Unblock children that depended on this entry
+                if let Some(kids) = children_of.get(&hash) {
+                    for kid in kids {
+                        if let Some(pp) = pending_parents.get_mut(kid) {
+                            pp.remove(&hash);
+                            if pp.is_empty() {
+                                ready.push_back(*kid);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check for unresolvable entries
+        let unresolved: Vec<_> = pending_parents
+            .iter()
+            .filter(|(_, parents)| !parents.is_empty())
+            .collect();
+        if !unresolved.is_empty() {
             return Err(StoreError::Io(format!(
                 "could not reconstruct oplog: {} entries with unresolvable parents",
-                remaining.len()
+                unresolved.len()
             )));
         }
 

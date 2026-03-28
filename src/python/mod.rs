@@ -1321,6 +1321,9 @@ impl PyGraphStore {
             });
 
             if has_schema_change {
+                // Review 4: capture quarantine set before rebuild
+                let quarantined_before = self.graph.quarantined.clone();
+
                 // Full rebuild: deterministic topo order → identical quarantine sets
                 let refs: Vec<&Entry> = all.iter().copied().collect();
                 self.graph.rebuild(&refs);
@@ -1331,6 +1334,17 @@ impl PyGraphStore {
                         .insert(node.node_id.clone(), node.node_type.clone());
                 }
                 self.ontology = self.graph.ontology.clone();
+
+                // Review 4: notify subscribers for entries that were un-quarantined
+                // (previously quarantined but now valid after ontology evolution)
+                for hash in &quarantined_before {
+                    if !self.graph.quarantined.contains(hash) {
+                        // Entry was un-quarantined — find it and notify
+                        if let Some(entry) = all.iter().find(|e| e.hash == *hash) {
+                            self.notify_subscribers(entry, false);
+                        }
+                    }
+                }
             } else {
                 // Incremental apply: safe when no schema changes
                 for entry in &all {

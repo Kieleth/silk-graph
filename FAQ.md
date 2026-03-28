@@ -52,6 +52,8 @@ results = Query(store, engine=NetworkXEngine()).raw("dijkstra(A, B, weight='late
 
 > **Note:** `shortest_path()` is unweighted BFS (fewest hops, not minimum cost). Same default as NetworkX.
 
+> **Performance note:** `pattern_match()` has O(n * b^d) complexity where n = nodes of the first type, b = average branching factor, d = sequence length. On dense graphs with high branching, this can be expensive. The `max_results` parameter bounds output size but not search cost. For complex pattern queries on large graphs, use a dedicated query engine via the `QueryEngine` extension protocol.
+
 ---
 
 ### Why no hyperedges / reification / named graphs?
@@ -407,7 +409,43 @@ print(f"Total: {mem['total_bytes'] / 1024:.0f} KB")
 
 There is no lazy loading, mmap, or eviction. The full graph lives in the process. For graphs under ~50K nodes, this is practical on any modern machine. For larger graphs, consider separate stores per domain or compaction to reduce oplog size.
 
+> **Note:** `memory_usage()` returns approximate estimates. It does not account for heap allocations behind String/Vec values or allocator fragmentation. Actual memory may be 2-3x higher for string-heavy graphs. Use it for relative comparisons and order-of-magnitude planning, not precise capacity calculations.
+
 > **Measured in [EXP-04](EXPERIMENTS.md).** Reproduce: `python experiments/test_memory_footprint.py`
+
+---
+
+### How does persistent storage (redb) handle writes?
+
+Each `add_node`, `add_edge`, or `update_property` on a persistent store writes the entry and updated DAG heads in a single atomic redb transaction. Crash at any point: either the write committed or it didn't. No partial state.
+
+Batch operations (`merge_sync_payload`) batch all new entries + heads into a single transaction, regardless of how many entries arrive. This minimizes write amplification for sync merges.
+
+On startup (`GraphStore.open(path)`), all entries are loaded from redb and the oplog is reconstructed via topological sort (O(n)). The materialized graph is rebuilt by replaying entries in causal order.
+
+---
+
+### What happens when a quarantined entry becomes valid?
+
+If an entry is quarantined (e.g., uses an unknown node type) and later an `ExtendOntology` entry arrives that adds that type, the entry is un-quarantined automatically. The mechanism:
+
+1. When sync merges an `ExtendOntology` entry, a full graph `rebuild()` runs
+2. Rebuild clears the quarantine set and re-evaluates all entries against the evolved ontology
+3. Entries that now pass validation are materialized into the graph
+4. Subscribers are notified for any entry that was un-quarantined
+
+This means quarantine is not permanent — it's re-evaluated whenever the ontology changes. The quarantine set is deterministic: two peers with identical oplogs produce identical quarantine sets after rebuild.
+
+---
+
+### Is the Value serialization format safe for type preservation?
+
+Yes. Silk's `Value` enum uses `#[serde(untagged)]` for compact serialization. The potential concern: could `Int(1)` and `Float(1.0)` become ambiguous after serialization?
+
+- **MessagePack** (used for entry hashing and sync): distinguishes integers from floats at the wire level. Safe.
+- **JSON** (used by OperationBuffer for buffered ops): `serde_json` serializes `f64(1.0)` as `"1.0"` (always includes decimal point), so untagged deserialization correctly picks `Float` over `Int`. Safe.
+
+This is verified by automated tests (4 Rust tests for JSON round-trip type preservation). No convergence risk from serialization ambiguity.
 
 ---
 

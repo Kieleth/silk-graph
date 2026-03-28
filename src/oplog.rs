@@ -104,8 +104,10 @@ impl OpLog {
         self.len == 0
     }
 
-    /// Estimated heap memory used by the oplog (bytes).
-    /// Counts serialized entry sizes + HashMap/HashSet overhead.
+    /// Approximate heap memory used by the oplog (bytes).
+    /// Uses serialized entry sizes + fixed overhead estimates per structure.
+    /// Does not account for heap allocations behind String/Vec in property values
+    /// or allocator fragmentation. Actual memory may be 2-3x higher for string-heavy graphs.
     pub fn estimated_memory_bytes(&self) -> usize {
         let mut total = 0;
         // Entry storage: each entry's serialized size + hash key (32 bytes) + HashMap overhead (~64 bytes)
