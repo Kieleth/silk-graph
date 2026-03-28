@@ -11,13 +11,30 @@ const ENTRIES_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("entri
 /// redb table: "heads" → msgpack-serialized Vec<Hash>.
 const META_TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 
+/// Flush mode controls when entries are persisted to disk.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FlushMode {
+    /// Persist every write immediately (safe, slow — ~1000x overhead).
+    /// Each `append()` does a redb commit with fsync.
+    Immediate,
+    /// Buffer writes in memory, persist on explicit `flush()` (fast, deferred durability).
+    /// Entries are in the oplog immediately (read-your-writes) but not on disk until flush.
+    /// On crash: entries since last flush are lost. Peers restore them on next sync.
+    Deferred,
+}
+
 /// Persistent graph store backed by redb + in-memory OpLog.
 ///
 /// On open: loads all entries from redb into the OpLog.
-/// On append: writes to both OpLog (in-memory) and redb (on-disk) atomically.
+/// On append: writes to OpLog (in-memory) immediately. Persistence depends on `flush_mode`:
+/// - `Immediate`: each write persists to redb (safe, slow).
+/// - `Deferred`: writes buffer until `flush()` is called (fast, one fsync for N writes).
 pub struct Store {
     db: Database,
     pub oplog: OpLog,
+    flush_mode: FlushMode,
+    /// Entries appended since last flush (Deferred mode only).
+    pending: Vec<Entry>,
 }
 
 impl Store {
@@ -57,7 +74,12 @@ impl Store {
         if !existing_entries.is_empty() {
             // Reconstruct OpLog from stored entries.
             let oplog = Self::reconstruct_oplog(existing_entries)?;
-            return Ok(Self { db, oplog });
+            return Ok(Self {
+                db,
+                oplog,
+                flush_mode: FlushMode::Immediate,
+                pending: Vec::new(),
+            });
         }
 
         // No existing entries — need genesis.
@@ -65,23 +87,52 @@ impl Store {
         let oplog = OpLog::new(genesis.clone());
 
         // Persist genesis (single transaction).
-        let store = Self { db, oplog };
+        let store = Self {
+            db,
+            oplog,
+            flush_mode: FlushMode::Immediate,
+            pending: Vec::new(),
+        };
         store.persist_entry_and_heads(&genesis)?;
 
         Ok(store)
     }
 
-    /// Append an entry — writes to both OpLog and redb.
-    /// Review 4 fix: single redb transaction for entry + heads (was 2 transactions).
+    /// Append an entry — writes to OpLog immediately, persists based on flush_mode.
     pub fn append(&mut self, entry: Entry) -> Result<bool, StoreError> {
         let inserted = self
             .oplog
             .append(entry.clone())
             .map_err(StoreError::OpLog)?;
         if inserted {
-            self.persist_entry_and_heads(&entry)?;
+            match self.flush_mode {
+                FlushMode::Immediate => self.persist_entry_and_heads(&entry)?,
+                FlushMode::Deferred => self.pending.push(entry),
+            }
         }
         Ok(inserted)
+    }
+
+    /// Set the flush mode.
+    pub fn set_flush_mode(&mut self, mode: FlushMode) {
+        self.flush_mode = mode;
+    }
+
+    /// Flush all pending entries to redb in a single transaction.
+    /// No-op if no pending entries or if flush_mode is Immediate.
+    pub fn flush(&mut self) -> Result<usize, StoreError> {
+        if self.pending.is_empty() {
+            return Ok(0);
+        }
+        let count = self.pending.len();
+        let entries: Vec<Entry> = self.pending.drain(..).collect();
+        self.persist_entries_and_heads(&entries)?;
+        Ok(count)
+    }
+
+    /// Number of entries pending flush (0 in Immediate mode).
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
     }
 
     /// Merge a batch of remote entries — writes each to OpLog and redb.
@@ -128,7 +179,10 @@ impl Store {
         }
 
         if !new_entries.is_empty() {
-            self.persist_entries_and_heads(&new_entries)?;
+            match self.flush_mode {
+                FlushMode::Immediate => self.persist_entries_and_heads(&new_entries)?,
+                FlushMode::Deferred => self.pending.extend(new_entries),
+            }
         }
 
         Ok(inserted)

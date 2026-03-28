@@ -1087,6 +1087,45 @@ impl PyGraphStore {
     /// R-08: Compact the oplog. Creates a checkpoint of current state,
     /// replaces entire oplog with the checkpoint entry.
     /// Returns the hex hash of the checkpoint entry.
+    /// Set flush mode for persistent stores.
+    /// "immediate" (default): each write persists to disk immediately.
+    /// "deferred": writes buffer in memory until flush() is called.
+    /// No-op for in-memory stores.
+    fn set_flush_mode(&mut self, mode: &str) -> PyResult<()> {
+        let flush_mode = match mode {
+            "immediate" => crate::store::FlushMode::Immediate,
+            "deferred" => crate::store::FlushMode::Deferred,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "flush_mode must be 'immediate' or 'deferred'",
+                ))
+            }
+        };
+        if let Backend::Persistent(store) = &mut self.backend {
+            store.set_flush_mode(flush_mode);
+        }
+        Ok(())
+    }
+
+    /// Flush pending entries to disk. Returns number of entries flushed.
+    /// No-op for in-memory stores or if flush_mode is "immediate".
+    fn flush(&mut self) -> PyResult<usize> {
+        match &mut self.backend {
+            Backend::Persistent(store) => store
+                .flush()
+                .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string())),
+            Backend::Memory(_) => Ok(0),
+        }
+    }
+
+    /// Number of entries pending flush (0 for in-memory or immediate mode).
+    fn pending_flush_count(&self) -> usize {
+        match &self.backend {
+            Backend::Persistent(store) => store.pending_count(),
+            Backend::Memory(_) => 0,
+        }
+    }
+
     /// SAFETY: Only call when ALL peers have synced to current state.
     /// Compact the oplog into a single checkpoint entry.
     /// If `safe` is true (default), verifies all known peers have synced

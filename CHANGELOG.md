@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sync compression** — optional, pluggable `SyncCompression` protocol. Built-in: `ZlibCompression(level=1)` (68% bandwidth savings, 29% latency overhead), `NoCompression`. Custom compressors implement `compress()` + `decompress()`. See [FAQ.md](FAQ.md).
 - **OperationBuffer** — filesystem-backed write-ahead buffer for graph operations. Buffer ops as JSONL when the store isn't available (boot time, pre-init), drain into a live store when it opens. Rust core (`src/buffer.rs`) + Python binding. Explicit drain, no sync participation, ontology validated at drain time. See [FAQ.md](FAQ.md#how-do-i-buffer-operations-before-the-store-is-open).
 - **Fault injection experiments** — 8 scenarios: message loss, corruption, truncation, duplicate delivery, 50% random loss, three-peer partition, concurrent conflicts, rapid fire. All pass. See [EXPERIMENTS.md](EXPERIMENTS.md).
+- **Deferred flush mode** — `store.set_flush_mode("deferred")` buffers writes in memory, persists on `store.flush()`. 276x faster than immediate mode for bulk writes (one fsync vs N). See [FAQ.md](FAQ.md) and [EXP-08](EXPERIMENTS.md).
 
 ### Fixed
 - **Sync ancestor closure O(n×depth) → O(n)** — BFS queue replaces nested loop. 16x faster at 99% overlap. See [EXP-01](EXPERIMENTS.md).

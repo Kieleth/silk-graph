@@ -442,11 +442,32 @@ There is no lazy loading, mmap, or eviction. The full graph lives in the process
 
 ### How does persistent storage (redb) handle writes?
 
-Each `add_node`, `add_edge`, or `update_property` on a persistent store writes the entry and updated DAG heads in a single atomic redb transaction. Crash at any point: either the write committed or it didn't. No partial state.
+Two modes:
 
-Batch operations (`merge_sync_payload`) batch all new entries + heads into a single transaction, regardless of how many entries arrive. This minimizes write amplification for sync merges.
+**Immediate mode (default):** each write persists to disk immediately in a single atomic redb transaction. Safe — crash at any point, the write either committed or didn't. Slow for bulk writes (~1000x overhead vs in-memory) because each operation does a full fsync.
+
+**Deferred mode:** writes go to memory immediately (read-your-writes), persist on explicit `flush()`. One fsync for N writes. ~276x faster than immediate for bulk writes, ~4x overhead vs pure in-memory.
+
+```python
+# Immediate (default — safe, slow for bulk)
+store = GraphStore("id", ontology, path="graph.redb")
+store.add_node(...)  # persisted immediately
+
+# Deferred (fast bulk writes, explicit flush)
+store = GraphStore("id", ontology, path="graph.redb")
+store.set_flush_mode("deferred")
+for server in servers:
+    store.add_node(...)     # memory only — fast
+store.flush()               # one fsync for all writes
+```
+
+**On crash in deferred mode:** entries since the last `flush()` are lost locally. If those entries were synced to a peer before the crash, the peer restores them on next sync. This is the local-first contract: writes are fast and available, durability is eventual.
+
+Batch operations (`merge_sync_payload`) always batch into a single transaction regardless of flush mode.
 
 On startup (`GraphStore.open(path)`), all entries are loaded from redb and the oplog is reconstructed via topological sort (O(n)). The materialized graph is rebuilt by replaying entries in causal order.
+
+> **Measured in [EXP-08](EXPERIMENTS.md).** 500 entities: immediate = 2,237ms, deferred = 8.1ms (276x faster), in-memory = 2.0ms.
 
 ---
 

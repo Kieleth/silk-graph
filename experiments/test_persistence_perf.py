@@ -205,3 +205,41 @@ if __name__ == "__main__":
         "N", "write_mem_ms", "write_disk_ms", "write_ratio",
         "sync_mem_ms", "sync_disk_ms", "sync_ratio", "startup_ms",
     ])
+
+    # Deferred flush comparison
+    print()
+    print("--- Deferred Flush Mode ---")
+    deferred_results = []
+    for n in scales:
+        # Deferred
+        tmp = tempfile.NamedTemporaryFile(suffix=".redb", delete=False)
+        tmp.close()
+        times = []
+        for _ in range(5):
+            s = GraphStore("bench", ONTOLOGY, path=tmp.name)
+            s.set_flush_mode("deferred")
+            t0 = time.perf_counter()
+            for i in range(n):
+                s.add_node(f"n-{i}", "entity", f"N{i}", {"name": f"node-{i}", "seq": i})
+            s.flush()
+            times.append((time.perf_counter() - t0) * 1000)
+            del s
+            os.unlink(tmp.name)
+
+        mem = measure_write(n, persistent=False)
+        imm = measure_write(n, persistent=True)
+        deferred = round(statistics.median(times), 2)
+
+        deferred_results.append({
+            "N": n,
+            "memory_ms": mem,
+            "immediate_ms": imm,
+            "deferred_ms": deferred,
+            "speedup_vs_imm": round(imm / deferred, 1) if deferred > 0 else 0,
+            "overhead_vs_mem": round(deferred / mem, 1) if mem > 0 else 0,
+        })
+
+    print_table(deferred_results, [
+        "N", "memory_ms", "immediate_ms", "deferred_ms",
+        "speedup_vs_imm", "overhead_vs_mem",
+    ])
