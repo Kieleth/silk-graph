@@ -194,3 +194,60 @@ def test_drain_twice_is_noop():
     store = _store()
     assert buf.drain(store) == 1
     assert buf.drain(store) == 0  # buffer was cleared
+
+
+# -- read_all (inspect without draining) --
+
+
+def test_read_all_returns_dicts():
+    """read_all() returns ops as Python dicts with 'op' key."""
+    buf = OperationBuffer(_tmp_buffer())
+    buf.add_node("s1", "server", "S1", {"status": "active"})
+    buf.update_property("s1", "status", "maintenance")
+
+    ops = buf.read_all()
+    assert len(ops) == 2
+    assert ops[0]["op"] == "add_node"
+    assert ops[0]["node_id"] == "s1"
+    assert ops[0]["node_type"] == "server"
+    assert ops[0]["properties"]["status"] == "active"
+    assert ops[1]["op"] == "update_property"
+    assert ops[1]["entity_id"] == "s1"
+    assert ops[1]["key"] == "status"
+
+
+def test_read_all_does_not_drain():
+    """read_all() doesn't clear the buffer."""
+    buf = OperationBuffer(_tmp_buffer())
+    buf.add_node("s1", "server", "S1")
+
+    _ = buf.read_all()
+    assert len(buf) == 1  # still there
+
+
+def test_read_all_empty():
+    buf = OperationBuffer(_tmp_buffer())
+    assert buf.read_all() == []
+
+
+def test_read_all_boot_event_pattern():
+    """Simulates the boot event buffering pattern for crash loop detection."""
+    buf = OperationBuffer(_tmp_buffer())
+
+    # Simulate 3 boot attempts
+    import time
+    for i in range(3):
+        buf.add_node(
+            f"boot-{i}", "signal", "boot attempt",
+            {"wheel": "0.4.2", "timestamp_ms": int(time.time() * 1000)},
+            subtype="boot_event",
+        )
+
+    # Read and filter — same as crash loop detector would do
+    ops = buf.read_all()
+    boot_events = [
+        op for op in ops
+        if op["op"] == "add_node" and op.get("subtype") == "boot_event"
+    ]
+    assert len(boot_events) == 3
+    assert all(e["properties"]["wheel"] == "0.4.2" for e in boot_events)

@@ -1492,6 +1492,16 @@ impl PyGraphStore {
     }
 }
 
+/// Convert a serde_json::Value to a Python object.
+/// Uses JSON string as intermediate — simple, correct, no PyO3 version issues.
+fn json_value_to_py(py: Python<'_>, val: &serde_json::Value) -> PyResult<PyObject> {
+    let json_str = serde_json::to_string(val)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("serialize: {e}")))?;
+    let json_mod = py.import("json")?;
+    let result = json_mod.call_method1("loads", (json_str,))?;
+    Ok(result.unbind())
+}
+
 // -- OperationBuffer (pre-store write-ahead buffer) --
 
 /// Filesystem-backed buffer for graph operations.
@@ -1643,6 +1653,27 @@ impl PyOperationBuffer {
             .clear()
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))?;
         Ok(count)
+    }
+
+    /// Read all buffered operations as Python dicts (without draining).
+    ///
+    /// Each dict has an "op" key ("add_node", "update_property", etc.)
+    /// plus the operation's fields. Useful for inspecting the buffer
+    /// before draining (e.g., counting boot events for crash loop detection).
+    fn read_all(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let ops = self
+            .inner
+            .read_all()
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e))?;
+        let list = PyList::empty(py);
+        for op in &ops {
+            let json_val = serde_json::to_value(op).map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!("serialize: {e}"))
+            })?;
+            let py_obj = json_value_to_py(py, &json_val)?;
+            list.append(py_obj)?;
+        }
+        Ok(list.into())
     }
 
     /// Number of buffered operations.
