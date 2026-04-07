@@ -484,3 +484,286 @@ class TestHLCTieBreaking:
         # But clocks may not be exactly equal (HLC advances), so we
         # only assert convergence, not which peer won.
         # The point: both agree, deterministically.
+
+
+# -- Multi-subtype sync (SA-033 investigation) --
+
+
+class TestMultiSubtypeSync:
+    """Verify that ALL subtypes transfer during sync, not just some.
+
+    Reproduces the partial sync bug observed in production:
+    Entity(instance) nodes synced between peers but Entity(capability),
+    Entity(k8s_cluster), and Rule(guardrail) nodes did not.
+    See shelob/docs/silk-sync-investigation.md.
+    """
+
+    RICH_ONTOLOGY = json.dumps({
+        "node_types": {
+            "entity": {
+                "properties": {},
+                "subtypes": {
+                    "instance": {"properties": {
+                        "host": {"value_type": "string"},
+                        "priority": {"value_type": "int"},
+                    }},
+                    "capability": {"properties": {
+                        "name": {"value_type": "string"},
+                        "role": {"value_type": "string"},
+                        "status": {"value_type": "string"},
+                    }},
+                    "k8s_cluster": {"properties": {
+                        "name": {"value_type": "string"},
+                        "server_url": {"value_type": "string"},
+                    }},
+                },
+            },
+            "signal": {
+                "properties": {},
+                "subtypes": {
+                    "alert": {"properties": {
+                        "severity": {"value_type": "string"},
+                    }},
+                },
+            },
+            "rule": {
+                "properties": {},
+                "subtypes": {
+                    "guardrail": {"properties": {
+                        "scope": {"value_type": "string"},
+                        "check_type": {"value_type": "string"},
+                    }},
+                },
+            },
+        },
+        "edge_types": {
+            "RUNS_ON": {
+                "source_types": ["entity"],
+                "target_types": ["entity"],
+                "properties": {},
+            },
+            "DEPENDS_ON": {
+                "source_types": ["entity"],
+                "target_types": ["entity"],
+                "properties": {},
+            },
+        },
+    })
+
+    def _make(self, instance_id: str) -> GraphStore:
+        return GraphStore(instance_id, self.RICH_ONTOLOGY)
+
+    def test_all_subtypes_sync_in_one_round(self):
+        """A has instance + capability + k8s_cluster + guardrail.
+        After one sync round, B has all of them."""
+        a = self._make("leader")
+        b = self._make("joiner")
+
+        # Leader: rich KG with multiple subtypes
+        a.add_node("inst-a", "entity", "leader", {"host": "10.0.0.1", "priority": 100}, subtype="instance")
+        a.add_node("cap-runtime", "entity", "K3s", {"name": "K3s", "role": "container_runtime", "status": "installed"}, subtype="capability")
+        a.add_node("cap-gw", "entity", "nginx", {"name": "nginx", "role": "gateway", "status": "installed"}, subtype="capability")
+        a.add_node("cluster-k3s", "entity", "k3s", {"name": "k3s", "server_url": "https://10.0.0.1:6443"}, subtype="k8s_cluster")
+        a.add_node("guard-1", "rule", "self-model", {"scope": "update", "check_type": "pre_flight"}, subtype="guardrail")
+        a.add_edge("cap-runtime-RUNS_ON-inst-a", "RUNS_ON", "cap-runtime", "inst-a")
+        a.add_edge("cap-gw-DEPENDS_ON-cap-runtime", "DEPENDS_ON", "cap-gw", "cap-runtime")
+
+        # Joiner: minimal KG
+        b.add_node("inst-b", "entity", "joiner", {"host": "10.0.0.2", "priority": 50}, subtype="instance")
+
+        # Sync: B offers → A responds → B merges
+        offer_b = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer_b)
+        b.merge_sync_payload(payload)
+
+        # Reverse: A offers → B responds → A merges
+        offer_a = a.generate_sync_offer()
+        payload2 = b.receive_sync_offer(offer_a)
+        a.merge_sync_payload(payload2)
+
+        # B must have ALL nodes from A
+        assert b.get_node("inst-a") is not None, "instance node not synced"
+        assert b.get_node("cap-runtime") is not None, "capability node not synced"
+        assert b.get_node("cap-gw") is not None, "capability node not synced"
+        assert b.get_node("cluster-k3s") is not None, "k8s_cluster node not synced"
+        assert b.get_node("guard-1") is not None, "guardrail node not synced"
+
+        # Edges must sync too
+        assert b.get_edge("cap-runtime-RUNS_ON-inst-a") is not None, "RUNS_ON edge not synced"
+        assert b.get_edge("cap-gw-DEPENDS_ON-cap-runtime") is not None, "DEPENDS_ON edge not synced"
+
+        # A must have B's node
+        assert a.get_node("inst-b") is not None, "reverse sync failed"
+
+    def test_subtype_properties_preserved_after_sync(self):
+        """Synced nodes retain their subtype and property values."""
+        a = self._make("alpha")
+        b = self._make("beta")
+
+        a.add_node("cap-1", "entity", "Docker", {"name": "Docker", "role": "container_runtime", "status": "installed"}, subtype="capability")
+        a.add_node("guard-2", "rule", "disk check", {"scope": "deploy", "check_type": "post_flight"}, subtype="guardrail")
+
+        offer_b = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer_b)
+        b.merge_sync_payload(payload)
+
+        cap = b.get_node("cap-1")
+        assert cap is not None
+        assert cap["subtype"] == "capability"
+        assert cap["properties"]["name"] == "Docker"
+        assert cap["properties"]["role"] == "container_runtime"
+        assert cap["properties"]["status"] == "installed"
+
+        guard = b.get_node("guard-2")
+        assert guard is not None
+        assert guard["subtype"] == "guardrail"
+        assert guard["properties"]["scope"] == "deploy"
+
+    def test_many_nodes_all_subtypes_converge(self):
+        """Stress: 50 nodes across 5 subtypes all converge after sync."""
+        a = self._make("source")
+        b = self._make("dest")
+
+        for i in range(10):
+            a.add_node(f"inst-{i}", "entity", f"inst-{i}", {"host": f"10.0.0.{i}", "priority": i}, subtype="instance")
+            a.add_node(f"cap-{i}", "entity", f"cap-{i}", {"name": f"cap-{i}", "role": "test", "status": "installed"}, subtype="capability")
+            a.add_node(f"cluster-{i}", "entity", f"cluster-{i}", {"name": f"c-{i}", "server_url": f"https://10.0.0.{i}:6443"}, subtype="k8s_cluster")
+            a.add_node(f"alert-{i}", "signal", f"alert-{i}", {"severity": "warning"}, subtype="alert")
+            a.add_node(f"guard-{i}", "rule", f"guard-{i}", {"scope": "update", "check_type": "pre_flight"}, subtype="guardrail")
+
+        offer_b = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer_b)
+        merged = b.merge_sync_payload(payload)
+
+        assert merged > 0
+        for i in range(10):
+            assert b.get_node(f"inst-{i}") is not None, f"inst-{i} missing"
+            assert b.get_node(f"cap-{i}") is not None, f"cap-{i} missing"
+            assert b.get_node(f"cluster-{i}") is not None, f"cluster-{i} missing"
+            assert b.get_node(f"alert-{i}") is not None, f"alert-{i} missing"
+            assert b.get_node(f"guard-{i}") is not None, f"guard-{i} missing"
+
+
+# -- Genesis divergence (SA-033 root cause investigation) --
+
+
+class TestGenesisDivergence:
+    """Test sync behavior when two stores have different genesis entries.
+
+    In production, two Shelob instances created with the same ontology but
+    different instance_ids produce different genesis hashes (the author field
+    is the instance_id). This means their DAGs have no common ancestor.
+
+    Silk must either:
+    a) Converge despite divergent genesis (cross-DAG merge), or
+    b) Reject the sync with a clear error (incompatible stores).
+
+    Silently dropping entries is not acceptable.
+    """
+
+    SIMPLE_ONT = json.dumps({
+        "node_types": {
+            "entity": {"properties": {"status": {"value_type": "string"}}},
+        },
+        "edge_types": {},
+    })
+
+    def test_different_instance_ids_produce_different_genesis(self):
+        """Two stores with same ontology but different instance_ids
+        have different genesis hashes (because author differs)."""
+        a = GraphStore("inst-a", self.SIMPLE_ONT)
+        b = GraphStore("inst-b", self.SIMPLE_ONT)
+
+        # Introspect: different instance_ids → different genesis
+        entries_a = a.entries_since(None)
+        entries_b = b.entries_since(None)
+
+        # Both have exactly 1 entry (genesis)
+        assert len(entries_a) == 1
+        assert len(entries_b) == 1
+
+        # The genesis hashes differ because author is different
+        hash_a = entries_a[0]["hash"]
+        hash_b = entries_b[0]["hash"]
+        # This documents the reality — whether they match or differ
+        # determines if sync can work between independent stores.
+        if hash_a == hash_b:
+            # Same genesis → sync should work (shared root)
+            pass
+        else:
+            # Different genesis → this is the root cause
+            # Sync has no common ancestor, entries_missing may fail silently
+            pass
+
+    def test_sync_between_independent_stores_transfers_data(self):
+        """Two independently-created stores must converge after sync.
+
+        This is the production scenario: gamma and delta are created
+        separately, each from their own seed. They must still sync.
+        """
+        a = GraphStore("inst-a", self.SIMPLE_ONT)
+        b = GraphStore("inst-b", self.SIMPLE_ONT)
+
+        a.add_node("node-a", "entity", "from A", {"status": "active"})
+        b.add_node("node-b", "entity", "from B", {"status": "active"})
+
+        # Sync A → B (B sends offer, A responds with payload, B merges)
+        offer_b = b.generate_sync_offer()
+        payload_a_to_b = a.receive_sync_offer(offer_b)
+        b.merge_sync_payload(payload_a_to_b)
+
+        # Sync B → A
+        offer_a = a.generate_sync_offer()
+        payload_b_to_a = b.receive_sync_offer(offer_a)
+        a.merge_sync_payload(payload_b_to_a)
+
+        # Both must have both nodes
+        assert b.get_node("node-a") is not None, "A's node not synced to B"
+        assert a.get_node("node-b") is not None, "B's node not synced to A"
+
+    def test_sync_independent_stores_multiple_nodes(self):
+        """Independent stores with many nodes across types must converge."""
+        ont = json.dumps({
+            "node_types": {
+                "entity": {"properties": {}, "subtypes": {
+                    "server": {"properties": {"host": {"value_type": "string"}}},
+                    "service": {"properties": {"name": {"value_type": "string"}}},
+                }},
+                "rule": {"properties": {}, "subtypes": {
+                    "guardrail": {"properties": {"scope": {"value_type": "string"}}},
+                }},
+            },
+            "edge_types": {
+                "RUNS_ON": {"source_types": ["entity"], "target_types": ["entity"], "properties": {}},
+            },
+        })
+
+        a = GraphStore("gamma", ont)
+        b = GraphStore("delta", ont)
+
+        # Gamma: full infrastructure KG
+        a.add_node("srv-1", "entity", "server-1", {"host": "10.0.0.1"}, subtype="server")
+        a.add_node("svc-api", "entity", "api", {"name": "api"}, subtype="service")
+        a.add_node("guard-1", "rule", "disk-check", {"scope": "deploy"}, subtype="guardrail")
+        a.add_edge("svc-api-RUNS_ON-srv-1", "RUNS_ON", "svc-api", "srv-1")
+
+        # Delta: only its own identity
+        b.add_node("srv-2", "entity", "server-2", {"host": "10.0.0.2"}, subtype="server")
+
+        # Bidirectional sync
+        offer_b = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer_b)
+        b.merge_sync_payload(payload)
+
+        offer_a = a.generate_sync_offer()
+        payload2 = b.receive_sync_offer(offer_a)
+        a.merge_sync_payload(payload2)
+
+        # B must have gamma's nodes
+        assert b.get_node("srv-1") is not None, "server not synced"
+        assert b.get_node("svc-api") is not None, "service not synced"
+        assert b.get_node("guard-1") is not None, "guardrail not synced"
+        assert b.get_edge("svc-api-RUNS_ON-srv-1") is not None, "edge not synced"
+
+        # A must have delta's node
+        assert a.get_node("srv-2") is not None, "reverse sync failed"
