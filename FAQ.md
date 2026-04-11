@@ -322,6 +322,40 @@ Yes. If two stores reach the same resolved state through different `ExtendOntolo
 
 ---
 
+### Why doesn't adding ontology fields to SyncOffer require a protocol version bump?
+
+Because it's an additive-only change to the message envelope, not a change to sync semantics. This is a well-studied pattern in distributed systems protocol design.
+
+**The short answer:** The ontology hash and fingerprint in a SyncOffer are optimization metadata. A peer that doesn't understand them syncs normally (blind merge + quarantine). A peer that does understand them gets a fast compatibility pre-check. The sync protocol's correctness doesn't depend on either peer reading these fields.
+
+**The grounded answer:** Six established concepts converge on the same design:
+
+**Additive-only message evolution** is the recommended approach in every major serialization framework: Protocol Buffers (Google, Varda 2008), Apache Avro (Cutting, 2009), Apache Thrift (Slee, Agarwal, Kwiatkowski 2007), Cap'n Proto (Varda, 2013). The rule: add optional fields with new identifiers freely. Never remove, rename, or retype existing fields. Never reuse field identifiers. Old readers skip unknown fields. New readers use defaults when fields are absent. No version bump needed.
+
+**Postel's Law** (RFC 793, Postel 1981): "Be conservative in what you send, be liberal in what you accept." Old peers accept new-format offers by ignoring unknown fields. New peers accept old-format offers by using defaults for missing fields. Both directions work.
+
+**Tolerant Reader** (Fowler, 2011): a message consumer extracts only the data it needs and ignores everything else. The consumer-side complement to additive-only evolution on the producer side.
+
+**Wire format change vs semantic change** (protocol engineering consensus): a version bump is needed when the *meaning* of existing fields changes, not when new optional fields are added. Adding `ontology_hash` doesn't change what `heads` or `bloom` mean. It adds information alongside them.
+
+**CRDT sync envelope** (Shapiro et al. 2011, Almeida et al. 2018): the merge function operates on the delta payload (entries), not on the envelope (SyncOffer metadata). Adding metadata to the envelope is orthogonal to CRDT correctness. The convergence proof doesn't depend on the SyncOffer carrying any particular fields.
+
+**Capability negotiation** (HTTP headers, TLS extensions, Bitcoin service flags): for optional features, capability flags are more granular than version numbers. A peer advertises what it supports; the other adapts. Version numbers are reserved for breaking structural changes.
+
+**When WOULD a version bump be needed?** If the presence of `ontology_hash` changed the protocol's behavior, e.g., "a peer that sees a divergent hash MUST reject the sync offer." That would be a semantic change: old peers would silently accept offers that new peers refuse, causing behavioral divergence. We don't do this. The hash is informational, and the sync proceeds regardless.
+
+**The risk of not bumping** (Thomson, RFC 8961, "The Harmful Consequences of the Robustness Principle"): liberal acceptance can hide bugs. An old peer silently ignoring the ontology hash might give a false sense of validation. This is real but acceptable here because the fields are advisory, not enforcement. If enforcement is needed later, that's the moment to bump the version.
+
+> **References:**
+> - Postel, J. "Transmission Control Protocol." RFC 793 (1981), Section 2.10.
+> - Slee, M., Agarwal, A., Kwiatkowski, M. "Thrift: Scalable Cross-Language Services Implementation." Facebook (2007).
+> - Varda, K. "Protocol Buffers: Google's Data Interchange Format." Google (2008).
+> - Fowler, M. "TolerantReader." martinfowler.com/bliki (2011).
+> - Shapiro, M. et al. "Conflict-free Replicated Data Types." INRIA RR-7687 (2011).
+> - Thomson, M. "The Harmful Consequences of the Robustness Principle." RFC 8961 (2019).
+
+---
+
 ## Schema & Constraints
 
 ### What property constraints does Silk support?
