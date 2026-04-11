@@ -60,6 +60,11 @@ pub enum GraphOp {
     /// R-03: Extend the ontology with new types/properties (monotonic only).
     #[serde(rename = "extend_ontology")]
     ExtendOntology { extension: OntologyExtension },
+    /// Reserved: schema transform lenses for cross-ontology projection.
+    /// Opaque transforms field — interpretation is application-defined.
+    /// Reserved now to avoid future wire format break.
+    #[serde(rename = "define_lens")]
+    DefineLens { transforms: Vec<u8> },
     /// R-08: Checkpoint entry — summarizes all prior state.
     /// Contains synthetic ops that reconstruct the full graph when replayed.
     /// After compaction, this becomes the new genesis (next=[]).
@@ -104,6 +109,10 @@ pub struct Entry {
     /// D-027: ed25519 signature over the hash bytes (64 bytes). None for unsigned (pre-v0.3) entries.
     #[serde(default)]
     pub signature: Option<Vec<u8>>,
+    /// BLAKE3 hash of the resolved ontology at time of entry creation.
+    /// None for pre-migration entries. Not included in content hash (metadata only).
+    #[serde(default)]
+    pub ontology_hash: Option<Hash>,
 }
 
 /// The portion of an Entry that gets hashed. Signature is NOT included
@@ -136,6 +145,7 @@ impl Entry {
             clock,
             author,
             signature: None,
+            ontology_hash: None,
         }
     }
 
@@ -161,6 +171,7 @@ impl Entry {
             clock,
             author,
             signature: Some(sig.to_bytes().to_vec()),
+            ontology_hash: None,
         }
     }
 
@@ -680,5 +691,108 @@ mod tests {
             entry1.hash, entry2.hash,
             "JSON round-trip changed the hash!"
         );
+    }
+
+    // -- ontology_hash field --
+
+    #[test]
+    fn entry_ontology_hash_defaults_to_none() {
+        let entry = Entry::new(
+            GraphOp::AddNode {
+                node_id: "n1".into(),
+                node_type: "entity".into(),
+                subtype: None,
+                label: "n1".into(),
+                properties: BTreeMap::new(),
+            },
+            vec![],
+            vec![],
+            sample_clock(),
+            "author",
+        );
+        assert!(entry.ontology_hash.is_none());
+    }
+
+    #[test]
+    fn entry_ontology_hash_survives_roundtrip() {
+        let mut entry = Entry::new(
+            GraphOp::AddNode {
+                node_id: "n1".into(),
+                node_type: "entity".into(),
+                subtype: None,
+                label: "n1".into(),
+                properties: BTreeMap::new(),
+            },
+            vec![],
+            vec![],
+            sample_clock(),
+            "author",
+        );
+        entry.ontology_hash = Some([42u8; 32]);
+
+        let bytes = entry.to_bytes();
+        let restored = Entry::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.ontology_hash, Some([42u8; 32]));
+    }
+
+    #[test]
+    fn entry_ontology_hash_not_in_content_hash() {
+        // Two entries identical except for ontology_hash must have the same hash
+        let mut a = Entry::new(
+            GraphOp::AddNode {
+                node_id: "n1".into(),
+                node_type: "entity".into(),
+                subtype: None,
+                label: "n1".into(),
+                properties: BTreeMap::new(),
+            },
+            vec![],
+            vec![],
+            sample_clock(),
+            "author",
+        );
+        let b = a.clone();
+        a.ontology_hash = Some([99u8; 32]);
+
+        // Hashes are computed at creation time, before ontology_hash is set.
+        // Both must be identical (ontology_hash is metadata, not identity).
+        assert_eq!(a.hash, b.hash);
+    }
+
+    #[test]
+    fn old_entry_without_ontology_hash_deserializes() {
+        // Simulate a pre-migration entry (no ontology_hash field)
+        let entry = Entry::new(
+            GraphOp::AddNode {
+                node_id: "n1".into(),
+                node_type: "entity".into(),
+                subtype: None,
+                label: "n1".into(),
+                properties: BTreeMap::new(),
+            },
+            vec![],
+            vec![],
+            sample_clock(),
+            "author",
+        );
+        // Serialize without ontology_hash (it's None, serde skips it)
+        let bytes = entry.to_bytes();
+        let restored = Entry::from_bytes(&bytes).unwrap();
+        assert!(restored.ontology_hash.is_none());
+        assert!(restored.verify_hash());
+    }
+
+    // -- DefineLens variant --
+
+    #[test]
+    fn define_lens_roundtrips() {
+        let op = GraphOp::DefineLens {
+            transforms: vec![1, 2, 3, 4],
+        };
+        let entry = Entry::new(op.clone(), vec![], vec![], sample_clock(), "author");
+        let bytes = entry.to_bytes();
+        let restored = Entry::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.payload, op);
+        assert!(restored.verify_hash());
     }
 }

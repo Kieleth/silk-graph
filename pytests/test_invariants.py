@@ -224,7 +224,7 @@ def test_sync_convergence_randomized():
 # All GraphOp variants and their validation status.
 # When a new variant is added, this test forces the developer to classify it.
 VALIDATED_OPS = {"AddNode", "AddEdge", "UpdateProperty"}
-SKIP_VALIDATION_OPS = {"RemoveNode", "RemoveEdge", "DefineOntology", "ExtendOntology", "Checkpoint"}
+SKIP_VALIDATION_OPS = {"RemoveNode", "RemoveEdge", "DefineOntology", "ExtendOntology", "Checkpoint", "DefineLens"}
 ALL_KNOWN_OPS = VALIDATED_OPS | SKIP_VALIDATION_OPS
 
 

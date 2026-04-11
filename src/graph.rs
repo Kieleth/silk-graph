@@ -192,6 +192,9 @@ impl MaterializedGraph {
             GraphOp::RemoveEdge { edge_id } => {
                 self.apply_remove_edge(edge_id, &entry.clock);
             }
+            GraphOp::DefineLens { .. } => {
+                // Reserved. No materialization — lenses are metadata, not graph state.
+            }
         }
     }
 
