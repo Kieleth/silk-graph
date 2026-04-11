@@ -767,3 +767,248 @@ class TestGenesisDivergence:
 
         # A must have delta's node
         assert a.get_node("srv-2") is not None, "reverse sync failed"
+
+
+# -- outgoing_edges after sync (SA-033 edge index bug) --
+
+
+class TestOutgoingEdgesAfterSync:
+    """Reproduce the production bug: outgoing_edges() returns [] after sync
+    even though all_edges() shows the edge exists.
+
+    See shelob/docs/silk-outgoing-edges-bug.md.
+    """
+
+    FLEET_ONTOLOGY = json.dumps({
+        "node_types": {
+            "entity": {
+                "properties": {},
+                "subtypes": {
+                    "instance": {"properties": {
+                        "host": {"value_type": "string"},
+                        "priority": {"value_type": "int"},
+                        "status": {"value_type": "string"},
+                    }},
+                    "server": {"properties": {
+                        "name": {"value_type": "string"},
+                        "ip_v4": {"value_type": "string"},
+                    }},
+                    "capability": {"properties": {
+                        "name": {"value_type": "string"},
+                        "role": {"value_type": "string"},
+                        "status": {"value_type": "string"},
+                    }},
+                },
+            },
+        },
+        "edge_types": {
+            "RUNS_ON": {
+                "source_types": ["entity"],
+                "target_types": ["entity"],
+                "properties": {},
+            },
+            "MEMBER_OF": {
+                "source_types": ["entity"],
+                "target_types": ["entity"],
+                "properties": {},
+            },
+        },
+    })
+
+    def _make(self, instance_id: str) -> GraphStore:
+        return GraphStore(instance_id, self.FLEET_ONTOLOGY)
+
+    def test_outgoing_edges_after_sync_production_scenario(self):
+        """Exact production scenario: two instances with different seeds.
+
+        Gamma creates inst-gamma + server-gamma + RUNS_ON edge.
+        Delta creates inst-delta + server-delta + RUNS_ON edge.
+        After sync, delta must find inst-gamma's RUNS_ON via outgoing_edges().
+        """
+        gamma = self._make("gamma")
+        delta = self._make("delta")
+
+        # Gamma's seed
+        gamma.add_node("inst-gamma", "entity", "gamma",
+                        {"host": "5.78.44.251", "priority": 100, "status": "active"},
+                        subtype="instance")
+        gamma.add_node("server-gamma", "entity", "gamma-srv",
+                        {"name": "gamma", "ip_v4": "5.78.44.251"},
+                        subtype="server")
+        gamma.add_edge("inst-gamma-RUNS_ON-server-gamma", "RUNS_ON",
+                        "inst-gamma", "server-gamma")
+
+        # Delta's seed
+        delta.add_node("inst-delta", "entity", "delta",
+                        {"host": "5.78.81.60", "priority": 50, "status": "active"},
+                        subtype="instance")
+        delta.add_node("server-delta", "entity", "delta-srv",
+                        {"name": "delta", "ip_v4": "5.78.81.60"},
+                        subtype="server")
+        delta.add_edge("inst-delta-RUNS_ON-server-delta", "RUNS_ON",
+                        "inst-delta", "server-delta")
+
+        # Sync gamma → delta
+        offer_d = delta.generate_sync_offer()
+        payload = gamma.receive_sync_offer(offer_d)
+        delta.merge_sync_payload(payload)
+
+        # Sync delta → gamma
+        offer_g = gamma.generate_sync_offer()
+        payload2 = delta.receive_sync_offer(offer_g)
+        gamma.merge_sync_payload(payload2)
+
+        # THE BUG: outgoing_edges must find the synced RUNS_ON edge
+        delta_edges = delta.outgoing_edges("inst-gamma")
+        assert len(delta_edges) > 0, (
+            "outgoing_edges('inst-gamma') returned [] on delta after sync. "
+            "all_edges shows: " + str([(e["edge_id"], e["source_id"], e["target_id"])
+                                       for e in delta.all_edges()])
+        )
+        assert delta_edges[0]["edge_type"] == "RUNS_ON"
+        assert delta_edges[0]["target_id"] == "server-gamma"
+
+        # Reverse: gamma must find delta's edge
+        gamma_edges = gamma.outgoing_edges("inst-delta")
+        assert len(gamma_edges) > 0, "outgoing_edges('inst-delta') returned [] on gamma"
+        assert gamma_edges[0]["target_id"] == "server-delta"
+
+    def test_outgoing_edges_after_sync_with_capabilities(self):
+        """Multiple edge types: RUNS_ON + capability edges all findable."""
+        gamma = self._make("gamma")
+        delta = self._make("delta")
+
+        # Gamma: instance + server + capabilities + edges
+        gamma.add_node("inst-gamma", "entity", "gamma",
+                        {"host": "10.0.0.1", "priority": 100, "status": "active"},
+                        subtype="instance")
+        gamma.add_node("server-gamma", "entity", "srv",
+                        {"name": "gamma", "ip_v4": "10.0.0.1"},
+                        subtype="server")
+        gamma.add_node("cap-k3s", "entity", "K3s",
+                        {"name": "K3s", "role": "container_runtime", "status": "installed"},
+                        subtype="capability")
+        gamma.add_node("cap-nginx", "entity", "nginx",
+                        {"name": "nginx", "role": "gateway", "status": "installed"},
+                        subtype="capability")
+        gamma.add_edge("inst-gamma-RUNS_ON-server-gamma", "RUNS_ON",
+                        "inst-gamma", "server-gamma")
+        gamma.add_edge("cap-k3s-RUNS_ON-server-gamma", "RUNS_ON",
+                        "cap-k3s", "server-gamma")
+        gamma.add_edge("cap-nginx-RUNS_ON-server-gamma", "RUNS_ON",
+                        "cap-nginx", "server-gamma")
+
+        # Delta: minimal
+        delta.add_node("inst-delta", "entity", "delta",
+                        {"host": "10.0.0.2", "priority": 50, "status": "active"},
+                        subtype="instance")
+
+        # Sync gamma → delta
+        offer_d = delta.generate_sync_offer()
+        payload = gamma.receive_sync_offer(offer_d)
+        delta.merge_sync_payload(payload)
+
+        # outgoing_edges for the instance
+        inst_edges = delta.outgoing_edges("inst-gamma")
+        assert len(inst_edges) == 1, f"expected 1 RUNS_ON from inst-gamma, got {len(inst_edges)}"
+
+        # outgoing_edges for capabilities
+        k3s_edges = delta.outgoing_edges("cap-k3s")
+        assert len(k3s_edges) == 1, f"expected 1 RUNS_ON from cap-k3s, got {len(k3s_edges)}"
+
+        nginx_edges = delta.outgoing_edges("cap-nginx")
+        assert len(nginx_edges) == 1, f"expected 1 RUNS_ON from cap-nginx, got {len(nginx_edges)}"
+
+        # incoming_edges on server-gamma should find all 3
+        incoming = delta.incoming_edges("server-gamma")
+        assert len(incoming) == 3, f"expected 3 incoming on server-gamma, got {len(incoming)}"
+
+    def test_outgoing_edges_survives_tombstone_resurrection(self):
+        """Edge removed then re-added via sync — index must reflect resurrection."""
+        a = self._make("store-a")
+        b = self._make("store-b")
+
+        a.add_node("n1", "entity", "n1",
+                    {"host": "x", "priority": 1, "status": "active"}, subtype="instance")
+        a.add_node("n2", "entity", "n2",
+                    {"name": "s", "ip_v4": "x"}, subtype="server")
+        a.add_edge("e1", "RUNS_ON", "n1", "n2")
+        a.remove_edge("e1")
+        a.add_edge("e1", "RUNS_ON", "n1", "n2")  # resurrect
+
+        # Sync to b
+        offer_b = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer_b)
+        b.merge_sync_payload(payload)
+
+        # b must see the resurrected edge
+        edges = b.outgoing_edges("n1")
+        assert len(edges) == 1, f"expected 1 edge after resurrection sync, got {len(edges)}"
+        assert edges[0]["edge_id"] == "e1"
+
+    def test_outgoing_edges_after_persistent_reload(self, tmp_path):
+        """Edges findable via outgoing_edges after redb close + reopen."""
+        path_a = str(tmp_path / "a.redb")
+
+        a = GraphStore("inst-a", self.FLEET_ONTOLOGY, path=path_a)
+        a.add_node("n1", "entity", "n1",
+                    {"host": "x", "priority": 1, "status": "active"}, subtype="instance")
+        a.add_node("n2", "entity", "n2",
+                    {"name": "s", "ip_v4": "x"}, subtype="server")
+        a.add_edge("e1", "RUNS_ON", "n1", "n2")
+
+        # Verify before close
+        assert len(a.outgoing_edges("n1")) == 1
+
+        # Close and reopen
+        del a
+        a2 = GraphStore("inst-a", self.FLEET_ONTOLOGY, path=path_a)
+
+        edges = a2.outgoing_edges("n1")
+        assert len(edges) == 1, f"outgoing_edges empty after redb reload, got {len(edges)}"
+        assert edges[0]["edge_id"] == "e1"
+
+    def test_outgoing_edges_after_sync_then_reload(self, tmp_path):
+        """The full production scenario: sync + redb restart.
+
+        Store A (in-memory): creates nodes + edges.
+        Store B (redb): receives via sync. Closes. Reopens.
+        outgoing_edges must work on the reopened store for synced edges.
+        """
+        path_b = str(tmp_path / "b.redb")
+
+        a = self._make("gamma")
+        a.add_node("inst-gamma", "entity", "gamma",
+                    {"host": "10.0.0.1", "priority": 100, "status": "active"},
+                    subtype="instance")
+        a.add_node("server-gamma", "entity", "srv",
+                    {"name": "gamma", "ip_v4": "10.0.0.1"},
+                    subtype="server")
+        a.add_edge("inst-gamma-RUNS_ON-server-gamma", "RUNS_ON",
+                    "inst-gamma", "server-gamma")
+
+        b = GraphStore("delta", self.FLEET_ONTOLOGY, path=path_b)
+        b.add_node("inst-delta", "entity", "delta",
+                    {"host": "10.0.0.2", "priority": 50, "status": "active"},
+                    subtype="instance")
+
+        # Sync gamma → delta
+        offer_b = b.generate_sync_offer()
+        payload = a.receive_sync_offer(offer_b)
+        b.merge_sync_payload(payload)
+
+        # Verify before close
+        assert len(b.outgoing_edges("inst-gamma")) == 1, "outgoing_edges failed before reload"
+
+        # Close and reopen (simulates systemd restart)
+        del b
+        b2 = GraphStore("delta", self.FLEET_ONTOLOGY, path=path_b)
+
+        # THE TEST: outgoing_edges must work after sync + restart
+        edges = b2.outgoing_edges("inst-gamma")
+        assert len(edges) == 1, (
+            f"outgoing_edges('inst-gamma') empty after sync + redb reload. "
+            f"all_edges: {[(e['edge_id'], e['source_id'], e['target_id']) for e in b2.all_edges()]}"
+        )
+        assert edges[0]["edge_type"] == "RUNS_ON"
+        assert edges[0]["target_id"] == "server-gamma"
