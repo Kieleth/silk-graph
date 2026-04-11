@@ -737,7 +737,8 @@ impl PyGraphStore {
                 GraphOp::RemoveEdge { .. } => false, // keep (can't tell without edge lookup)
                 GraphOp::DefineOntology { .. }
                 | GraphOp::ExtendOntology { .. }
-                | GraphOp::Checkpoint { .. } => false, // always keep
+                | GraphOp::Checkpoint { .. }
+                | GraphOp::DefineLens { .. } => false, // always keep
             };
             if !dominated {
                 keep.insert(entry.hash);
@@ -1623,6 +1624,9 @@ impl PyGraphStore {
             }
             GraphOp::Checkpoint { .. } => {
                 let _ = dict.set_item("op", "checkpoint");
+            }
+            GraphOp::DefineLens { .. } => {
+                let _ = dict.set_item("op", "define_lens");
             }
         }
         dict.into()
