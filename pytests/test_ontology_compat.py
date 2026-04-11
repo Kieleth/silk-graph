@@ -251,3 +251,50 @@ class TestOntologyCompatibility:
         assert a.check_ontology_compatibility(
             b.ontology_hash(), b.ontology_fingerprint()
         ) == "identical"
+
+    def test_pet_shelter_scenario(self):
+        """The FAQ example: pet shelter with ontology drift.
+
+        Peer A: animal, shelter. Peer B: same + volunteer + microchip_id.
+        A is subset of B. After sync, A evolves to match B.
+        """
+        a = make_store("shelter-a")
+        b = make_store("shelter-b")
+
+        # B extends: adds volunteer type and microchip_id property on animal
+        b.extend_ontology({
+            "node_types": {"volunteer": {"properties": {"name": {"value_type": "string"}}}},
+            "edge_types": {},
+            "node_type_updates": {
+                "animal": {
+                    "add_properties": {"microchip_id": {"value_type": "string"}},
+                },
+            },
+        })
+
+        # B creates data using the new types
+        b.add_node("max", "animal", "Max", {"name": "Max", "microchip_id": "UK-123"})
+        b.add_node("alice", "volunteer", "Alice", {"name": "Alice"})
+
+        # A doesn't know about volunteer
+        fp_a = set(a.ontology_fingerprint())
+        fp_b = set(b.ontology_fingerprint())
+        assert "type:volunteer" not in fp_a
+        assert "type:volunteer" in fp_b
+        assert fp_a < fp_b  # strict subset
+
+        verdict = a.check_ontology_compatibility(b.ontology_hash(), b.ontology_fingerprint())
+        assert verdict == "subset"
+
+        # Sync B → A: ExtendOntology + data entries transfer
+        offer_a = a.generate_sync_offer()
+        payload = b.receive_sync_offer(offer_a)
+        a.merge_sync_payload(payload)
+
+        # A now has the extended ontology AND the data
+        assert a.check_ontology_compatibility(
+            b.ontology_hash(), b.ontology_fingerprint()
+        ) == "identical"
+        assert a.get_node("max") is not None
+        assert a.get_node("max")["properties"]["microchip_id"] == "UK-123"
+        assert a.get_node("alice") is not None
