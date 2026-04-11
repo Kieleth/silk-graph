@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::entry::Value;
 
@@ -85,6 +85,141 @@ pub struct EdgeTypeDef {
 pub struct Ontology {
     pub node_types: BTreeMap<String, NodeTypeDef>,
     pub edge_types: BTreeMap<String, EdgeTypeDef>,
+}
+
+/// Result of comparing two ontologies for sync compatibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Compatibility {
+    /// Same resolved ontology (identical hash).
+    Identical,
+    /// Local contains everything remote has, plus more. Safe to merge.
+    Superset,
+    /// Remote has types/properties local doesn't have yet. ExtendOntology
+    /// entries in the sync payload will resolve the gap.
+    Subset,
+    /// Neither is a superset. Incompatible fork, cannot be resolved
+    /// by additive evolution alone.
+    Divergent,
+}
+
+impl Ontology {
+    /// BLAKE3 hash of the canonical JSON representation.
+    ///
+    /// Two ontologies with identical resolved state produce the same hash,
+    /// regardless of how they got there (genesis path, extension order).
+    /// BTreeMap gives deterministic key ordering.
+    pub fn content_hash(&self) -> [u8; 32] {
+        let json = serde_json::to_string(self).expect("ontology serialization should not fail");
+        *blake3::hash(json.as_bytes()).as_bytes()
+    }
+
+    /// Set of atomic facts about this ontology's structure.
+    ///
+    /// Each fact is a string: "type:Animal", "prop:Animal:name:string:required",
+    /// "edge:LIVES_AT", "edge:LIVES_AT:src:Animal", "subtype:Entity:Project", etc.
+    ///
+    /// Under additive-only evolution, a newer ontology's fingerprint is a strict
+    /// superset of an older one's. Set comparison gives the compatibility verdict.
+    pub fn fingerprint(&self) -> HashSet<String> {
+        let mut facts = HashSet::new();
+
+        for (type_name, type_def) in &self.node_types {
+            facts.insert(format!("type:{type_name}"));
+
+            if let Some(parent) = &type_def.parent_type {
+                facts.insert(format!("type:{type_name}:parent:{parent}"));
+            }
+
+            // Top-level properties
+            for (prop_name, prop_def) in &type_def.properties {
+                let req = if prop_def.required {
+                    "required"
+                } else {
+                    "optional"
+                };
+                let vt = format!("{:?}", prop_def.value_type).to_lowercase();
+                facts.insert(format!("prop:{type_name}:{prop_name}:{vt}:{req}"));
+                Self::fingerprint_constraints(&mut facts, type_name, prop_name, prop_def);
+            }
+
+            // Subtypes
+            if let Some(subtypes) = &type_def.subtypes {
+                for (sub_name, sub_def) in subtypes {
+                    facts.insert(format!("subtype:{type_name}:{sub_name}"));
+                    for (prop_name, prop_def) in &sub_def.properties {
+                        let req = if prop_def.required {
+                            "required"
+                        } else {
+                            "optional"
+                        };
+                        let vt = format!("{:?}", prop_def.value_type).to_lowercase();
+                        facts.insert(format!(
+                            "subprop:{type_name}:{sub_name}:{prop_name}:{vt}:{req}"
+                        ));
+                        Self::fingerprint_constraints(
+                            &mut facts,
+                            &format!("{type_name}:{sub_name}"),
+                            prop_name,
+                            prop_def,
+                        );
+                    }
+                }
+            }
+        }
+
+        for (edge_name, edge_def) in &self.edge_types {
+            facts.insert(format!("edge:{edge_name}"));
+            for src in &edge_def.source_types {
+                facts.insert(format!("edge:{edge_name}:src:{src}"));
+            }
+            for tgt in &edge_def.target_types {
+                facts.insert(format!("edge:{edge_name}:tgt:{tgt}"));
+            }
+        }
+
+        facts
+    }
+
+    /// Compare this ontology against a foreign peer's hash and fingerprint.
+    pub fn check_compatibility(
+        &self,
+        foreign_hash: &[u8; 32],
+        foreign_fingerprint: &HashSet<String>,
+    ) -> Compatibility {
+        if &self.content_hash() == foreign_hash {
+            return Compatibility::Identical;
+        }
+
+        let my_fp = self.fingerprint();
+        let is_superset = foreign_fingerprint.is_subset(&my_fp);
+        let is_subset = my_fp.is_subset(foreign_fingerprint);
+
+        match (is_superset, is_subset) {
+            (true, false) => Compatibility::Superset,
+            (false, true) => Compatibility::Subset,
+            (true, true) => Compatibility::Identical, // same facts, different hash (shouldn't happen)
+            (false, false) => Compatibility::Divergent,
+        }
+    }
+
+    fn fingerprint_constraints(
+        facts: &mut HashSet<String>,
+        type_name: &str,
+        prop_name: &str,
+        prop_def: &PropertyDef,
+    ) {
+        if let Some(constraints) = &prop_def.constraints {
+            if let Some(enum_vals) = constraints.get("enum") {
+                if let Some(arr) = enum_vals.as_array() {
+                    for val in arr {
+                        if let Some(s) = val.as_str() {
+                            facts.insert(format!("constraint:{type_name}:{prop_name}:enum:{s}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Validation errors returned when an operation violates the ontology.
@@ -1517,5 +1652,314 @@ mod tests {
             edge_types: BTreeMap::new(),
         };
         assert!(ont.validate_self().is_err());
+    }
+
+    // -- Ontology hashing and fingerprinting --
+
+    fn pet_ontology() -> Ontology {
+        Ontology {
+            node_types: BTreeMap::from([
+                (
+                    "animal".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::from([(
+                            "name".into(),
+                            PropertyDef {
+                                value_type: ValueType::String,
+                                required: true,
+                                description: None,
+                                constraints: None,
+                            },
+                        )]),
+                        subtypes: None,
+                        parent_type: None,
+                    },
+                ),
+                (
+                    "shelter".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                        parent_type: None,
+                    },
+                ),
+            ]),
+            edge_types: BTreeMap::from([(
+                "LIVES_AT".into(),
+                EdgeTypeDef {
+                    description: None,
+                    source_types: vec!["animal".into()],
+                    target_types: vec!["shelter".into()],
+                    properties: BTreeMap::new(),
+                },
+            )]),
+        }
+    }
+
+    #[test]
+    fn content_hash_deterministic() {
+        let a = pet_ontology();
+        let b = pet_ontology();
+        assert_eq!(a.content_hash(), b.content_hash());
+    }
+
+    #[test]
+    fn content_hash_is_32_bytes() {
+        let ont = pet_ontology();
+        let hash = ont.content_hash();
+        assert_eq!(hash.len(), 32);
+        assert_ne!(hash, [0u8; 32]); // not all zeros
+    }
+
+    #[test]
+    fn content_hash_changes_on_new_type() {
+        let mut ont = pet_ontology();
+        let hash_before = ont.content_hash();
+        ont.node_types.insert(
+            "volunteer".into(),
+            NodeTypeDef {
+                description: None,
+                properties: BTreeMap::new(),
+                subtypes: None,
+                parent_type: None,
+            },
+        );
+        let hash_after = ont.content_hash();
+        assert_ne!(hash_before, hash_after);
+    }
+
+    #[test]
+    fn content_hash_changes_on_new_property() {
+        let mut ont = pet_ontology();
+        let hash_before = ont.content_hash();
+        ont.node_types.get_mut("animal").unwrap().properties.insert(
+            "microchip_id".into(),
+            PropertyDef {
+                value_type: ValueType::String,
+                required: false,
+                description: None,
+                constraints: None,
+            },
+        );
+        let hash_after = ont.content_hash();
+        assert_ne!(hash_before, hash_after);
+    }
+
+    #[test]
+    fn fingerprint_contains_types() {
+        let ont = pet_ontology();
+        let fp = ont.fingerprint();
+        assert!(fp.contains("type:animal"));
+        assert!(fp.contains("type:shelter"));
+        assert!(fp.contains("edge:LIVES_AT"));
+    }
+
+    #[test]
+    fn fingerprint_contains_properties() {
+        let ont = pet_ontology();
+        let fp = ont.fingerprint();
+        assert!(fp.contains("prop:animal:name:string:required"));
+    }
+
+    #[test]
+    fn fingerprint_contains_edge_constraints() {
+        let ont = pet_ontology();
+        let fp = ont.fingerprint();
+        assert!(fp.contains("edge:LIVES_AT:src:animal"));
+        assert!(fp.contains("edge:LIVES_AT:tgt:shelter"));
+    }
+
+    #[test]
+    fn fingerprint_contains_parent_type() {
+        let ont = Ontology {
+            node_types: BTreeMap::from([
+                (
+                    "entity".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                        parent_type: None,
+                    },
+                ),
+                (
+                    "server".into(),
+                    NodeTypeDef {
+                        description: None,
+                        properties: BTreeMap::new(),
+                        subtypes: None,
+                        parent_type: Some("entity".into()),
+                    },
+                ),
+            ]),
+            edge_types: BTreeMap::new(),
+        };
+        let fp = ont.fingerprint();
+        assert!(fp.contains("type:server:parent:entity"));
+    }
+
+    #[test]
+    fn fingerprint_contains_subtypes() {
+        let ont = Ontology {
+            node_types: BTreeMap::from([(
+                "entity".into(),
+                NodeTypeDef {
+                    description: None,
+                    properties: BTreeMap::new(),
+                    subtypes: Some(BTreeMap::from([(
+                        "project".into(),
+                        SubtypeDef {
+                            description: None,
+                            properties: BTreeMap::from([(
+                                "slug".into(),
+                                PropertyDef {
+                                    value_type: ValueType::String,
+                                    required: true,
+                                    description: None,
+                                    constraints: None,
+                                },
+                            )]),
+                        },
+                    )])),
+                    parent_type: None,
+                },
+            )]),
+            edge_types: BTreeMap::new(),
+        };
+        let fp = ont.fingerprint();
+        assert!(fp.contains("subtype:entity:project"));
+        assert!(fp.contains("subprop:entity:project:slug:string:required"));
+    }
+
+    #[test]
+    fn fingerprint_superset_after_extension() {
+        let base = pet_ontology();
+        let base_fp = base.fingerprint();
+
+        let mut extended = pet_ontology();
+        extended.node_types.insert(
+            "volunteer".into(),
+            NodeTypeDef {
+                description: None,
+                properties: BTreeMap::new(),
+                subtypes: None,
+                parent_type: None,
+            },
+        );
+        let ext_fp = extended.fingerprint();
+
+        // Extended is strict superset of base
+        assert!(base_fp.is_subset(&ext_fp));
+        assert!(!ext_fp.is_subset(&base_fp));
+    }
+
+    #[test]
+    fn check_compatibility_identical() {
+        let a = pet_ontology();
+        let b = pet_ontology();
+        let verdict = a.check_compatibility(&b.content_hash(), &b.fingerprint());
+        assert_eq!(verdict, Compatibility::Identical);
+    }
+
+    #[test]
+    fn check_compatibility_superset() {
+        let base = pet_ontology();
+
+        let mut extended = pet_ontology();
+        extended.node_types.insert(
+            "volunteer".into(),
+            NodeTypeDef {
+                description: None,
+                properties: BTreeMap::new(),
+                subtypes: None,
+                parent_type: None,
+            },
+        );
+
+        // Extended checking base: extended is superset
+        let verdict = extended.check_compatibility(&base.content_hash(), &base.fingerprint());
+        assert_eq!(verdict, Compatibility::Superset);
+    }
+
+    #[test]
+    fn check_compatibility_subset() {
+        let base = pet_ontology();
+
+        let mut extended = pet_ontology();
+        extended.node_types.insert(
+            "volunteer".into(),
+            NodeTypeDef {
+                description: None,
+                properties: BTreeMap::new(),
+                subtypes: None,
+                parent_type: None,
+            },
+        );
+
+        // Base checking extended: base is subset
+        let verdict = base.check_compatibility(&extended.content_hash(), &extended.fingerprint());
+        assert_eq!(verdict, Compatibility::Subset);
+    }
+
+    #[test]
+    fn check_compatibility_divergent() {
+        // Two independent extensions from the same base
+        let mut branch_a = pet_ontology();
+        branch_a.node_types.insert(
+            "volunteer".into(),
+            NodeTypeDef {
+                description: None,
+                properties: BTreeMap::new(),
+                subtypes: None,
+                parent_type: None,
+            },
+        );
+
+        let mut branch_b = pet_ontology();
+        branch_b.node_types.insert(
+            "adoption".into(),
+            NodeTypeDef {
+                description: None,
+                properties: BTreeMap::new(),
+                subtypes: None,
+                parent_type: None,
+            },
+        );
+
+        let verdict =
+            branch_a.check_compatibility(&branch_b.content_hash(), &branch_b.fingerprint());
+        assert_eq!(verdict, Compatibility::Divergent);
+    }
+
+    #[test]
+    fn fingerprint_contains_enum_constraints() {
+        let ont = Ontology {
+            node_types: BTreeMap::from([(
+                "server".into(),
+                NodeTypeDef {
+                    description: None,
+                    properties: BTreeMap::from([(
+                        "status".into(),
+                        PropertyDef {
+                            value_type: ValueType::String,
+                            required: true,
+                            description: None,
+                            constraints: Some(BTreeMap::from([(
+                                "enum".into(),
+                                serde_json::json!(["active", "standby"]),
+                            )])),
+                        },
+                    )]),
+                    subtypes: None,
+                    parent_type: None,
+                },
+            )]),
+            edge_types: BTreeMap::new(),
+        };
+        let fp = ont.fingerprint();
+        assert!(fp.contains("constraint:server:status:enum:active"));
+        assert!(fp.contains("constraint:server:status:enum:standby"));
     }
 }

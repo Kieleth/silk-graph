@@ -445,6 +445,49 @@ impl PyGraphStore {
         self.ontology.edge_types.keys().cloned().collect()
     }
 
+    /// BLAKE3 hash of the resolved ontology as a 64-char hex string.
+    ///
+    /// Two stores with identical resolved ontologies produce the same hash,
+    /// regardless of genesis path or extension order.
+    fn ontology_hash(&self) -> String {
+        hex::encode(self.ontology.content_hash())
+    }
+
+    /// Structural fingerprint: list of atomic fact strings about the ontology.
+    ///
+    /// Under additive-only evolution, a newer ontology's fingerprint is a
+    /// strict superset of an older one's.
+    fn ontology_fingerprint(&self) -> Vec<String> {
+        let mut facts: Vec<String> = self.ontology.fingerprint().into_iter().collect();
+        facts.sort();
+        facts
+    }
+
+    /// Check compatibility with a foreign peer's ontology.
+    ///
+    /// Returns "identical", "superset", "subset", or "divergent".
+    fn check_ontology_compatibility(
+        &self,
+        foreign_hash_hex: &str,
+        foreign_fingerprint: Vec<String>,
+    ) -> PyResult<String> {
+        let hash_bytes: [u8; 32] = hex::decode(foreign_hash_hex)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid hex: {e}")))?
+            .try_into()
+            .map_err(|_| pyo3::exceptions::PyValueError::new_err("hash must be 32 bytes"))?;
+
+        let fp: std::collections::HashSet<String> = foreign_fingerprint.into_iter().collect();
+
+        let verdict = self.ontology.check_compatibility(&hash_bytes, &fp);
+        Ok(match verdict {
+            crate::ontology::Compatibility::Identical => "identical",
+            crate::ontology::Compatibility::Superset => "superset",
+            crate::ontology::Compatibility::Subset => "subset",
+            crate::ontology::Compatibility::Divergent => "divergent",
+        }
+        .to_string())
+    }
+
     /// Return all entries since a given hash (delta for sync).
     /// If hash is None, returns all entries.
     #[pyo3(signature = (hex_hash=None))]

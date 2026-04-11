@@ -126,6 +126,28 @@ class GraphStore:
     def edge_type_names(self) -> list[str]:
         """Return the list of valid edge types."""
         ...
+    def ontology_hash(self) -> str:
+        """BLAKE3 hash of the resolved ontology as a 64-char hex string.
+
+        Two stores with identical resolved ontologies produce the same hash,
+        regardless of genesis path or extension order.
+        """
+        ...
+    def ontology_fingerprint(self) -> list[str]:
+        """Structural fingerprint: sorted list of atomic fact strings.
+
+        Under additive-only evolution (R-03), a newer ontology's fingerprint
+        is a strict superset of an older one's.
+        """
+        ...
+    def check_ontology_compatibility(
+        self, foreign_hash_hex: str, foreign_fingerprint: list[str]
+    ) -> str:
+        """Check compatibility with a foreign peer's ontology.
+
+        Returns "identical", "superset", "subset", or "divergent".
+        """
+        ...
     def entries_since(self, hex_hash: str | None = None) -> list[dict[str, Any]]:
         """Return all entries since a given hash (delta for sync)."""
         ...

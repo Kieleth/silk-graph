@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Ontology convergence** — `ontology_hash()` returns a deterministic BLAKE3 hash of the resolved ontology. `ontology_fingerprint()` returns a sorted list of atomic structural facts (types, properties, subtypes, constraints, parent relationships). `check_ontology_compatibility(hash, fingerprint)` returns "identical", "superset", "subset", or "divergent". Under additive-only evolution (R-03), a newer ontology's fingerprint is always a strict superset. No external dependencies. See [FAQ.md](FAQ.md#how-does-silk-detect-ontology-drift-between-peers).
+
 ## [0.1.7] - 2026-03-27
 
 ### Added

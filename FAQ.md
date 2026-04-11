@@ -274,6 +274,54 @@ After any schema-changing sync (ExtendOntology, Checkpoint), a full graph rebuil
 
 ---
 
+## Ontology Evolution
+
+### How does Silk detect ontology drift between peers?
+
+**The problem, by example.** You have two Silk peers managing a pet shelter. Peer A's ontology has types: `animal`, `shelter`, `adoption`. Peer B started from the same ontology but extended it: added type `volunteer` and property `microchip_id` on `animal`. They've been running independently for a week.
+
+Now they sync. Peer A sends an `add_node("max", "animal", ...)`, B accepts it fine (B knows what `animal` is). But B sends an `add_node("alice", "volunteer", ...)`, A has never heard of `volunteer`. Without ontology awareness, A quarantines the entry silently. Alice is invisible on A's graph. Data looks synced but isn't.
+
+With ontology fingerprinting, A knows **before processing any entries** that B has types A doesn't. The `ExtendOntology` entries in B's sync payload will fix the gap. A can quarantine intelligently and un-quarantine after the extension arrives, or reject the sync entirely if the schemas have forked incompatibly.
+
+```
+Peer A fingerprint: {"type:animal", "type:shelter", "type:adoption", ...}
+Peer B fingerprint: {"type:animal", "type:shelter", "type:adoption", "type:volunteer", "prop:animal:microchip_id", ...}
+
+A ⊂ B → verdict: "subset" (B is newer, A will catch up via ExtendOntology entries in the payload)
+```
+
+Silk computes a deterministic content hash and structural fingerprint from its own `Ontology`. No external dependencies.
+
+| Verdict | Meaning | Action |
+|---------|---------|--------|
+| `identical` | Same resolved ontology | Merge normally |
+| `superset` | Local contains everything remote has, plus more | Merge normally |
+| `subset` | Remote has types/properties local doesn't have yet | Merge. ExtendOntology entries in the payload evolve the local ontology. Unknown types quarantined until extension is processed. |
+| `divergent` | Neither is a superset | Reject sync. Incompatible fork, not resolvable by additive evolution. |
+
+The fingerprint is a set of atomic facts: type names, parent relationships, subtype names, property definitions, constraint values, edge type constraints. Under additive-only evolution (R-03), a newer ontology's fingerprint is always a strict superset of an older one's.
+
+```python
+# Ontology introspection
+hash_hex = store.ontology_hash()        # 64-char hex string (BLAKE3)
+fp = store.ontology_fingerprint()       # sorted list of fact strings
+
+# Manual compatibility check (Silk does this automatically during sync)
+verdict = store.check_ontology_compatibility(remote_hash, remote_fingerprint)
+# → "identical", "superset", "subset", or "divergent"
+```
+
+The hash and fingerprint are computed from Silk's own ontology structure. Applications using external schema frameworks (LinkML, OWL, SHACL) compute their own hashes at their own layer. Silk's hash covers only the Silk-level representation.
+
+---
+
+### Can two stores with different genesis evolve to the same ontology?
+
+Yes. If two stores reach the same resolved state through different `ExtendOntology` paths, they produce the same content hash. The hash is computed from the final resolved ontology, not from the history of how it got there.
+
+---
+
 ## Schema & Constraints
 
 ### What property constraints does Silk support?
