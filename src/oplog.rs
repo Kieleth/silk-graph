@@ -218,6 +218,46 @@ impl OpLog {
         }
     }
 
+    /// Entries NOT causally reachable from any of the provided heads.
+    ///
+    /// A cursor (set of heads) represents "what the consumer has already seen."
+    /// This returns the delta in topological (causal) order.
+    ///
+    /// - Empty cursor (`&[]`) returns all entries (full replay).
+    /// - Cursor at current heads returns an empty delta.
+    /// - Cursor with unknown hashes returns an error — the consumer is too far
+    ///   behind (e.g., the entries were compacted away).
+    ///
+    /// This is the DAG-native primitive for cursor-based tail subscriptions (C-1).
+    pub fn entries_since_heads(&self, heads: &[Hash]) -> Result<Vec<&Entry>, OpLogError> {
+        // Validate: every head must exist in our oplog.
+        for h in heads {
+            if !self.entries.contains_key(h) {
+                return Err(OpLogError::MissingParent(hex::encode(h)));
+            }
+        }
+
+        // All entries reachable from our current DAG heads.
+        let all_from_heads = self.reachable_from(&self.heads.iter().copied().collect::<Vec<_>>());
+
+        // Entries reachable from the cursor (what the consumer already has).
+        let known_set = if heads.is_empty() {
+            HashSet::new()
+        } else {
+            self.reachable_from(heads)
+        };
+
+        // Delta = all - known.
+        let delta: HashSet<Hash> = all_from_heads.difference(&known_set).copied().collect();
+        Ok(self.topo_sort(&delta))
+    }
+
+    /// True if every hash in the cursor exists in the oplog.
+    /// Used to validate a cursor before computing a delta.
+    pub fn heads_known(&self, heads: &[Hash]) -> bool {
+        heads.iter().all(|h| self.entries.contains_key(h))
+    }
+
     /// Topological sort of the given set of entry hashes.
     /// Returns entries in causal order: parents before children.
     pub fn topo_sort(&self, hashes: &HashSet<Hash>) -> Vec<&Entry> {
@@ -607,5 +647,138 @@ mod tests {
             Err(OpLogError::MissingParent(_)) => {} // expected
             other => panic!("expected MissingParent, got {:?}", other),
         }
+    }
+
+    // -- C-1.1: entries_since_heads (cursor-based delta) --
+
+    #[test]
+    fn entries_since_heads_empty_returns_all() {
+        let g = genesis();
+        let mut log = OpLog::new(g.clone());
+        let e1 = make_entry(add_node_op("n1"), vec![g.hash], 2);
+        let e2 = make_entry(add_node_op("n2"), vec![e1.hash], 3);
+        log.append(e1.clone()).unwrap();
+        log.append(e2.clone()).unwrap();
+
+        let result = log.entries_since_heads(&[]).unwrap();
+        let hashes: Vec<Hash> = result.iter().map(|e| e.hash).collect();
+        assert_eq!(hashes, vec![g.hash, e1.hash, e2.hash]);
+    }
+
+    #[test]
+    fn entries_since_heads_current_heads_returns_empty() {
+        let g = genesis();
+        let mut log = OpLog::new(g.clone());
+        let e1 = make_entry(add_node_op("n1"), vec![g.hash], 2);
+        log.append(e1.clone()).unwrap();
+
+        // Cursor at current head → delta is empty.
+        let result = log.entries_since_heads(&[e1.hash]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn entries_since_heads_partial_cursor_returns_delta() {
+        // G → e1 → e2 → e3. Cursor at e1. Delta = {e2, e3}.
+        let g = genesis();
+        let mut log = OpLog::new(g.clone());
+        let e1 = make_entry(add_node_op("n1"), vec![g.hash], 2);
+        let e2 = make_entry(add_node_op("n2"), vec![e1.hash], 3);
+        let e3 = make_entry(add_node_op("n3"), vec![e2.hash], 4);
+        log.append(e1.clone()).unwrap();
+        log.append(e2.clone()).unwrap();
+        log.append(e3.clone()).unwrap();
+
+        let result = log.entries_since_heads(&[e1.hash]).unwrap();
+        let hashes: Vec<Hash> = result.iter().map(|e| e.hash).collect();
+        assert_eq!(hashes, vec![e2.hash, e3.hash]);
+    }
+
+    #[test]
+    fn entries_since_heads_multiple_heads_concurrent_dag() {
+        // G → e1 → {e2, e3} (fork). Cursor has e2 only. Delta = {e3}.
+        let g = genesis();
+        let mut log = OpLog::new(g.clone());
+        let e1 = make_entry(add_node_op("n1"), vec![g.hash], 2);
+        let e2 = make_entry(add_node_op("n2"), vec![e1.hash], 3);
+        let e3 = make_entry(add_node_op("n3"), vec![e1.hash], 3);
+        log.append(e1.clone()).unwrap();
+        log.append(e2.clone()).unwrap();
+        log.append(e3.clone()).unwrap();
+
+        let result = log.entries_since_heads(&[e2.hash]).unwrap();
+        let hashes: Vec<Hash> = result.iter().map(|e| e.hash).collect();
+        assert_eq!(hashes, vec![e3.hash]);
+    }
+
+    #[test]
+    fn entries_since_heads_multiple_cursor_heads() {
+        // G → e1 → {e2, e3}. Cursor has both e2 and e3. Delta = {} (fully caught up).
+        let g = genesis();
+        let mut log = OpLog::new(g.clone());
+        let e1 = make_entry(add_node_op("n1"), vec![g.hash], 2);
+        let e2 = make_entry(add_node_op("n2"), vec![e1.hash], 3);
+        let e3 = make_entry(add_node_op("n3"), vec![e1.hash], 3);
+        log.append(e1.clone()).unwrap();
+        log.append(e2.clone()).unwrap();
+        log.append(e3.clone()).unwrap();
+
+        let result = log.entries_since_heads(&[e2.hash, e3.hash]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn entries_since_heads_unknown_hash_returns_error() {
+        let g = genesis();
+        let log = OpLog::new(g.clone());
+        let fake = [0xcdu8; 32];
+        let result = log.entries_since_heads(&[fake]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn heads_known_true_for_valid_cursor() {
+        let g = genesis();
+        let mut log = OpLog::new(g.clone());
+        let e1 = make_entry(add_node_op("n1"), vec![g.hash], 2);
+        log.append(e1.clone()).unwrap();
+
+        assert!(log.heads_known(&[]));
+        assert!(log.heads_known(&[g.hash]));
+        assert!(log.heads_known(&[e1.hash]));
+        assert!(log.heads_known(&[g.hash, e1.hash]));
+    }
+
+    #[test]
+    fn heads_known_false_for_unknown_hash() {
+        let g = genesis();
+        let log = OpLog::new(g.clone());
+        let fake = [0xabu8; 32];
+        assert!(!log.heads_known(&[fake]));
+        assert!(!log.heads_known(&[g.hash, fake]));
+    }
+
+    #[test]
+    fn entries_since_heads_topological_order() {
+        // G → e1 → e2 → e3. All entries must come in causal order.
+        let g = genesis();
+        let mut log = OpLog::new(g.clone());
+        let e1 = make_entry(add_node_op("n1"), vec![g.hash], 2);
+        let e2 = make_entry(add_node_op("n2"), vec![e1.hash], 3);
+        let e3 = make_entry(add_node_op("n3"), vec![e2.hash], 4);
+        log.append(e1.clone()).unwrap();
+        log.append(e2.clone()).unwrap();
+        log.append(e3.clone()).unwrap();
+
+        let result = log.entries_since_heads(&[]).unwrap();
+        // Topological order: parents before children.
+        let hashes: Vec<Hash> = result.iter().map(|e| e.hash).collect();
+        let pos_g = hashes.iter().position(|h| *h == g.hash).unwrap();
+        let pos_e1 = hashes.iter().position(|h| *h == e1.hash).unwrap();
+        let pos_e2 = hashes.iter().position(|h| *h == e2.hash).unwrap();
+        let pos_e3 = hashes.iter().position(|h| *h == e3.hash).unwrap();
+        assert!(pos_g < pos_e1);
+        assert!(pos_e1 < pos_e2);
+        assert!(pos_e2 < pos_e3);
     }
 }
