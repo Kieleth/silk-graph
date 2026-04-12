@@ -5,7 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Correctness track record
+
+Silk is young (first public release 2026-03-21). During its first month, several invariant-level bugs were caught and fixed. Each has a regression test that prevents the bug class from recurring. This table exists to make that track record explicit — young libraries shed hard bugs, and the ones that survive are the ones that build the tests to lock them down.
+
+| Version | Bug | Class | How caught | Regression test |
+|---------|-----|-------|------------|-----------------|
+| 0.1.4 | Concurrent `ExtendOntology` entries could diverge materialized graphs across peers (Theorem 1 violation) — incremental apply produced different quarantine sets depending on arrival order | Convergence | Randomized sync-convergence fuzzing; review pass against PROOF.md Theorem 1 | `pytests/test_invariants.py::test_sync_convergence_randomized`; fix in `src/python/mod.rs` triggers full `rebuild()` on any sync batch containing `ExtendOntology` (Bug 5) |
+| 0.1.4 | Compaction lost per-property LWW clocks — after `compact()`, concurrent writes pre-compaction resolved against the checkpoint timestamp instead of the original per-property clock, causing LWW divergence | Convergence | EXP-02 compaction-correctness experiment | `experiments/test_compaction_correctness.py::test_compaction_per_property_clock` + `test_compaction_edge_property_clocks`; fix adds `op_clocks: Vec<(u64, u32)>` to `GraphOp::Checkpoint` (Bug 6, see `src/entry.rs:76`) |
+| 0.1.4 | `Checkpoint` entry merged into a non-compacted oplog created a second root, doubling every subsequent sync and breaking convergence | Convergence | Mixed-compaction sync test after noticing unexpected oplog growth | `pytests/test_compaction.py::test_sync_after_compact`; fix in `src/oplog.rs:54` replaces the oplog with the checkpoint instead of creating a second root (Bug 7) |
+| 0.1.4 | `AddEdge` entries bypassed source/target type validation when arriving via sync with both endpoints materialized | Schema | Review pass on quarantine code path | `pytests/test_sync.py::test_invalid_edge_quarantined_on_sync` + `test_valid_edge_survives_sync`; fix in `src/graph.rs:157` validates in the quarantine path (Bug 13) |
+| 0.1.6 | `update_property` bypassed ontology validation — type mismatches and constraint violations (`enum`, `min`, `max`) were silently accepted | Schema | User-reported audit | `pytests/test_constraints.py::test_update_property_*` (9 tests covering enum/range/type/pattern violations on `update_property`) |
+| 0.1.7 | Subscribers were not notified when previously-quarantined entries became valid after ontology evolution | Notification | Review pass on quarantine rebuild | Ontology-extension notification integration test in `src/python/mod.rs` merge path |
+
+Silk's guarantee is not "zero bugs have ever existed" — it's "every convergence-relevant bug we've found has a regression test that prevents its class from recurring, and `make check` must stay green before any release." See [PROOF.md](PROOF.md) for the formal invariants the tests verify against and [INVARIANTS.md](INVARIANTS.md) for the automated enforcement mechanism.
+
 ## [Unreleased]
+
+## [0.2.1] - 2026-04-12
+
+### Added
+- **"Correctness track record" section at the top of this CHANGELOG.** Makes the invariant-level bugs caught during Silk's first month explicit — with bug class, detection mechanism, and the regression test that prevents each class from recurring. Documentation-only release; no code changes from 0.2.0. Addresses external-review feedback that the fix history was accurate but hard to read as a pattern.
+- **Release discipline note in contributing docs** — every `Fixed` entry in future releases should reference the regression test that would have caught the bug, and convergence/invariant bugs get an entry in the track record table.
+- **FAQ entry** linking to the correctness track record, under "What bugs have been caught in this library's early months, and how is recurrence prevented?"
+- **README Trust Model** links to the correctness track record alongside the existing threat-model text.
 
 ## [0.2.0] - 2026-04-12
 

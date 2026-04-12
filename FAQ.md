@@ -798,6 +798,20 @@ See `examples/tail_subscription.py` for a runnable producer + consumer with curs
 
 ---
 
+## Maturity & Correctness
+
+### What bugs have been caught in this library's early months, and how is recurrence prevented?
+
+Silk is young (first public release 2026-03-21). During the first month several invariant-level bugs were caught and fixed, including: a Theorem 1 violation around concurrent `ExtendOntology` entries, LWW clock loss during compaction, a mixed-compaction sync bug that doubled the oplog, edge-validation gaps on the sync path, and a silent validation bypass in `update_property`.
+
+Rather than hiding this in release notes, we maintain an explicit [Correctness track record](CHANGELOG.md#correctness-track-record) at the top of `CHANGELOG.md`. Each bug is classified (convergence, schema, notification), annotated with how it was caught (fuzzing, experiment, review pass, user report), and linked to the regression test that prevents its class from recurring.
+
+The library's discipline is not "zero bugs have ever existed." It is: every convergence-relevant bug found gets a test that would have caught it, and `make check` (fmt + clippy + cargo test + maturin develop + pytest) must stay green before any release. The formal invariants those tests verify against are in [PROOF.md](PROOF.md). The automated enforcement mechanism — invariants checked programmatically — is documented in [INVARIANTS.md](INVARIANTS.md).
+
+If you are evaluating Silk for production use, the track record is worth reading. It tells you which bug classes have been encountered and eliminated, and gives you a concrete signal about the rate at which remaining bugs are likely to be found.
+
+---
+
 ## Contributing
 
 ### How do I extend Silk?

@@ -211,6 +211,8 @@ Silk is designed for **trusted peer networks** — your own devices, your own te
 
 If you're syncing between devices you control, Silk is safe. If you're building an open network where anonymous peers connect, enable strict mode and register trusted authors.
 
+**Correctness track record:** Silk is young (first public release 2026-03-21). For a public record of the invariant-level bugs caught and fixed during its first months — each classified by bug class, detection mechanism, and the regression test that prevents recurrence — see the [Correctness track record](CHANGELOG.md#correctness-track-record) at the top of `CHANGELOG.md` and the [maturity FAQ entry](FAQ.md#what-bugs-have-been-caught-in-this-librarys-early-months-and-how-is-recurrence-prevented).
+
 See [SECURITY.md](https://github.com/Kieleth/silk-graph/blob/main/SECURITY.md) for the full threat model.
 
 ## Schema Philosophy: Open Properties (D-026)
