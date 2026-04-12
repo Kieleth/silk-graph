@@ -751,6 +751,35 @@ while True:
   The ~30–55% slowdown from 0 → 1 subscriber is a fixed cost (per-append mutex + counter increment + notify_all). Going from 1 → 100 subscribers adds no further cost. Wake-up latency: **p50 0.07ms, p99 0.10ms**.
 - **Always-on.** No config flag. With zero subscribers, producer overhead is unmeasurable (<2%, within noise).
 
+**Where does the producer-side overhead come from, really?**
+
+In benchmarks with an active subscriber thread on CPython, the producer's per-append time is ~2-3x the no-subscriber baseline. We dug into exactly where that overhead lives (see `experiments/test_tail_dig.py`):
+
+| Scenario | Producer ns/append | vs baseline |
+|---|---|---|
+| A. Pure producer, no subscription at all | 25,000 | 100% |
+| B. Subscription object exists, no waiting thread | 25,000 | 100% (Silk itself adds nothing) |
+| C. Idle 2nd thread (blocked on OS primitive) | 27,000 | +8% |
+| D. Active subscriber thread (draining every wake) | 85,000 | +240% |
+| P. Polling in producer thread (no 2nd thread) | 169,000 | +580% |
+
+Two separate costs are at play:
+
+1. **Python GIL overhead for having ANY second thread: ~8%.** Python's interpreter yields the GIL periodically to any other thread, regardless of whether it's doing real work. This is `sys.setswitchinterval` at the interpreter level, not something Silk controls.
+
+2. **Entry delivery work: the rest.** Per entry, converting an Entry into a Python dict via `entry_to_event_dict` costs ~6µs. With 10k appends to deliver, someone has to do 10k × 6µs = 60ms of work. Whether that work runs in the subscriber thread (pattern D) or the producer thread (pattern P), it's the same total, and the producer blocks on it either way through GIL serialization.
+
+**Key implication: this is not "overhead Silk adds," it's the cost of actually delivering entries to Python.** We can't eliminate dict conversion without changing the API. We can't parallelize it on a different core because the GIL prevents true parallelism on CPython.
+
+What does eliminate this cost:
+- **Free-threaded Python (3.13t / no-GIL builds).** With real parallelism, subscriber runs on a separate core. Producer pays ~0% overhead (a second core, not serialization). This is where the OS threading model was always meant to go.
+- **Out-of-process subscribers.** Run the subscriber in a separate Python process (e.g., via the planned HTTP relay). Zero in-process GIL contention. Different trade-offs (serialization cost, network latency).
+- **Polling pattern** (same thread): explicit `sub.next_batch(timeout_ms=0)` calls from the producer's loop. Zero thread overhead, but the producer does all the work serially. Good for workloads where consumer work is light and bursty.
+
+Don't use coalesced notify to try to reduce this — it was measured and didn't help, because the overhead is in the work itself, not the notify count.
+
+---
+
 **Notify strategy (advanced).** By default every append immediately wakes blocked subscribers (`ImmediateNotify`). For workloads where subscribers do heavy per-wake processing, you can switch to coalesced notifications:
 
 ```python
