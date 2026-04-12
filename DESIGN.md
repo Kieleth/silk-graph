@@ -10,6 +10,25 @@ Silk is an independent library. It can be used by any application that needs a d
 
 **Terminology:** Silk uses "ontology" to mean a typed property-graph schema — node types, edge constraints, property definitions with type and constraint validation. It does not perform OWL-style reasoning, inference, or subsumption.
 
+## Scope (what stays in silk-graph vs what doesn't)
+
+Silk is **in-process, embedded, zero-dependency, peer-to-peer CRDT replication with schema enforcement**. That core must stay small and fast.
+
+**In scope:**
+- The CRDT graph engine and its sync protocol.
+- Schema enforcement (ontology with constraints, class hierarchy, monotonic evolution).
+- Local-only subscriptions (D-023 push, C-1 cursor tail).
+- Persistence via redb. Pluggable compression at the transport boundary.
+- Graph algorithms that operate on a single replicated graph.
+
+**Explicitly out of scope:**
+- HTTP / WebSocket / gRPC transports. Silk produces and consumes bytes; your application moves them. An HTTP relay built on top of Silk would live in its own repo (e.g., `silk-http`), with its own dependencies (FastAPI, httpx) and its own release cadence.
+- Multi-tenancy and fine-grained access control. Silk replicates the full graph to every peer. Per-tenant filtering runs in the application layer.
+- Async runtimes (tokio, asyncio). Silk's API is synchronous. Wrap it if you need async; don't force tokio into the dependency tree.
+- Server frameworks, auth protocols, relay topologies. These are application concerns that vary wildly between use cases.
+
+Applications like Shelob build their own transport layer, auth model, and fleet topology on top of Silk. Keeping those out of silk-graph is what makes Silk useful as a *library* rather than a *platform*.
+
 ## Research Foundation
 
 ### Merkle-CRDTs (Sanjuán et al., 2020)

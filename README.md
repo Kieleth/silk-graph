@@ -178,6 +178,19 @@ Silk is a replicated graph store that validates your schema, works offline, and 
 - Untrusted/open peer networks — Silk assumes non-malicious peers (see Trust Model below)
 - Rich semantic reasoning (OWL inference, transitivity) — Silk validates structure, not semantics
 
+## What Silk is NOT
+
+Silk's core is **in-process, embedded, zero-dependency, peer-to-peer CRDT replication with schema enforcement**. It is deliberately NOT:
+
+- **A server.** Silk is a library. It doesn't listen on ports, doesn't accept connections, doesn't manage clients. Your application does that and uses Silk as a data structure.
+- **A relay or hub.** Silk instances are peers. All peers are equal. If you want a hub-and-spoke topology where local clients connect to a central server, that's a pattern you build on top — the central server is just a Silk instance that happens to always be reachable.
+- **A transport.** Silk's sync protocol produces and consumes `bytes`. It doesn't care if you move those bytes over TCP, HTTP, WebSocket, a file, a USB stick, or carrier pigeon. Transport is your application's concern.
+- **An async runtime.** Silk's Python API is synchronous. You can wrap it in asyncio (`asyncio.to_thread`), threads, or single-threaded polling. Silk doesn't force an async model on you.
+- **A multi-tenant / access-control system.** Silk replicates the full graph to every peer. If you need per-user views or ACLs, filter at the application layer or run separate stores per tenant.
+- **A message queue.** Cursor-based tail subscriptions (C-1) are a local change-notification primitive. They are not a remote pub/sub system. If you need distributed pub/sub, build it: peer exchanges sync messages → local subscribers observe merged entries.
+
+The core stays small deliberately. Applications like Shelob (DevOps knowledge graph) build their own transport layers, auth models, and relay topologies on top of Silk. Those patterns don't belong inside silk-graph — they're application concerns that would vary wildly across use cases.
+
 ## Trust Model
 
 Silk is designed for **trusted peer networks** — your own devices, your own team, your own infrastructure. All peers share the same genesis ontology and can extend it monotonically (R-03). Peers are assumed non-malicious.

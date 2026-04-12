@@ -1100,65 +1100,6 @@ impl PyGraphStore {
         (peer_safe && cursors_safe, reasons)
     }
 
-    /// C-1.6: Set the notify strategy for tail subscriptions.
-    ///
-    /// Accepts:
-    ///   - "immediate": notify on every append (lowest latency, highest
-    ///     overhead when a subscriber is actively waiting).
-    ///   - "coalesced" + `min_interval_ms`: skip notifies within the window.
-    ///     Bursts wake subscribers at most once per window; subscribers drain
-    ///     everything on wake. Default: coalesced @ 1ms.
-    ///
-    /// Pass as a string name OR as one of the Python strategy classes
-    /// (`ImmediateNotify()`, `CoalescedNotify(min_interval_ms=N)`).
-    #[pyo3(signature = (strategy, min_interval_ms=None))]
-    fn set_notify_strategy(
-        &self,
-        strategy: &Bound<'_, pyo3::PyAny>,
-        min_interval_ms: Option<u64>,
-    ) -> PyResult<()> {
-        let new_strategy = if let Ok(s) = strategy.extract::<String>() {
-            match s.as_str() {
-                "immediate" => tail::NotifyStrategy::Immediate,
-                "coalesced" => {
-                    let ms = min_interval_ms.unwrap_or(1);
-                    tail::NotifyStrategy::Coalesced {
-                        min_interval_ns: ms.saturating_mul(1_000_000),
-                    }
-                }
-                other => {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "unknown strategy: '{other}' (expected 'immediate' or 'coalesced')"
-                    )));
-                }
-            }
-        } else if let Ok(marker) = strategy.getattr("__silk_strategy__") {
-            let s: String = marker.extract()?;
-            match s.as_str() {
-                "immediate" => tail::NotifyStrategy::Immediate,
-                "coalesced" => {
-                    let ms: u64 = strategy.getattr("min_interval_ms")?.extract()?;
-                    tail::NotifyStrategy::Coalesced {
-                        min_interval_ns: ms.saturating_mul(1_000_000),
-                    }
-                }
-                other => {
-                    return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                        "unknown __silk_strategy__: '{other}'"
-                    )));
-                }
-            }
-        } else {
-            return Err(pyo3::exceptions::PyTypeError::new_err(
-                "expected a string ('immediate' | 'coalesced') or a strategy object \
-                 (ImmediateNotify, CoalescedNotify)",
-            ));
-        };
-
-        self.bell.set_strategy(new_strategy);
-        Ok(())
-    }
-
     /// C-1.4: Register a subscriber cursor for compaction safety (opt-in).
     ///
     /// While a cursor is registered, `verify_compaction_safe` will return

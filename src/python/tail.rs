@@ -9,114 +9,53 @@
 //! monotonic counter and wake waiters via Condvar. Consumers check their
 //! last-seen counter against the current one; if equal, they wait.
 //!
-//! Std-only, no tokio: `Arc<Mutex<u64> + Condvar>`.
+//! Std-only, no external async runtime: `Arc<Mutex<u64> + Condvar>`.
 //!
 //! Thread-safety: PyTailSubscription uses lock-free atomics for the closed
 //! flag and a dedicated cursor mutex (separated from other state) so
 //! `close()` can be called from one thread while `next_batch()` is blocked
-//! on another. Lock-held critical sections are minimized in the hot path.
+//! on another.
 
 use pyo3::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::conversions::{entry_to_event_dict, parse_hex_hash};
 use super::PyGraphStore;
 use crate::entry::Hash;
 
-/// Strategy for deciding when `bell.notify()` should actually wake waiters.
-#[derive(Debug, Clone, Copy)]
-pub enum NotifyStrategy {
-    Immediate,
-    Coalesced { min_interval_ns: u64 },
-}
-
-impl Default for NotifyStrategy {
-    fn default() -> Self {
-        // Immediate is the default. Benchmarks showed coalescing does NOT
-        // measurably improve producer throughput in typical workloads — the
-        // observed "active subscriber" overhead is dominated by Python's GIL
-        // scheduling, not notify_all() frequency. Strategy API is kept for
-        // subscriber-heavy workloads; default preserves low-latency semantics.
-        NotifyStrategy::Immediate
-    }
-}
-
-/// Producer→consumer wake-up primitive.
+/// Producer→consumer wake-up primitive. Cheap when no one is waiting:
+/// `notify()` locks the mutex briefly and increments a counter, calls
+/// `notify_all()` on an empty waiter list (essentially a no-op).
 pub struct NotifyBell {
+    /// Monotonic counter. Incremented on each notify. Consumers compare
+    /// their last-seen value to detect new work without races.
     counter: Mutex<u64>,
     cvar: Condvar,
     /// Lock-free close flag — hot path uses atomic load instead of mutex.
     closed: AtomicBool,
-    /// Active strategy. Stored as Mutex so it can be changed at runtime.
-    /// Read frequency is 1 per notify; mutex overhead here is fine.
-    strategy: Mutex<NotifyStrategy>,
-    last_notify_ns: AtomicU64,
-    epoch: Instant,
 }
 
 impl NotifyBell {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self::with_strategy(NotifyStrategy::default()))
+        Arc::new(Self::default())
     }
 
-    pub fn with_strategy(strategy: NotifyStrategy) -> Self {
-        Self {
-            counter: Mutex::new(0),
-            cvar: Condvar::new(),
-            closed: AtomicBool::new(false),
-            strategy: Mutex::new(strategy),
-            last_notify_ns: AtomicU64::new(0),
-            epoch: Instant::now(),
-        }
-    }
-
-    pub fn set_strategy(&self, strategy: NotifyStrategy) {
-        *self.strategy.lock().unwrap() = strategy;
-        self.last_notify_ns.store(0, Ordering::Relaxed);
-    }
-
-    /// Tick the counter and wake all waiters, subject to the strategy.
+    /// Tick the counter and wake all waiters. Call after any successful
+    /// append or merge. Essentially free when no waiters are registered.
     pub fn notify(&self) {
-        let should_fire = {
-            let strategy = *self.strategy.lock().unwrap();
-            match strategy {
-                NotifyStrategy::Immediate => true,
-                NotifyStrategy::Coalesced { min_interval_ns } => {
-                    if min_interval_ns == 0 {
-                        true
-                    } else {
-                        let now_ns = self.epoch.elapsed().as_nanos() as u64;
-                        let last = self.last_notify_ns.load(Ordering::Relaxed);
-                        if now_ns.saturating_sub(last) >= min_interval_ns {
-                            self.last_notify_ns
-                                .compare_exchange(
-                                    last,
-                                    now_ns,
-                                    Ordering::Relaxed,
-                                    Ordering::Relaxed,
-                                )
-                                .is_ok()
-                        } else {
-                            false
-                        }
-                    }
-                }
-            }
-        };
-
-        if should_fire {
-            let mut guard = self.counter.lock().unwrap();
-            *guard = guard.wrapping_add(1);
-            self.cvar.notify_all();
-        }
+        let mut guard = self.counter.lock().unwrap();
+        *guard = guard.wrapping_add(1);
+        self.cvar.notify_all();
     }
 
+    /// Current counter value. Caller uses this as "last seen."
     pub fn current(&self) -> u64 {
         *self.counter.lock().unwrap()
     }
 
+    /// Wait until the counter differs from `last_seen`, or the timeout elapses.
     pub fn wait_until_changed(&self, last_seen: u64, timeout: Duration) {
         let guard = self.counter.lock().unwrap();
         let _ = self
@@ -141,9 +80,6 @@ impl Default for NotifyBell {
             counter: Mutex::new(0),
             cvar: Condvar::new(),
             closed: AtomicBool::new(false),
-            strategy: Mutex::new(NotifyStrategy::default()),
-            last_notify_ns: AtomicU64::new(0),
-            epoch: Instant::now(),
         }
     }
 }
@@ -256,11 +192,6 @@ impl PyTailSubscription {
         // Single mutex acquire for the cursor snapshot.
         let cursor_snapshot = {
             let guard = self.cursor.lock().unwrap();
-            // Fast path: if the cursor is already equal to the store's heads,
-            // there's nothing to fetch. But we don't know heads without borrowing
-            // the store, so just take the clone and let entries_since_heads
-            // short-circuit. The clone cost for small cursors (1-5 hashes × 32B)
-            // is ~200ns.
             guard.clone()
         };
 

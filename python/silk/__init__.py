@@ -5,7 +5,6 @@ from silk._native import PyGraphSnapshot as GraphSnapshot
 from silk._native import ObservationLog
 from silk._native import OperationBuffer
 from silk._native import TailSubscription
-from silk.notify import NotifyStrategy, ImmediateNotify, CoalescedNotify
 from silk.query import Query, QueryEngine
 from silk.compaction import CompactionPolicy, IntervalPolicy, ThresholdPolicy
 from silk.views import GraphView
@@ -13,7 +12,6 @@ from silk.views import GraphView
 __all__ = [
     "GraphStore", "GraphSnapshot", "ObservationLog", "OperationBuffer",
     "TailSubscription",
-    "NotifyStrategy", "ImmediateNotify", "CoalescedNotify",
     "Query", "QueryEngine",
     "CompactionPolicy", "IntervalPolicy", "ThresholdPolicy",
     "GraphView",

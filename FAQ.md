@@ -780,27 +780,6 @@ Don't use coalesced notify to try to reduce this — it was measured and didn't 
 
 ---
 
-**Notify strategy (advanced).** By default every append immediately wakes blocked subscribers (`ImmediateNotify`). For workloads where subscribers do heavy per-wake processing, you can switch to coalesced notifications:
-
-```python
-from silk import CoalescedNotify
-
-# Skip notifies within 5ms of the previous one. Burst appends wake
-# subscribers at most once per 5ms window; next_batch still returns
-# every entry past the cursor.
-store.set_notify_strategy(CoalescedNotify(min_interval_ms=5))
-
-# Or use the string API:
-store.set_notify_strategy("coalesced", min_interval_ms=5)
-```
-
-**Honest note on coalescing:** in our benchmarks (`experiments/test_tail_breakdown.py`), coalescing does NOT measurably reduce producer throughput for typical workloads. The observed "active subscriber" overhead is dominated by Python's GIL scheduling (`sys.setswitchinterval`, default ~5ms), not by how often `notify_all()` is called. The strategy API is kept because:
-
-1. Subscriber-heavy workloads (where per-wake processing is expensive) may benefit from fewer, larger wakes.
-2. Users can implement their own strategies by providing an object with `__silk_strategy__` and params.
-
-For typical cases, `ImmediateNotify` (the default) is the right choice. Switch only if you've measured a subscriber-side bottleneck that bigger wake batches would fix.
-
 **Compaction safety.** By default, a stale cursor (pointing to an entry that was compacted away) raises `ValueError("stale cursor: ...")` on the next `next_batch()` call. Handle it by re-bootstrapping (fresh snapshot + fresh cursor). If you want compaction to WAIT until your subscriber catches up, register the cursor:
 
 ```python
