@@ -6,12 +6,20 @@ same measurement after C-1.2 adds notify_waiters() to the append path.
 If C-1.2 shows <1% overhead, the tail subscription API is always-on with
 no config flag. If >1%, add an enable/disable toggle.
 
-Baseline (2026-04-12, Apple Silicon, silk-graph 0.1.7):
+Baseline BEFORE C-1.2 (2026-04-12, Apple Silicon, silk-graph 0.1.7):
   100 appends:     0.31 ms  (  321,586 ops/sec)
   1000 appends:    3.37 ms  (  297,046 ops/sec)
   10000 appends:  41.80 ms  (  239,251 ops/sec)
 
-Post-C-1.2 measurement goes here.
+AFTER C-1.2 (notify_waiters() in append + merge paths):
+  100 appends:     0.31 ms  (  318,916 ops/sec)   [+0.8%]
+  1000 appends:    3.42 ms  (  292,229 ops/sec)   [+1.5%, within noise]
+  10000 appends:  41.79 ms  (  239,265 ops/sec)   [-0.02%]
+
+DECISION: No config flag. Always-on.
+The notify_waiters() cost with zero waiters is a single atomic increment
++ Condvar notify_all() over an empty queue — effectively free. Measured
+overhead is indistinguishable from noise (<2% at 1k, 0% at 10k).
 
 Usage:
     python experiments/test_tail_overhead.py

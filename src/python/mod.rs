@@ -1,11 +1,13 @@
 mod conversions;
 mod obslog;
 mod snapshot;
+pub mod tail;
 
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::clock::LamportClock;
 use crate::engine;
@@ -59,6 +61,9 @@ pub struct PyGraphStore {
     require_signatures: bool,
     /// R-05: Gossip peer registry for logarithmic sync target selection.
     gossip: crate::gossip::PeerRegistry,
+    /// C-1: Bell for cursor-based tail subscriptions. Ticked on every
+    /// successful append and merge; subscribers wait on this.
+    pub(crate) bell: Arc<tail::NotifyBell>,
 }
 
 enum Backend {
@@ -183,6 +188,7 @@ impl PyGraphStore {
             #[cfg(feature = "signing")]
             require_signatures: false,
             gossip: crate::gossip::PeerRegistry::with_instance_id(&instance_id),
+            bell: tail::NotifyBell::new(),
         })
     }
 
@@ -253,6 +259,7 @@ impl PyGraphStore {
             #[cfg(feature = "signing")]
             require_signatures: false,
             gossip,
+            bell: tail::NotifyBell::new(),
         })
     }
 
@@ -903,6 +910,7 @@ impl PyGraphStore {
             #[cfg(feature = "signing")]
             require_signatures: false,
             gossip,
+            bell: tail::NotifyBell::new(),
         })
     }
 
@@ -920,6 +928,27 @@ impl PyGraphStore {
     /// Remove a previously registered subscription by ID.
     fn unsubscribe(&mut self, sub_id: u64) {
         self.subscribers.retain(|(id, _)| *id != sub_id);
+    }
+
+    /// C-1: Create a cursor-based tail subscription on the oplog.
+    ///
+    /// `cursor` is a list of hex-encoded entry hashes representing the frontier
+    /// the consumer has already seen. An empty list starts from the beginning
+    /// (full replay). Use `store.heads()` to start from the current tip.
+    ///
+    /// Returns a `TailSubscription`. Call `next_batch(timeout_ms, max_count)`
+    /// on it to receive entries past the cursor.
+    fn subscribe_from(
+        slf: &Bound<'_, Self>,
+        cursor: Vec<String>,
+    ) -> PyResult<tail::PyTailSubscription> {
+        let cursor_hashes = tail::parse_cursor(cursor)?;
+        let bell = Arc::clone(&slf.borrow().bell);
+        Ok(tail::PyTailSubscription::new(
+            slf.clone().unbind(),
+            cursor_hashes,
+            bell,
+        ))
     }
 
     // -- Time-Travel (R-06) --
@@ -1493,6 +1522,13 @@ impl PyGraphStore {
                     self.notify_subscribers(entry, false);
                 }
             }
+            // C-1: notify tail subscribers once after the merge batch.
+            // We only tick once per merge rather than per-entry to keep
+            // notify cost O(1) regardless of batch size; waiters will
+            // observe all new entries in a single query.
+            if inserted > 0 {
+                self.bell.notify();
+            }
         }
 
         Ok(inserted)
@@ -1535,7 +1571,14 @@ impl PyGraphStore {
         self.graph.apply(&entry);
         // D-023: notify subscribers (local write → local=true)
         self.notify_subscribers(&entry, true);
+        // C-1: notify tail subscribers (cursor-based)
+        self.bell.notify();
         Ok(hex)
+    }
+
+    /// C-1: internal accessor for tail subscriptions to query the oplog.
+    pub(crate) fn backend_oplog(&self) -> &OpLog {
+        self.backend.oplog()
     }
 
     /// Notify all registered subscribers with an event dict for the given entry.
@@ -1868,5 +1911,6 @@ pub fn register(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<snapshot::PyGraphSnapshot>()?;
     m.add_class::<obslog::PyObservationLog>()?;
     m.add_class::<PyOperationBuffer>()?;
+    m.add_class::<tail::PyTailSubscription>()?;
     Ok(())
 }
