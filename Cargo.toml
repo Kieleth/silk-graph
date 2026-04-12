@@ -1,6 +1,6 @@
 [package]
 name = "silk-graph"
-version = "0.1.7"
+version = "0.2.0"
 edition = "2021"
 description = "Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs"
 authors = ["Kieleth <kieleth@gmail.com>"]

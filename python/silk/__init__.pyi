@@ -299,6 +299,26 @@ class GraphStore:
         """Remove a previously registered subscription by ID."""
         ...
 
+    # -- Cursor-based tail subscriptions (C-1) --
+
+    def subscribe_from(self, cursor: list[str]) -> "TailSubscription":
+        """Create a cursor-based tail subscription on the oplog.
+
+        `cursor` is a list of hex-encoded entry hashes representing the
+        frontier the consumer has already seen. An empty list starts from
+        the beginning (full replay). Use `store.heads()` for "from now on."
+
+        Returns a TailSubscription; call next_batch() on it to pull entries.
+        """
+        ...
+    def register_subscriber_cursor(self, cursor: list[str]) -> None:
+        """Register a cursor so verify_compaction_safe() blocks compaction
+        while this subscriber is behind the current heads. Opt-in."""
+        ...
+    def unregister_subscriber_cursor(self, cursor: list[str]) -> None:
+        """Remove a previously registered subscriber cursor."""
+        ...
+
     # -- Gossip Peer Selection (R-05) --
 
     def register_peer(self, peer_id: str, address: str) -> None:
@@ -510,4 +530,36 @@ class ObservationLog:
         ...
     def count(self) -> int:
         """Total number of observations in the log."""
+        ...
+
+
+class TailSubscription:
+    """Cursor-based tail of the oplog (C-1).
+
+    Created by GraphStore.subscribe_from(cursor). Pulls entries past the
+    cursor via next_batch(). The oplog is the buffer — no in-memory queue,
+    no drop policy. Slow consumers just lag, bounded by oplog retention.
+    """
+
+    def next_batch(self, timeout_ms: int = 0, max_count: int = 1000) -> list[dict[str, Any]]:
+        """Return the next batch of entries past the cursor.
+
+        Blocks up to timeout_ms milliseconds if no entries are available
+        (0 = non-blocking). Returns at most max_count entries. Empty list
+        on timeout (not an error). Advances the cursor on non-empty return.
+
+        Each entry is a dict with keys: hash, author, physical_ms, logical,
+        local, op, and op-specific fields (node_id/node_type/subtype for
+        add_node, edge_id/edge_type/source_id/target_id for add_edge, etc.)
+
+        Raises ValueError if the cursor points to compacted-away entries.
+        """
+        ...
+    def current_cursor(self) -> list[str]:
+        """Return the current cursor as hex-encoded hashes. Persist this
+        to resume after restart."""
+        ...
+    def close(self) -> None:
+        """Close the subscription. Subsequent next_batch() calls return [].
+        Safe to call from any thread while next_batch() is blocked."""
         ...

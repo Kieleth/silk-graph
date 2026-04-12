@@ -247,6 +247,85 @@ fn value_to_py_depth(py: Python<'_>, val: &Value, depth: usize) -> PyResult<PyOb
     }
 }
 
+/// Convert an Entry to a developer-friendly event dict.
+///
+/// Same format as D-023 subscribe callbacks: includes `op` field and
+/// op-specific keys (node_id, edge_id, etc.) rather than a JSON payload.
+/// Used by both `subscribe(callback)` and `subscribe_from(cursor)`.
+pub fn entry_to_event_dict(py: Python<'_>, entry: &Entry, is_local: bool) -> PyResult<PyObject> {
+    use crate::entry::GraphOp;
+
+    let dict = PyDict::new(py);
+    dict.set_item("hash", hex::encode(entry.hash))?;
+    dict.set_item("author", &entry.author)?;
+    dict.set_item("physical_ms", entry.clock.physical_ms)?;
+    dict.set_item("logical", entry.clock.logical)?;
+    dict.set_item("local", is_local)?;
+
+    match &entry.payload {
+        GraphOp::AddNode {
+            node_id,
+            node_type,
+            subtype,
+            ..
+        } => {
+            dict.set_item("op", "add_node")?;
+            dict.set_item("node_id", node_id)?;
+            dict.set_item("node_type", node_type)?;
+            match subtype {
+                Some(st) => dict.set_item("subtype", st)?,
+                None => dict.set_item("subtype", py.None())?,
+            }
+        }
+        GraphOp::AddEdge {
+            edge_id,
+            edge_type,
+            source_id,
+            target_id,
+            ..
+        } => {
+            dict.set_item("op", "add_edge")?;
+            dict.set_item("edge_id", edge_id)?;
+            dict.set_item("edge_type", edge_type)?;
+            dict.set_item("source_id", source_id)?;
+            dict.set_item("target_id", target_id)?;
+        }
+        GraphOp::UpdateProperty {
+            entity_id,
+            key,
+            value,
+        } => {
+            dict.set_item("op", "update_property")?;
+            dict.set_item("entity_id", entity_id)?;
+            dict.set_item("key", key)?;
+            if let Ok(py_val) = value_to_py(py, value) {
+                dict.set_item("value", py_val)?;
+            }
+        }
+        GraphOp::RemoveNode { node_id } => {
+            dict.set_item("op", "remove_node")?;
+            dict.set_item("node_id", node_id)?;
+        }
+        GraphOp::RemoveEdge { edge_id } => {
+            dict.set_item("op", "remove_edge")?;
+            dict.set_item("edge_id", edge_id)?;
+        }
+        GraphOp::DefineOntology { .. } => {
+            dict.set_item("op", "define_ontology")?;
+        }
+        GraphOp::ExtendOntology { .. } => {
+            dict.set_item("op", "extend_ontology")?;
+        }
+        GraphOp::Checkpoint { .. } => {
+            dict.set_item("op", "checkpoint")?;
+        }
+        GraphOp::DefineLens { .. } => {
+            dict.set_item("op", "define_lens")?;
+        }
+    }
+    Ok(dict.into())
+}
+
 /// Convert an Entry to a Python dict.
 pub fn entry_to_pydict(py: Python<'_>, entry: &Entry) -> PyResult<PyObject> {
     let dict = PyDict::new(py);

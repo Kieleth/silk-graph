@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-12
+
 ### Added
 - **Ontology convergence** — `ontology_hash()` returns a deterministic BLAKE3 hash of the resolved ontology. `ontology_fingerprint()` returns a sorted list of atomic structural facts (types, properties, subtypes, constraints, parent relationships). `check_ontology_compatibility(hash, fingerprint)` returns "identical", "superset", "subset", or "divergent". Under additive-only evolution (R-03), a newer ontology's fingerprint is always a strict superset. No external dependencies. See [FAQ.md](FAQ.md#how-does-silk-detect-ontology-drift-between-peers).
+- **Cursor-based tail subscriptions** (C-1) — `store.subscribe_from(cursor)` returns a `TailSubscription` that streams entries past the cursor via `next_batch(timeout_ms, max_count)`. The oplog is the buffer; no per-subscriber in-memory queue. Kafka-style semantics: resumable across reconnects, no drop policy, no backpressure on the producer. Works for both local appends and entries arriving via `merge_sync_payload`. Stale cursors (after compaction) raise `ValueError`; `register_subscriber_cursor(cursor)` blocks compaction while the subscriber is behind. Measured producer-side overhead with zero active subscribers: <2% at 1k appends, 0% at 10k. Wake-up latency: p50 0.16ms, p99 0.22ms. See [FAQ.md](FAQ.md#how-do-i-tail-silks-oplog-like-kafka) and `examples/tail_subscription.py`.
+- **`DefineLens` GraphOp variant** — reserved for future schema transformation lenses. No-op today.
+- **`Entry.ontology_hash`** — optional field, stamped on future entries. Not part of content hash.
 
 ## [0.1.7] - 2026-03-27
 

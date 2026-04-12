@@ -1645,7 +1645,13 @@ impl PyGraphStore {
             return;
         }
         Python::with_gil(|py| {
-            let event = Self::entry_to_event_dict(py, entry, is_local);
+            let event = match conversions::entry_to_event_dict(py, entry, is_local) {
+                Ok(e) => e,
+                Err(e) => {
+                    eprintln!("silk: entry_to_event_dict failed: {e}");
+                    return;
+                }
+            };
             for (_id, callback) in &self.subscribers {
                 if let Err(e) = callback.call1(py, (&event,)) {
                     // D-023: error isolation — log and continue
@@ -1653,83 +1659,6 @@ impl PyGraphStore {
                 }
             }
         });
-    }
-
-    /// Build a Python dict from an Entry for subscription callbacks.
-    fn entry_to_event_dict(py: Python<'_>, entry: &Entry, is_local: bool) -> PyObject {
-        let dict = PyDict::new(py);
-        let _ = dict.set_item("hash", hex::encode(entry.hash));
-        let _ = dict.set_item("author", &entry.author);
-        let _ = dict.set_item("physical_ms", entry.clock.physical_ms);
-        let _ = dict.set_item("logical", entry.clock.logical);
-        let _ = dict.set_item("local", is_local);
-
-        match &entry.payload {
-            GraphOp::AddNode {
-                node_id,
-                node_type,
-                subtype,
-                ..
-            } => {
-                let _ = dict.set_item("op", "add_node");
-                let _ = dict.set_item("node_id", node_id);
-                let _ = dict.set_item("node_type", node_type);
-                match subtype {
-                    Some(st) => {
-                        let _ = dict.set_item("subtype", st);
-                    }
-                    None => {
-                        let _ = dict.set_item("subtype", py.None());
-                    }
-                }
-            }
-            GraphOp::AddEdge {
-                edge_id,
-                edge_type,
-                source_id,
-                target_id,
-                ..
-            } => {
-                let _ = dict.set_item("op", "add_edge");
-                let _ = dict.set_item("edge_id", edge_id);
-                let _ = dict.set_item("edge_type", edge_type);
-                let _ = dict.set_item("source_id", source_id);
-                let _ = dict.set_item("target_id", target_id);
-            }
-            GraphOp::UpdateProperty {
-                entity_id,
-                key,
-                value,
-            } => {
-                let _ = dict.set_item("op", "update_property");
-                let _ = dict.set_item("entity_id", entity_id);
-                let _ = dict.set_item("key", key);
-                if let Ok(py_val) = value_to_py(py, value) {
-                    let _ = dict.set_item("value", py_val);
-                }
-            }
-            GraphOp::RemoveNode { node_id } => {
-                let _ = dict.set_item("op", "remove_node");
-                let _ = dict.set_item("node_id", node_id);
-            }
-            GraphOp::RemoveEdge { edge_id } => {
-                let _ = dict.set_item("op", "remove_edge");
-                let _ = dict.set_item("edge_id", edge_id);
-            }
-            GraphOp::DefineOntology { .. } => {
-                let _ = dict.set_item("op", "define_ontology");
-            }
-            GraphOp::ExtendOntology { .. } => {
-                let _ = dict.set_item("op", "extend_ontology");
-            }
-            GraphOp::Checkpoint { .. } => {
-                let _ = dict.set_item("op", "checkpoint");
-            }
-            GraphOp::DefineLens { .. } => {
-                let _ = dict.set_item("op", "define_lens");
-            }
-        }
-        dict.into()
     }
 }
 

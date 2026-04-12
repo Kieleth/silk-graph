@@ -10,12 +10,17 @@
 //! last-seen counter against the current one; if equal, they wait.
 //!
 //! Std-only, no tokio: `Arc<Mutex<u64> + Condvar>`.
+//!
+//! Thread-safety: PyTailSubscription uses interior mutability (Arc<Mutex>)
+//! so `close()` can be called from one thread while `next_batch()` is
+//! blocked on another. Without this, pyo3's refcell semantics would
+//! raise "Already borrowed."
 
 use pyo3::prelude::*;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use super::conversions::{entry_to_pydict, parse_hex_hash};
+use super::conversions::{entry_to_event_dict, parse_hex_hash};
 use super::PyGraphStore;
 use crate::entry::Hash;
 
@@ -27,7 +32,7 @@ pub struct NotifyBell {
     /// their last-seen value to detect new work without races.
     counter: Mutex<u64>,
     cvar: Condvar,
-    /// Permanent close flag — if true, next_batch returns immediately.
+    /// Store-wide close flag — if true, next_batch returns immediately.
     closed: Mutex<bool>,
 }
 
@@ -54,14 +59,12 @@ impl NotifyBell {
     }
 
     /// Wait until the counter differs from `last_seen`, or the timeout elapses.
-    /// Returns the new counter value.
-    pub fn wait_until_changed(&self, last_seen: u64, timeout: Duration) -> u64 {
+    pub fn wait_until_changed(&self, last_seen: u64, timeout: Duration) {
         let guard = self.counter.lock().unwrap();
-        let (new_guard, _) = self
+        let _ = self
             .cvar
-            .wait_timeout_while(guard, timeout, |c| *c == last_seen && !self.is_closed())
+            .wait_timeout_while(guard, timeout, |c| *c == last_seen)
             .unwrap();
-        *new_guard
     }
 
     pub fn close(&self) {
@@ -88,27 +91,33 @@ impl Default for NotifyBell {
 // PyTailSubscription
 // ---------------------------------------------------------------------------
 
+/// Internal mutable state protected by a Mutex for cross-thread access.
+struct TailInner {
+    store: Py<PyGraphStore>,
+    cursor: Vec<Hash>,
+    closed: bool,
+}
+
 /// A cursor-based tail of the store's oplog.
 ///
-/// Holds a frontier (`Vec<Hash>`), an `Arc<NotifyBell>`, and a `Py<PyGraphStore>`
+/// Holds a frontier (`Vec<Hash>`), a `Arc<NotifyBell>`, and a `Py<PyGraphStore>`
 /// for querying. `next_batch()` returns entries past the cursor, advancing the
 /// cursor to the store's current heads on each call.
 #[pyclass(name = "TailSubscription", module = "silk")]
 pub struct PyTailSubscription {
-    store: Py<PyGraphStore>,
-    cursor: Vec<Hash>,
+    inner: Arc<Mutex<TailInner>>,
     bell: Arc<NotifyBell>,
-    /// Per-subscription close flag (separate from bell's store-wide close).
-    closed: bool,
 }
 
 impl PyTailSubscription {
     pub fn new(store: Py<PyGraphStore>, cursor: Vec<Hash>, bell: Arc<NotifyBell>) -> Self {
         Self {
-            store,
-            cursor,
+            inner: Arc::new(Mutex::new(TailInner {
+                store,
+                cursor,
+                closed: false,
+            })),
             bell,
-            closed: false,
         }
     }
 }
@@ -126,16 +135,16 @@ impl PyTailSubscription {
     /// (e.g., compacted away).
     #[pyo3(signature = (timeout_ms=0, max_count=1000))]
     fn next_batch(
-        &mut self,
+        &self,
         py: Python<'_>,
         timeout_ms: u64,
         max_count: usize,
     ) -> PyResult<Vec<PyObject>> {
-        if self.closed {
+        // First pass: try fetching without waiting.
+        if self.is_closed() {
             return Ok(vec![]);
         }
 
-        // First pass: try without waiting.
         let last_seen = self.bell.current();
         if let Some(entries) = self.try_fetch(py, max_count)? {
             return Ok(entries);
@@ -151,9 +160,8 @@ impl PyTailSubscription {
             bell.wait_until_changed(last_seen, Duration::from_millis(timeout_ms));
         });
 
-        // After waking, try once more. No further waiting — if still empty,
-        // return empty. Caller loops.
-        if self.closed || self.bell.is_closed() {
+        // After waking, try once more. No further waiting.
+        if self.is_closed() || self.bell.is_closed() {
             return Ok(vec![]);
         }
         Ok(self.try_fetch(py, max_count)?.unwrap_or_default())
@@ -162,57 +170,94 @@ impl PyTailSubscription {
     /// Return the current cursor as a list of hex-encoded hashes.
     /// Persist this to resume after restart.
     fn current_cursor(&self) -> Vec<String> {
-        self.cursor.iter().map(hex::encode).collect()
+        self.inner
+            .lock()
+            .unwrap()
+            .cursor
+            .iter()
+            .map(hex::encode)
+            .collect()
     }
 
     /// Close the subscription. Subsequent `next_batch` calls return empty.
-    fn close(&mut self) {
-        self.closed = true;
+    /// Safe to call while `next_batch` is blocked on another thread.
+    fn close(&self) {
+        {
+            let mut guard = self.inner.lock().unwrap();
+            guard.closed = true;
+        }
+        // Wake any blocked next_batch so it observes the closed flag.
+        self.bell.notify();
     }
 
     fn __repr__(&self) -> String {
+        let guard = self.inner.lock().unwrap();
         format!(
             "TailSubscription(cursor={} heads, closed={})",
-            self.cursor.len(),
-            self.closed
+            guard.cursor.len(),
+            guard.closed
         )
     }
 }
 
 impl PyTailSubscription {
+    fn is_closed(&self) -> bool {
+        self.inner.lock().unwrap().closed
+    }
+
     /// Query the oplog for entries past the cursor. Returns Some(entries) if
     /// non-empty, None if no new entries (caller may wait). Advances cursor
     /// to the store's current heads on non-empty return.
-    fn try_fetch(&mut self, py: Python<'_>, max_count: usize) -> PyResult<Option<Vec<PyObject>>> {
-        let store = self.store.borrow(py);
-        let oplog = store.backend_oplog();
+    fn try_fetch(&self, py: Python<'_>, max_count: usize) -> PyResult<Option<Vec<PyObject>>> {
+        // Take a snapshot of the cursor (release mutex before querying the
+        // store, which also requires the GIL / RefCell).
+        let cursor_snapshot = {
+            let guard = self.inner.lock().unwrap();
+            guard.cursor.clone()
+        };
 
-        let entries = oplog
-            .entries_since_heads(&self.cursor)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("stale cursor: {e}")))?;
+        // Borrow the store to query the oplog.
+        let (py_entries, new_cursor) = {
+            let store = {
+                let guard = self.inner.lock().unwrap();
+                guard.store.clone_ref(py)
+            };
+            let borrowed = store.borrow(py);
+            let oplog = borrowed.backend_oplog();
 
-        if entries.is_empty() {
-            return Ok(None);
-        }
+            let entries = oplog.entries_since_heads(&cursor_snapshot).map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("stale cursor: {e}"))
+            })?;
 
-        // Advance cursor to store's current heads (the frontier after this batch).
-        let new_heads = oplog.heads();
-        self.cursor = new_heads;
+            if entries.is_empty() {
+                return Ok(None);
+            }
 
-        // Cap batch size and convert to Python dicts.
-        let py_entries: Vec<PyObject> = entries
-            .iter()
-            .take(max_count)
-            .map(|e| entry_to_pydict(py, e))
-            .collect::<PyResult<Vec<_>>>()?;
+            // Advance cursor to store's current heads (the frontier after this batch),
+            // unless the batch was truncated by max_count.
+            let truncated = entries.len() > max_count;
+            let new_cursor = if truncated {
+                vec![entries[max_count - 1].hash]
+            } else {
+                oplog.heads()
+            };
 
-        // If we truncated, we need to leave the cursor BEFORE the cutoff so
-        // the next call picks up the rest. We do this by NOT advancing past
-        // entries we didn't return. Simplest: if truncated, advance cursor
-        // only to the last returned entry's parents (frontier of what we sent).
-        if entries.len() > max_count {
-            let last_hash = entries[max_count - 1].hash;
-            self.cursor = vec![last_hash];
+            // Tail subscriptions serve entries that arrived either locally or
+            // via sync. We don't distinguish here (is_local=false is the safer
+            // default since subscribers often process events the same way).
+            let py_entries: Vec<PyObject> = entries
+                .iter()
+                .take(max_count)
+                .map(|e| entry_to_event_dict(py, e, false))
+                .collect::<PyResult<Vec<_>>>()?;
+
+            (py_entries, new_cursor)
+        };
+
+        // Advance cursor.
+        {
+            let mut guard = self.inner.lock().unwrap();
+            guard.cursor = new_cursor;
         }
 
         Ok(Some(py_entries))

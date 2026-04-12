@@ -705,6 +705,60 @@ count = buffer.drain(store)  # → 2 ops applied
 
 ---
 
+### How do I tail Silk's oplog like Kafka?
+
+**The problem, by example.** You're running a pet shelter. Every time a new adoption is committed to the Silk store, a few downstream systems need to react: one sends an email to the adopter, one updates the shelter's dashboard, one triggers a microchip registration. If any of those systems crashes and restarts, they must NOT miss any adoptions that happened while they were down.
+
+The classical solution is a message queue: producer writes to Kafka, each consumer holds a cursor (offset), processes from its cursor, persists the new cursor. Disconnect + reconnect = send the cursor, get everything past it. No missed events. No drop-on-overflow — the log is the buffer.
+
+Silk gives you this for free. The oplog is already a durable log. Cursor-based tail subscriptions expose it with the same semantics.
+
+```python
+from silk import GraphStore
+
+store = GraphStore("shelter", ONTOLOGY)
+
+# Load the persisted cursor (empty list = replay from beginning)
+cursor = load_my_cursor()  # your persistence (file, db, etc.)
+
+sub = store.subscribe_from(cursor)
+
+while True:
+    entries = sub.next_batch(timeout_ms=500, max_count=100)
+    for event in entries:
+        if event["op"] == "add_node" and event["node_type"] == "adoption":
+            send_adoption_email(event["node_id"])
+
+    # Persist cursor after each batch so a crash doesn't replay
+    save_my_cursor(sub.current_cursor())
+```
+
+**Key properties:**
+- **The oplog is the buffer.** No per-subscriber in-memory queue. A slow subscriber just lags further behind, bounded by oplog retention (compaction).
+- **Pull-based.** Subscribers call `next_batch(timeout_ms, max_count)`. They control batching, backoff, and concurrency.
+- **Resumable.** Cursors are a `list[str]` of hex-encoded entry hashes (the DAG frontier). Persist across restarts, send on reconnect, resume exactly where you left off.
+- **No drop policy needed.** Producer never waits on consumers. If a consumer is disconnected, the entries sit in the oplog.
+- **Works across sync.** Entries arriving from a peer via `merge_sync_payload` wake the same subscriptions. A laptop that syncs with a server sees the server's adoptions appear in its own tail.
+- **Always-on.** Measured overhead on the producer path is <2% at 1k appends, 0% at 10k (within noise). No config flag.
+
+**Compaction safety.** By default, a stale cursor (pointing to an entry that was compacted away) raises `ValueError("stale cursor: ...")` on the next `next_batch()` call. Handle it by re-bootstrapping (fresh snapshot + fresh cursor). If you want compaction to WAIT until your subscriber catches up, register the cursor:
+
+```python
+store.register_subscriber_cursor(cursor)
+# ... `verify_compaction_safe()` now blocks compaction while the cursor is behind ...
+store.unregister_subscriber_cursor(cursor)
+```
+
+This is the Kafka consumer-group-offset pattern: the broker tracks registered consumers and won't garbage-collect past them.
+
+**Cursor shape.** A cursor is a `list[str]` of hex hashes representing the DAG heads the consumer has already seen. On a linear log this degenerates to one hash. On a forked DAG (concurrent writes from sync peers), it's the multiple heads. `entries_since_heads(cursor)` returns everything not causally reachable from any head — exactly the delta. An empty list (`[]`) means "start from the beginning."
+
+Matches how Automerge's `getChanges(haveDeps)` works. Documented in DESIGN.md § D-028.
+
+See `examples/tail_subscription.py` for a runnable producer + consumer with cursor persistence.
+
+---
+
 ## Contributing
 
 ### How do I extend Silk?
