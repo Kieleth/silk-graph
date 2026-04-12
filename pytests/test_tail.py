@@ -261,3 +261,76 @@ class TestTailErrors:
         store = make_store()
         with pytest.raises(Exception):
             store.subscribe_from(["not-a-real-hash"])
+
+
+# -- C-1.4: Retention + stale cursor after compaction --
+
+
+class TestTailRetention:
+    def test_stale_cursor_raises_after_compaction(self):
+        """Compacting past a subscriber's cursor makes next_batch fail."""
+        store = make_store()
+        store.add_node("n1", "entity", "N1", {"name": "one"})
+        old_cursor = store.heads()
+        store.add_node("n2", "entity", "N2", {"name": "two"})
+
+        sub = store.subscribe_from(old_cursor)
+
+        # Force compaction — this will replace entries with a checkpoint.
+        # old_cursor points to an entry that no longer exists.
+        store.compact(safe=False)
+
+        # next_batch must raise (cursor is stale).
+        with pytest.raises(Exception):
+            sub.next_batch(timeout_ms=100, max_count=10)
+        sub.close()
+
+    def test_register_cursor_blocks_compaction(self):
+        """A registered active cursor blocks safe compaction."""
+        store = make_store()
+        store.add_node("n1", "entity", "N1", {"name": "one"})
+        old_cursor = store.heads()
+        store.add_node("n2", "entity", "N2", {"name": "two"})
+
+        # Register the old (behind) cursor
+        store.register_subscriber_cursor(old_cursor)
+
+        # Safe compaction should refuse
+        safe, reasons = store.verify_compaction_safe()
+        assert not safe
+        assert any("cursor" in r.lower() or "subscriber" in r.lower() for r in reasons)
+
+    def test_register_cursor_at_head_allows_compaction(self):
+        """A registered cursor AT current heads does not block compaction."""
+        store = make_store()
+        store.add_node("n1", "entity", "N1", {"name": "one"})
+
+        # Register the current heads (caught up)
+        store.register_subscriber_cursor(store.heads())
+
+        # No pending delta → compaction OK from the cursor's perspective.
+        # (Other checks like peer sync may still block, but not our cursor.)
+        # We test that our cursor specifically doesn't contribute a violation.
+        safe, reasons = store.verify_compaction_safe()
+        # If it's unsafe, it shouldn't be BECAUSE of the cursor.
+        if not safe:
+            cursor_reasons = [r for r in reasons if "cursor" in r.lower() or "subscriber" in r.lower()]
+            assert not cursor_reasons, f"cursor at head should not block: {cursor_reasons}"
+
+    def test_unregister_cursor_unblocks_compaction(self):
+        """Unregistering a cursor removes its compaction block."""
+        store = make_store()
+        store.add_node("n1", "entity", "N1", {"name": "one"})
+        old_cursor = store.heads()
+        store.add_node("n2", "entity", "N2", {"name": "two"})
+
+        store.register_subscriber_cursor(old_cursor)
+        safe1, _ = store.verify_compaction_safe()
+        assert not safe1
+
+        store.unregister_subscriber_cursor(old_cursor)
+        safe2, reasons = store.verify_compaction_safe()
+        # Still may be unsafe for other reasons, but not due to our cursor.
+        if not safe2:
+            cursor_reasons = [r for r in reasons if "cursor" in r.lower() or "subscriber" in r.lower()]
+            assert not cursor_reasons

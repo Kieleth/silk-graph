@@ -64,6 +64,9 @@ pub struct PyGraphStore {
     /// C-1: Bell for cursor-based tail subscriptions. Ticked on every
     /// successful append and merge; subscribers wait on this.
     pub(crate) bell: Arc<tail::NotifyBell>,
+    /// C-1.4: Registered subscriber cursors. Consulted by verify_compaction_safe
+    /// to block compaction while any subscriber is behind. Opt-in per subscription.
+    subscriber_cursors: Vec<Vec<Hash>>,
 }
 
 enum Backend {
@@ -189,6 +192,7 @@ impl PyGraphStore {
             require_signatures: false,
             gossip: crate::gossip::PeerRegistry::with_instance_id(&instance_id),
             bell: tail::NotifyBell::new(),
+            subscriber_cursors: Vec::new(),
         })
     }
 
@@ -260,6 +264,7 @@ impl PyGraphStore {
             require_signatures: false,
             gossip,
             bell: tail::NotifyBell::new(),
+            subscriber_cursors: Vec::new(),
         })
     }
 
@@ -911,6 +916,7 @@ impl PyGraphStore {
             require_signatures: false,
             gossip,
             bell: tail::NotifyBell::new(),
+            subscriber_cursors: Vec::new(),
         })
     }
 
@@ -1062,12 +1068,63 @@ impl PyGraphStore {
     }
 
     /// Check if compaction is safe: all known peers must have synced
-    /// since the most recent entry. Returns (safe, reasons).
+    /// since the most recent entry, AND all registered subscriber cursors
+    /// must be caught up to current heads. Returns (safe, reasons).
     fn verify_compaction_safe(&self) -> (bool, Vec<String>) {
-        // Find the latest entry's physical clock
+        // Peer sync check
         let all = self.backend.oplog().entries_since(None);
         let latest_ms = all.iter().map(|e| e.clock.physical_ms).max().unwrap_or(0);
-        self.gossip.verify_compaction_safe(latest_ms)
+        let (peer_safe, mut reasons) = self.gossip.verify_compaction_safe(latest_ms);
+
+        // C-1.4: subscriber cursor check. A registered cursor blocks
+        // compaction if it's behind current heads (i.e., has pending entries
+        // that would be lost). Cursors fully caught up to current heads are fine.
+        let oplog = self.backend.oplog();
+        let mut cursors_safe = true;
+        for (idx, cursor) in self.subscriber_cursors.iter().enumerate() {
+            match oplog.entries_since_heads(cursor) {
+                Ok(delta) if delta.is_empty() => {} // cursor at head, safe
+                Ok(_) => {
+                    cursors_safe = false;
+                    reasons.push(format!("subscriber cursor #{idx} is behind current heads"));
+                }
+                Err(_) => {
+                    cursors_safe = false;
+                    reasons.push(format!(
+                        "subscriber cursor #{idx} references unknown entries"
+                    ));
+                }
+            }
+        }
+
+        (peer_safe && cursors_safe, reasons)
+    }
+
+    /// C-1.4: Register a subscriber cursor for compaction safety (opt-in).
+    ///
+    /// While a cursor is registered, `verify_compaction_safe` will return
+    /// unsafe if the cursor is behind the current heads. Unregister when
+    /// the subscriber disconnects, or the subscriber will block compaction
+    /// indefinitely.
+    ///
+    /// Silent about duplicates — calling twice with the same cursor is a no-op.
+    fn register_subscriber_cursor(&mut self, cursor: Vec<String>) -> PyResult<()> {
+        let parsed = tail::parse_cursor(cursor)?;
+        // Avoid duplicate registration (by hash content, not reference)
+        if !self.subscriber_cursors.iter().any(|c| c == &parsed) {
+            self.subscriber_cursors.push(parsed);
+        }
+        Ok(())
+    }
+
+    /// C-1.4: Unregister a previously registered subscriber cursor.
+    ///
+    /// Silent about unknown cursors — unregistering a never-registered
+    /// cursor is a no-op.
+    fn unregister_subscriber_cursor(&mut self, cursor: Vec<String>) -> PyResult<()> {
+        let parsed = tail::parse_cursor(cursor)?;
+        self.subscriber_cursors.retain(|c| c != &parsed);
+        Ok(())
     }
 
     // -- Signing (D-027) --

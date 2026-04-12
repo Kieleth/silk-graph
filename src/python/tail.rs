@@ -232,4 +232,3 @@ pub fn parse_cursor(cursor: Vec<String>) -> PyResult<Vec<Hash>> {
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid cursor: {e}")))
 }
-
