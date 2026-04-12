@@ -17,16 +17,46 @@
 //! raise "Already borrowed."
 
 use pyo3::prelude::*;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::conversions::{entry_to_event_dict, parse_hex_hash};
 use super::PyGraphStore;
 use crate::entry::Hash;
 
+/// Strategy for deciding when `bell.notify()` should actually wake waiters.
+///
+/// - `Immediate`: notify on every append (lowest latency, ~4µs overhead per
+///   append when a subscriber is waiting due to GIL dance).
+/// - `Coalesced { min_interval_ns }`: skip notifies within the given window
+///   of the last one fired. Bursts of appends wake the subscriber at most
+///   once per window; the subscriber drains everything on wake. Dramatically
+///   reduces producer overhead for burst writes at the cost of up to
+///   `min_interval` latency on quiet → busy transitions.
+#[derive(Debug, Clone, Copy)]
+pub enum NotifyStrategy {
+    Immediate,
+    Coalesced { min_interval_ns: u64 },
+}
+
+impl Default for NotifyStrategy {
+    fn default() -> Self {
+        // Immediate is the default. Benchmarks (experiments/test_tail_breakdown.py)
+        // showed coalescing does NOT measurably improve producer throughput in
+        // typical workloads — the observed "active subscriber" overhead is
+        // dominated by Python's GIL scheduling (sys.setswitchinterval), not
+        // by notify_all() frequency. The strategy API is kept for users with
+        // specific subscriber-heavy workloads where coalescing may help, but
+        // the default preserves lowest-latency semantics.
+        NotifyStrategy::Immediate
+    }
+}
+
 /// Producer→consumer wake-up primitive. Cheap when no one is waiting:
-/// `notify()` locks the mutex briefly and increments a counter, calls
-/// `notify_all()` on an empty waiter list (essentially a no-op).
+/// `notify()` decides via strategy, maybe locks the mutex briefly and
+/// increments a counter, calls `notify_all()`. The decision is lock-free
+/// (AtomicU64 compare-exchange for the coalesced case).
 pub struct NotifyBell {
     /// Monotonic counter. Incremented on each notify. Consumers compare
     /// their last-seen value to detect new work without races.
@@ -34,23 +64,74 @@ pub struct NotifyBell {
     cvar: Condvar,
     /// Store-wide close flag — if true, next_batch returns immediately.
     closed: Mutex<bool>,
+    /// Active strategy. Stored as Mutex<Strategy> so it can be changed at runtime.
+    strategy: Mutex<NotifyStrategy>,
+    /// For Coalesced strategy: nanoseconds since an arbitrary epoch at which
+    /// the last notify fired. Compared against the current instant.
+    last_notify_ns: AtomicU64,
+    /// Clock epoch used with last_notify_ns. Set once at construction.
+    epoch: Instant,
 }
 
 impl NotifyBell {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new(Self::with_strategy(NotifyStrategy::default()))
+    }
+
+    pub fn with_strategy(strategy: NotifyStrategy) -> Self {
+        Self {
             counter: Mutex::new(0),
             cvar: Condvar::new(),
             closed: Mutex::new(false),
-        })
+            strategy: Mutex::new(strategy),
+            last_notify_ns: AtomicU64::new(0),
+            epoch: Instant::now(),
+        }
     }
 
-    /// Tick the counter and wake all waiters. Call after any successful
-    /// append or merge. ~100ns when no waiters.
+    pub fn set_strategy(&self, strategy: NotifyStrategy) {
+        *self.strategy.lock().unwrap() = strategy;
+        // Reset last_notify_ns so the next notify fires immediately regardless
+        // of the old strategy's state.
+        self.last_notify_ns.store(0, Ordering::Relaxed);
+    }
+
+    /// Tick the counter and wake all waiters, subject to the strategy.
     pub fn notify(&self) {
-        let mut guard = self.counter.lock().unwrap();
-        *guard = guard.wrapping_add(1);
-        self.cvar.notify_all();
+        let should_fire = {
+            let strategy = *self.strategy.lock().unwrap();
+            match strategy {
+                NotifyStrategy::Immediate => true,
+                NotifyStrategy::Coalesced { min_interval_ns } => {
+                    if min_interval_ns == 0 {
+                        true
+                    } else {
+                        let now_ns = self.epoch.elapsed().as_nanos() as u64;
+                        let last = self.last_notify_ns.load(Ordering::Relaxed);
+                        if now_ns.saturating_sub(last) >= min_interval_ns {
+                            // Try to claim this notify slot. CAS avoids double-fire
+                            // under concurrent appends without a mutex.
+                            self.last_notify_ns
+                                .compare_exchange(
+                                    last,
+                                    now_ns,
+                                    Ordering::Relaxed,
+                                    Ordering::Relaxed,
+                                )
+                                .is_ok()
+                        } else {
+                            false
+                        }
+                    }
+                }
+            }
+        };
+
+        if should_fire {
+            let mut guard = self.counter.lock().unwrap();
+            *guard = guard.wrapping_add(1);
+            self.cvar.notify_all();
+        }
     }
 
     /// Current counter value. Caller uses this as "last seen."
@@ -83,6 +164,9 @@ impl Default for NotifyBell {
             counter: Mutex::new(0),
             cvar: Condvar::new(),
             closed: Mutex::new(false),
+            strategy: Mutex::new(NotifyStrategy::default()),
+            last_notify_ns: AtomicU64::new(0),
+            epoch: Instant::now(),
         }
     }
 }

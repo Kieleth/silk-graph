@@ -318,6 +318,20 @@ class GraphStore:
     def unregister_subscriber_cursor(self, cursor: list[str]) -> None:
         """Remove a previously registered subscriber cursor."""
         ...
+    def set_notify_strategy(
+        self, strategy: str | Any, min_interval_ms: int | None = None
+    ) -> None:
+        """Set the tail-subscription notify strategy.
+
+        Accepts a string name ("immediate" | "coalesced") or an instance of
+        `ImmediateNotify` / `CoalescedNotify` from `silk.notify`.
+
+        Example:
+            store.set_notify_strategy(CoalescedNotify(min_interval_ms=5))
+            store.set_notify_strategy("coalesced", min_interval_ms=5)
+            store.set_notify_strategy("immediate")
+        """
+        ...
 
     # -- Gossip Peer Selection (R-05) --
 
