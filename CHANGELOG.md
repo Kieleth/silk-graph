@@ -22,6 +22,15 @@ Silk's guarantee is not "zero bugs have ever existed" — it's "every convergenc
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-04-12
+
+### Added
+- **Linux aarch64 wheel** — published to PyPI for ARM Linux containers (Apple Silicon Docker, AWS Graviton, Raspberry Pi 64-bit). The 0.2.0/0.2.1 release matrix had macOS arm64 + Linux x86_64 + Windows x86_64 only, leaving ARM Linux as a packaging gap that broke `pip install silk-graph` in arm64 containers. Caught while rebuilding the Shelob container image (downstream consumer).
+- **Source distribution (sdist)** on PyPI as a fallback for platforms without a prebuilt wheel. Requires a Rust toolchain on the install machine, but unblocks edge cases like uncommon architectures and forks.
+
+### Changed
+- **Release workflow** — `.github/workflows/release.yml` now includes the aarch64 build step (manylinux cross-compile) and a separate `build-sdist` job. `publish-pypi` and `github-release` depend on both wheel and sdist artifacts.
+
 ## [0.2.1] - 2026-04-12
 
 ### Added
