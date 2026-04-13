@@ -16,22 +16,28 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 (most servers, CI runners)
+          # Linux x86_64 (most servers, CI runners). Host build — matches 0.2.0/0.2.1.
           - os: ubuntu-latest
             target: x86_64
-            manylinux: auto
-          # Linux aarch64 (ARM servers, Docker on Apple Silicon, Raspberry Pi 64-bit)
+            manylinux: 'off'
+            extra-args: ''
+          # Linux aarch64 (ARM servers, Docker on Apple Silicon, RPi 64-bit).
+          # Cross-compiled in a manylinux container — must point at the
+          # container's Python via --interpreter.
           - os: ubuntu-latest
             target: aarch64
-            manylinux: auto
-          # macOS arm64 (Apple Silicon)
+            manylinux: 'auto'
+            extra-args: '--interpreter 3.12'
+          # macOS arm64 (Apple Silicon).
           - os: macos-14
             target: aarch64
             manylinux: 'off'
-          # Windows x86_64
+            extra-args: ''
+          # Windows x86_64.
           - os: windows-latest
             target: x64
             manylinux: 'off'
+            extra-args: ''
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -42,7 +48,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist
+          args: --release --out dist ${{ matrix.extra-args }}
           manylinux: ${{ matrix.manylinux }}
       - uses: actions/upload-artifact@v4
         with:

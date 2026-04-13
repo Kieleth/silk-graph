@@ -22,6 +22,13 @@ Silk's guarantee is not "zero bugs have ever existed" — it's "every convergenc
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-04-13
+
+### Fixed
+- **Release workflow: pass `--interpreter 3.12` for cross-compiled Linux aarch64 wheel.** The 0.2.2 release attempt failed because `manylinux: auto` runs maturin in a Docker container that doesn't have the host Python on PATH; maturin couldn't find an interpreter. Also reverted Linux x86_64 to its 0.2.0/0.2.1 host-build configuration (no manylinux container), which already produced manylinux-compatible wheels. Net effect: 0.2.3 successfully publishes wheels for linux/x86_64, linux/aarch64, macos/aarch64, windows/x64 plus an sdist.
+
+> **Note:** v0.2.2 is on crates.io but NOT on PyPI — the PyPI publish job failed in 0.2.2 due to the build error above. v0.2.3 is the corrected release for both registries.
+
 ## [0.2.2] - 2026-04-12
 
 ### Added
