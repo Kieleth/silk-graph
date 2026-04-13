@@ -22,6 +22,13 @@ Silk's guarantee is not "zero bugs have ever existed" — it's "every convergenc
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-04-13
+
+### Fixed
+- **Release workflow: Linux x86_64 wheel must be built in a manylinux container.** v0.2.3 build succeeded but PyPI publish rejected the wheel: `400 Binary wheel 'silk_graph-0.2.3-cp312-cp312-linux_x86_64.whl' has an unsupported platform tag 'linux_x86_64'`. The host build produces `linux_x86_64` which PyPI does not accept; PyPI requires `manylinux_2_XX_x86_64`. Switched x86_64 to `manylinux: auto` + `--interpreter 3.12` (same pattern as aarch64). Both Linux targets now go through manylinux containers.
+
+> **Note:** v0.2.2 and v0.2.3 are on crates.io but NOT on PyPI. v0.2.4 is the first 0.2.x release after v0.2.1 to publish to BOTH registries.
+
 ## [0.2.3] - 2026-04-13
 
 ### Fixed

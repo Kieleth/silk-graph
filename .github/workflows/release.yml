@@ -16,14 +16,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64 (most servers, CI runners). Host build — matches 0.2.0/0.2.1.
+          # Linux x86_64 (most servers, CI runners). Built in a manylinux
+          # container so PyPI accepts the wheel — host builds get tagged
+          # `linux_x86_64` which PyPI rejects. --interpreter points maturin
+          # at the container's Python (host's Python is not on PATH inside).
           - os: ubuntu-latest
             target: x86_64
-            manylinux: 'off'
-            extra-args: ''
+            manylinux: 'auto'
+            extra-args: '--interpreter 3.12'
           # Linux aarch64 (ARM servers, Docker on Apple Silicon, RPi 64-bit).
-          # Cross-compiled in a manylinux container — must point at the
-          # container's Python via --interpreter.
+          # Same container + --interpreter pattern, cross-compiled.
           - os: ubuntu-latest
             target: aarch64
             manylinux: 'auto'
