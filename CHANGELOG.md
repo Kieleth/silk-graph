@@ -22,6 +22,12 @@ Silk's guarantee is not "zero bugs have ever existed" — it's "every convergenc
 
 ## [Unreleased]
 
+### Added
+- **Claim audit and extended TLA+ coverage.** `scripts/audit_claims.py` extracts every `I-0X`, `Theorem X`, and `INV-X` identifier from PROOF.md/INVARIANTS.md, cross-references tests and formal specs, and writes `formal/audit.json`. `pytests/test_claim_audit.py` fails CI if any claim has zero verification surfaces or any TLA+-eligible claim lacks a spec. Extended `formal/OpLog.tla` with `heads` variable + I-04 invariant + I-03 temporal property. Extended `formal/SilkSync.tla` with materialization, Theorem 1 (deterministic materialization), and Theorem 2 (idempotent merge via a replay action). 7/7 TLA+-eligible PROOF.md claims are now machine-checked; I-01 and I-06 are documented as out-of-scope with rationale.
+
+### Tests
+- 20 edge-index consistency tests (`pytests/test_edge_index_consistency.py`, `test_edge_index_tcp_sync.py`) proving that outgoing edges survive TCP sync, redb reopen, and multi-round replay. These were the evidence for handing the outgoing-edges bug back to Shelob.
+
 ## [0.2.4] - 2026-04-13
 
 ### Fixed

@@ -344,7 +344,11 @@ Therefore, under the safety precondition, compaction preserves convergence. ∎
 
 - **Performance bounds**: This proof shows correctness, not efficiency. Sync may transfer redundant entries (Bloom false positives); ancestor closure may be slow on adversarial DAGs. These are performance issues, not correctness issues.
 
-- **Machine verification**: This proof is semi-formal — structured reasoning with code references, not machine-checked. For publication-grade validation, formalization in TLA+ or Isabelle/HOL is the next step.
+- **Machine verification**: This proof is semi-formal — structured reasoning with code references. Two critical slices have been machine-checked via TLA+ and the TLC model checker:
+  - **I-02 (Causal Completeness):** verified for a single oplog with 5 entry hashes (9,569 distinct states, zero violations). See `formal/OpLog.tla`.
+  - **Theorem 3 (Sync Convergence):** verified for two peers with 4 entry hashes across all interleavings of writes and syncs (99,494 distinct states, zero violations). See `formal/SilkSync.tla`.
+
+  These are bounded model checks (all states explored up to the hash limit), not unbounded proofs. For full deductive verification, Isabelle/HOL formalization is the next step.
 
 ---
 

@@ -1,0 +1,235 @@
+{
+  "summary": {
+    "total_claims": 15,
+    "covered": 15,
+    "tla_covered": 9,
+    "test_covered": 15,
+    "coverage_pct": 100.0,
+    "tla_pct": 60.0,
+    "tla_eligible_total": 7,
+    "tla_eligible_covered": 7,
+    "tla_eligible_pct": 100.0,
+    "by_kind": {
+      "invariant": {
+        "total": 6,
+        "covered": 6,
+        "tla": 6,
+        "tests": 6
+      },
+      "inv": {
+        "total": 6,
+        "covered": 6,
+        "tla": 0,
+        "tests": 6
+      },
+      "theorem": {
+        "total": 3,
+        "covered": 3,
+        "tla": 3,
+        "tests": 3
+      }
+    }
+  },
+  "claims": [
+    {
+      "claim_id": "I-01",
+      "kind": "invariant",
+      "rust_tests": [
+        "src/oplog.rs"
+      ],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [
+        "formal/README.md"
+      ],
+      "tla_eligible": false,
+      "tla_ineligible_reason": "cryptographic hash integrity; verified by unit test, not structural reasoning"
+    },
+    {
+      "claim_id": "I-02",
+      "kind": "invariant",
+      "rust_tests": [
+        "src/oplog.rs"
+      ],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [
+        "formal/OpLog.tla",
+        "formal/SilkSync.tla",
+        "formal/README.md"
+      ],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "I-03",
+      "kind": "invariant",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [
+        "formal/OpLog.tla",
+        "formal/README.md"
+      ],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "I-04",
+      "kind": "invariant",
+      "rust_tests": [
+        "src/oplog.rs"
+      ],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [
+        "formal/OpLog.tla",
+        "formal/README.md"
+      ],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "I-05",
+      "kind": "invariant",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [
+        "formal/SilkSync.tla",
+        "formal/README.md"
+      ],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "I-06",
+      "kind": "invariant",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [
+        "formal/README.md"
+      ],
+      "tla_eligible": false,
+      "tla_ineligible_reason": "quarantine determinism is a corollary of Theorem 3 (PROOF.md \u00a76)"
+    },
+    {
+      "claim_id": "INV-1",
+      "kind": "inv",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "INV-2",
+      "kind": "inv",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "INV-3",
+      "kind": "inv",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "INV-4",
+      "kind": "inv",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "INV-5",
+      "kind": "inv",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "INV-6",
+      "kind": "inv",
+      "rust_tests": [
+        "src/oplog.rs",
+        "src/python/mod.rs"
+      ],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "Theorem 1",
+      "kind": "theorem",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [
+        "formal/SilkSync.tla",
+        "formal/README.md"
+      ],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "Theorem 2",
+      "kind": "theorem",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [
+        "formal/SilkSync.tla",
+        "formal/README.md"
+      ],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "Theorem 3",
+      "kind": "theorem",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_invariants.py"
+      ],
+      "tla_specs": [
+        "formal/SilkSync.tla",
+        "formal/README.md"
+      ],
+      "tla_eligible": true,
+      "tla_ineligible_reason": null
+    }
+  ]
+}

@@ -3,7 +3,8 @@
 Structural properties that must **always** hold. Each has an automated check that runs in CI or at startup. If an invariant is violated, the check fails loudly — no silent corruption.
 
 > See [PROOF.md](PROOF.md) for the formal convergence theorems (I-01 through I-06, Theorems 1–3).
-> This document covers the **automated enforcement** layer above the proofs.
+> See [formal/README.md](formal/README.md) for the TLA+ specs that machine-check 7/7 TLA+-eligible claims from PROOF.md.
+> This document covers the **automated enforcement** layer above the proofs. The broader claim coverage gate (which subsumes INV-1) lives in `scripts/audit_claims.py` and `pytests/test_claim_audit.py`.
 
 ---
 
