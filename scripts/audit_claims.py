@@ -39,9 +39,9 @@ SOURCES = {
 }
 
 REFERENCE_SCAN = {
-    "rust_tests": list(ROOT.glob("src/**/*.rs")) + list(ROOT.glob("tests/**/*.rs")),
-    "python_tests": list(ROOT.glob("pytests/**/*.py")),
-    "tla_specs": list(ROOT.glob("formal/*.tla")) + list(ROOT.glob("formal/*.md")),
+    "rust_tests": sorted(ROOT.glob("src/**/*.rs")) + sorted(ROOT.glob("tests/**/*.rs")),
+    "python_tests": sorted(ROOT.glob("pytests/**/*.py")),
+    "tla_specs": sorted(ROOT.glob("formal/*.tla")) + sorted(ROOT.glob("formal/*.md")),
 }
 
 
