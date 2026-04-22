@@ -13,6 +13,7 @@ edge index consistency on the receiving side.
 """
 
 import asyncio
+import functools
 import json
 import os
 import struct
@@ -23,6 +24,15 @@ import tempfile
 import pytest
 
 from silk import GraphStore
+
+
+def sync_asyncio(fn):
+    """Convert an async test function into a sync one via asyncio.run.
+    Keeps the suite free of the pytest-asyncio runtime dependency."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return asyncio.run(fn(*args, **kwargs))
+    return wrapper
 
 
 ONTOLOGY = json.dumps({
@@ -221,7 +231,7 @@ async def _tcp_sync_client(store: GraphStore, host: str, port: int) -> int:
 # ── Tests ───────────────────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
+@sync_asyncio
 async def test_edges_consistent_after_tcp_sync():
     """The production bug scenario: A has topology, syncs to B over TCP.
     B should find edges via both all_edges() and outgoing_edges()."""
@@ -249,7 +259,7 @@ async def test_edges_consistent_after_tcp_sync():
             pass
 
 
-@pytest.mark.asyncio
+@sync_asyncio
 async def test_edges_consistent_after_tcp_sync_with_redb():
     """TCP sync into a redb-backed store, then verify consistency."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -277,7 +287,7 @@ async def test_edges_consistent_after_tcp_sync_with_redb():
                 pass
 
 
-@pytest.mark.asyncio
+@sync_asyncio
 async def test_edges_consistent_after_tcp_sync_redb_reopen():
     """TCP sync into redb, close, reopen, verify consistency."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -307,7 +317,7 @@ async def test_edges_consistent_after_tcp_sync_redb_reopen():
         _assert_index_consistent(store_b2, "inst-gamma", "after TCP + redb reopen")
 
 
-@pytest.mark.asyncio
+@sync_asyncio
 async def test_bidirectional_tcp_sync_both_topologies():
     """Both instances have topologies, bidirectional TCP sync."""
     store_a = make_store("inst-a")
@@ -345,7 +355,7 @@ async def test_bidirectional_tcp_sync_both_topologies():
                 pass
 
 
-@pytest.mark.asyncio
+@sync_asyncio
 async def test_multiple_tcp_sync_rounds():
     """Multiple sync rounds over TCP (like production tick loop)."""
     store_a = make_store("inst-a")
@@ -372,7 +382,7 @@ async def test_multiple_tcp_sync_rounds():
             pass
 
 
-@pytest.mark.asyncio
+@sync_asyncio
 async def test_local_seed_then_tcp_sync_no_conflict():
     """B loads its own seed, then syncs A's topology over TCP.
     Both local and remote edges should be consistent."""
