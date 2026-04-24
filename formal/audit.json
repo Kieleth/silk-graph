@@ -1,11 +1,11 @@
 {
   "summary": {
-    "total_claims": 15,
-    "covered": 15,
+    "total_claims": 17,
+    "covered": 17,
     "tla_covered": 9,
-    "test_covered": 15,
+    "test_covered": 17,
     "coverage_pct": 100.0,
-    "tla_pct": 60.0,
+    "tla_pct": 52.9,
     "tla_eligible_total": 7,
     "tla_eligible_covered": 7,
     "tla_eligible_pct": 100.0,
@@ -23,10 +23,10 @@
         "tests": 6
       },
       "theorem": {
-        "total": 3,
-        "covered": 3,
+        "total": 5,
+        "covered": 5,
         "tla": 3,
-        "tests": 3
+        "tests": 5
       }
     }
   },
@@ -230,6 +230,31 @@
       ],
       "tla_eligible": true,
       "tla_ineligible_reason": null
+    },
+    {
+      "claim_id": "Theorem 4",
+      "kind": "theorem",
+      "rust_tests": [],
+      "python_tests": [
+        "pytests/test_entries_affecting.py"
+      ],
+      "tla_specs": [],
+      "tla_eligible": false,
+      "tla_ineligible_reason": "composition of two semilattices; proved algebraically in PROOF.md Appendix A (standard result, would not add model-checker value)"
+    },
+    {
+      "claim_id": "Theorem 5",
+      "kind": "theorem",
+      "rust_tests": [
+        "src/provenance.rs",
+        "src/python/mod.rs"
+      ],
+      "python_tests": [
+        "pytests/test_entries_affecting.py"
+      ],
+      "tla_specs": [],
+      "tla_eligible": false,
+      "tla_ineligible_reason": "trivially follows from Theorem 1 (topo sort determinism); proved semi-formally in PROOF.md Appendix A"
     }
   ]
 }

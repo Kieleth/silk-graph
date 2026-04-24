@@ -30,6 +30,8 @@ CLAIM_PATTERNS = {
 TLA_INELIGIBLE = {
     "I-01": "cryptographic hash integrity; verified by unit test, not structural reasoning",
     "I-06": "quarantine determinism is a corollary of Theorem 3 (PROOF.md §6)",
+    "Theorem 4": "composition of two semilattices; proved algebraically in PROOF.md Appendix A (standard result, would not add model-checker value)",
+    "Theorem 5": "trivially follows from Theorem 1 (topo sort determinism); proved semi-formally in PROOF.md Appendix A",
 }
 
 SOURCES = {

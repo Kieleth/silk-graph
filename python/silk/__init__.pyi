@@ -151,6 +151,15 @@ class GraphStore:
     def entries_since(self, hex_hash: str | None = None) -> list[dict[str, Any]]:
         """Return all entries since a given hash (delta for sync)."""
         ...
+    def entries_affecting(self, id: str) -> list[dict[str, Any]]:
+        """Return all entries referencing `id` (node_id, edge_id, or edge's
+        source_id / target_id) in topological order.
+
+        Deterministic over OpLog state — see PROOF.md Theorem 5. Safe on any
+        peer. Post-compaction, pre-checkpoint writes fold into the synthetic
+        Checkpoint entry and are not individually recoverable.
+        """
+        ...
 
     # -- Graph queries --
 

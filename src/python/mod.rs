@@ -512,6 +512,19 @@ impl PyGraphStore {
         Python::with_gil(|py| entries.iter().map(|e| entry_to_pydict(py, e)).collect())
     }
 
+    /// Return all entries whose payload references `id` (node_id, edge_id,
+    /// or any edge's source_id / target_id) in topological order.
+    ///
+    /// Deterministic over OpLog state — see PROOF.md Theorem 5. Safe on any
+    /// peer. Post-compaction: pre-checkpoint writes fold into the synthetic
+    /// Checkpoint entry and are not individually recoverable.
+    ///
+    /// Cost: linear scan over the OpLog. Unmeasured; not optimized.
+    fn entries_affecting(&self, id: &str) -> PyResult<Vec<PyObject>> {
+        let entries = self.backend.oplog().entries_affecting(id);
+        Python::with_gil(|py| entries.iter().map(|e| entry_to_pydict(py, e)).collect())
+    }
+
     // -- Graph queries --
 
     /// Get a node by ID. Returns dict or None.

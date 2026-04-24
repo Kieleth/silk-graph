@@ -90,6 +90,11 @@ impl OpLog {
     }
 
     /// Get an entry by hash.
+    /// Iterator over all (hash, entry) pairs. Used by provenance scans.
+    pub(crate) fn iter_entries(&self) -> impl Iterator<Item = (&Hash, &Entry)> {
+        self.entries.iter()
+    }
+
     pub fn get(&self, hash: &Hash) -> Option<&Entry> {
         self.entries.get(hash)
     }

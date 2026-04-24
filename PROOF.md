@@ -353,3 +353,75 @@ Therefore, under the safety precondition, compaction preserves convergence. ∎
 ---
 
 *Proof structure follows Shapiro et al. (2011) Section 3.2: state-based CRDT convergence via join-semilattice properties. The OpLog entry set forms a join-semilattice under set union. Materialization is a monotonic function from the lattice to the graph domain. Quarantine and ontology evolution preserve monotonicity.*
+
+---
+
+## Appendix A: Provenance Observation
+
+This appendix formalizes the algebras already in use in Silk's materialized graph, then states two additional theorems that justify the read-only `store.entries_affecting(id)` API.
+
+### A.1 Feynman toy example
+
+Two peers, identical ontology. Walk through the clocks.
+
+1. Peer A at clock 5 appends `AddNode("node-1", name="foo")`. A's OpLog now has `[genesis, add_node_1]`.
+2. Peer B at clock 10 appends `RemoveNode("node-1")`. B's OpLog has `[genesis, remove_node_1]`.
+3. Peer A at clock 8 appends `AddEdge("e1", source="node-1", target="node-2")`. A's OpLog: `[genesis, add_node_1, add_edge_1]`.
+4. Bidirectional sync. Both OpLogs converge to `{genesis, add_node_1, remove_node_1, add_edge_1}`.
+
+What does the materialized graph show?
+
+- `node-1.last_add_clock = 5`, `remove_clock = 10`. Add-wins requires `remove_clock > last_add_clock` to tombstone; 10 > 5 is true, so `node-1` is tombstoned.
+- `e1` stays in the graph but `is_node_live(source)` filters it out of queries, so `get_edge("e1")` returns `None` on both peers.
+
+What does `store.entries_affecting("node-1")` return on either peer? The three entries that mention `node-1` by id or by edge endpoint: `add_node_1`, `remove_node_1`, `add_edge_1`, in topological order. A consumer reading this result can answer *why* the node is gone by inspecting the clocks: the tombstone's clock 10 beats the add's clock 5, and add-wins requires strict inequality (satisfied).
+
+The formalism below names what just happened.
+
+### A.2 The two algebras: clock and existence semilattices
+
+Following Shapiro, Preguiça, Baquero, Zawirski (2011) [CRDT], a CRDT converges under arbitrary delivery order iff its state lives in a join-semilattice: a set with a single idempotent commutative associative join operation ⊔. Merging two states is `s₁ ⊔ s₂`.
+
+Silk composes two independent join-semilattices in the materialized graph.
+
+**Clock semilattice.** The set is `HybridClock` values. The join is `max` under the lexicographic order `(physical_ms, logical, reverse(author_id))` implemented by `clock_wins` in `src/graph.rs`. Identity: the genesis clock. The operation is idempotent (`a ⊔ a = a`), commutative (`a ⊔ b = b ⊔ a`), and associative (`(a ⊔ b) ⊔ c = a ⊔ (b ⊔ c)`) by properties of `max` on a totally ordered tuple. Used for `property_clocks`, `last_clock`, and `last_add_clock`.
+
+**Existence semilattice.** For each id, the state is one of `{NeverExisted, Tombstoned, Live}`. The join is not a linear order: under add-wins, `Live ⊔ Tombstoned = Live` when `last_add_clock ≥ remove_clock`, else `Tombstoned`. Identity: `NeverExisted`. Idempotence, commutativity, and associativity follow because the decision is driven by the clock semilattice, which is itself idempotent/commutative/associative. Used for the `tombstoned: bool` flag in `src/graph.rs:27,43`.
+
+These two algebras are independent. Existence resolution does not depend on which property clocks are in flight; per-property resolution matters only inside `Live`.
+
+### Theorem 4: Composition of the Clock and Existence Semilattices
+
+**Statement**: the product `Clock × Existence` under pairwise join is itself a join-semilattice. Merging two materialized graphs equals pairwise-joining every `(id, clock, existence)` triple.
+
+**Proof sketch**: the direct product of two join-semilattices is a join-semilattice — a standard algebraic result. Silk's `apply_*` functions implement the product join exactly: `apply_remove_node` consults the Clock semilattice (`clock_wins(clock, &node.last_add_clock)`) to decide the Existence join verdict (`tombstoned = true`). Independence of the two projections ensures the product structure is well-defined. Convergence follows from Theorem 3 applied to the product state. ∎
+
+### Theorem 5: Provenance Observation
+
+**Statement**: given an OpLog `L` and an id `i`, let `affect(L, i)` be the set of entries in `L` whose `GraphOp` payload references `i` (as `node_id`, `edge_id`, `source_id`, `target_id`, `entity_id`, or recursively inside a `Checkpoint`'s embedded ops). Then `store.entries_affecting(i)` returns exactly the topologically ordered sequence of entries in `affect(L, i)`, deterministic over `L` alone.
+
+**Proof sketch**: `entries_affecting` (`src/provenance.rs`) scans every entry in the OpLog, applies `payload_mentions_id` to the payload, and passes the matching hash set through `OpLog::topo_sort` (`src/oplog.rs:263`). Topological sort is deterministic on a fixed DAG (proved in Theorem 1). No state outside the OpLog is consulted. Two peers with byte-identical OpLogs after sync (Theorem 3) therefore produce byte-identical results. ∎
+
+**Corollary (CRDT safety)**: any function built on top of `entries_affecting` inherits convergence without needing to handle sync itself. A consumer that computes a typed provenance view (e.g. "winning entry per property" or "all contributors including quarantined attempts") from the returned `Vec<&Entry>` is automatically CRDT-safe provided it is a pure function of the input sequence.
+
+### A.3 When semirings would become relevant
+
+Silk today resolves conflicts point-wise via a single operation. That is join-semilattice territory. Green, Karvounarakis, Tannen (2007) [Semirings] use two-operation algebras (⊕ for alternatives, ⊗ for combinations) to track how provenance annotations compose as they flow through relational operators: join, projection, union. Semirings are the right algebra for that problem; semilattices are not.
+
+If Silk ever gains query-time provenance propagation — "for this graph traversal result, which input entries contributed, through which derivation path?" — that is when semirings earn their keep. Each flavor of provenance has its own semiring:
+
+- Lineage (which inputs survived): set-union semiring.
+- Why-provenance (which inputs justified it): set-of-sets semiring.
+- How-provenance (full derivation tree): free polynomial semiring.
+
+`entries_affecting` is a *static* per-id extraction, not a compositional query. It sits inside the semilattice regime. This subsection marks the boundary: today's algebra is a semilattice; query-time provenance would require the semiring upgrade, at which point Green et al. becomes the primary reference.
+
+### A.4 Related work
+
+**Buneman, Khanna, Tan (2001), "Why and Where: A Characterization of Data Provenance."** Distinguishes *why-provenance* (the set of input rows justifying an output) from *where-provenance* (the specific source cell). Grounds the design choice in Task B: `entries_affecting` returns a set; callers derive where-provenance by filtering to the clock winner and why-provenance by retaining all contributors.
+
+**Shapiro, Preguiça, Baquero, Zawirski (2011), "Conflict-Free Replicated Data Types."** The join-semilattice vocabulary used throughout this appendix. Primary theoretical reference for Theorem 4's composition argument.
+
+**Green, Karvounarakis, Tannen (2007), "Provenance Semirings."** Cited in §A.3 as forward-looking only. Not applicable to Silk's current algebra; reserved for the moment we add query-time provenance propagation.
+
+**Helland (2015), "Immutability Changes Everything."** Deletion in append-only systems is always a new entry, never physical erasure. Silk already embodies this: `RemoveNode` is an Entry, tombstones are computed views. `entries_affecting` is the "ask the log" surface that makes deletion provenance first-class.

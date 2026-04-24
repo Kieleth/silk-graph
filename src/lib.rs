@@ -8,6 +8,7 @@ pub mod graph;
 pub mod obslog;
 pub mod ontology;
 pub mod oplog;
+pub mod provenance;
 #[cfg(feature = "python")]
 mod python;
 pub mod store;
