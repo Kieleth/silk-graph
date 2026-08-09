@@ -221,6 +221,81 @@ def test_compact_persistent_store(tmp_path):
     assert store2.len() == 1
 
 
+# -- Reopen after compaction with extended ontology --
+#
+# Compaction folds ExtendOntology entries into the checkpoint's inner
+# DefineOntology. Replay must apply that ontology or every extension-typed
+# entity fails validation and quarantines — a reopened store materializes
+# without them (observed in production: near-empty graph after reopen).
+
+
+EXTENSION = {"node_types": {"signal": {"properties": {}}}}
+
+
+def _compacted_extended_store(path):
+    store = GraphStore("test", ONTOLOGY, path=path)
+    store.extend_ontology(EXTENSION)
+    store.add_node("n1", "entity", "Base-typed")
+    store.add_node("s1", "signal", "Extension-typed")
+    store.compact()
+    return store
+
+
+def test_ctor_reopen_compacted_preserves_extension_nodes(tmp_path):
+    """Constructor reopen (declared = base ontology) keeps extension-typed nodes."""
+    path = str(tmp_path / "ctor.redb")
+    store = _compacted_extended_store(path)
+    del store
+
+    store2 = GraphStore("test", ONTOLOGY, path=path)
+    assert store2.get_node("n1") is not None
+    assert store2.get_node("s1") is not None
+    assert len(store2.all_nodes()) == 2
+
+
+def test_open_reopen_compacted_preserves_extension_nodes(tmp_path):
+    """GraphStore.open parity: same store, same result."""
+    path = str(tmp_path / "open.redb")
+    store = _compacted_extended_store(path)
+    del store
+
+    store2 = GraphStore.open(path)
+    assert store2.get_node("n1") is not None
+    assert store2.get_node("s1") is not None
+    assert len(store2.all_nodes()) == 2
+
+
+def test_ctor_reopen_compacted_ontology_is_merged(tmp_path):
+    """After reopen, the checkpoint's merged ontology is in effect:
+    extension types accept new writes and further extensions still work."""
+    path = str(tmp_path / "merged.redb")
+    store = _compacted_extended_store(path)
+    del store
+
+    store2 = GraphStore("test", ONTOLOGY, path=path)
+    store2.add_node("s2", "signal", "New extension-typed write")
+    assert store2.get_node("s2") is not None
+
+    store2.extend_ontology({"node_types": {"verdict": {"properties": {}}}})
+    store2.add_node("v1", "verdict", "Post-reopen extension")
+    assert store2.get_node("v1") is not None
+
+
+def test_sync_checkpoint_bootstrap_preserves_extension_nodes(tmp_path):
+    """A checkpoint arriving via sync materializes extension-typed nodes
+    on a peer whose declared ontology is only the base."""
+    path = str(tmp_path / "sync-src.redb")
+    store_a = _compacted_extended_store(path)
+    store_b = GraphStore("peer-b", ONTOLOGY)
+
+    offer_b = store_b.generate_sync_offer()
+    payload = store_a.receive_sync_offer(offer_b)
+    store_b.merge_sync_payload(payload)
+
+    assert store_b.get_node("n1") is not None
+    assert store_b.get_node("s1") is not None
+
+
 # -- Disk reclamation (file size) --
 
 

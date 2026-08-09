@@ -101,6 +101,16 @@ impl MaterializedGraph {
                 // R-08: Replay synthetic ops to restore graph state.
                 // Bug 6 fix: use per-op clocks (preserves LWW metadata).
                 for (i, op) in ops.iter().enumerate() {
+                    // Bug 14 fix: compaction folds every ExtendOntology into the
+                    // checkpoint's inner DefineOntology. Apply it — otherwise
+                    // extension-typed entities fail validation and quarantine on
+                    // replay, and a reopened store materializes without them.
+                    // The oplog is authoritative; a declared ontology only seeds
+                    // new stores.
+                    if let GraphOp::DefineOntology { ontology } = op {
+                        self.ontology = ontology.clone();
+                        continue;
+                    }
                     let clock = if i < op_clocks.len() {
                         LamportClock::with_values(&entry.author, op_clocks[i].0, op_clocks[i].1)
                     } else {
@@ -1278,5 +1288,52 @@ mod tests {
         let node = g.get_node("s1").unwrap();
         assert_eq!(node.label, "s1 v2");
         assert!(!node.tombstoned);
+    }
+
+    /// Bug 14: a checkpoint's inner DefineOntology carries the merged ontology
+    /// (compaction folds ExtendOntology entries into it). Replay must apply it,
+    /// or entities typed by an extension quarantine and vanish from the graph.
+    #[test]
+    fn checkpoint_replay_applies_inner_define_ontology() {
+        // Base ontology: "entity" only — no "signal".
+        let mut base = test_ontology();
+        base.node_types.remove("signal");
+        base.edge_types.remove("OBSERVES");
+        let mut g = MaterializedGraph::new(base);
+
+        let checkpoint = make_entry(
+            GraphOp::Checkpoint {
+                ops: vec![
+                    GraphOp::DefineOntology {
+                        ontology: test_ontology(), // merged: has "signal"
+                    },
+                    GraphOp::AddNode {
+                        node_id: "n1".into(),
+                        node_type: "entity".into(),
+                        label: "base-typed".into(),
+                        properties: BTreeMap::new(),
+                        subtype: None,
+                    },
+                    GraphOp::AddNode {
+                        node_id: "s1".into(),
+                        node_type: "signal".into(),
+                        label: "extension-typed".into(),
+                        properties: BTreeMap::new(),
+                        subtype: None,
+                    },
+                ],
+                op_clocks: vec![(1, 0), (1, 1), (1, 2)],
+                compacted_at_physical_ms: 1,
+                compacted_at_logical: 2,
+            },
+            1,
+            "inst-a",
+        );
+        g.apply(&checkpoint);
+
+        assert!(g.get_node("n1").is_some());
+        assert!(g.get_node("s1").is_some(), "extension-typed node lost");
+        assert!(g.ontology.node_types.contains_key("signal"));
+        assert!(g.quarantined.is_empty());
     }
 }
