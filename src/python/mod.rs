@@ -1272,9 +1272,12 @@ impl PyGraphStore {
     /// SAFETY: Only call when ALL peers have synced to current state.
     /// Compact the oplog into a single checkpoint entry.
     /// If `safe` is true (default), verifies all known peers have synced
-    /// before compacting. Returns the checkpoint hash.
-    #[pyo3(signature = (safe = true))]
-    fn compact(&mut self, safe: bool) -> PyResult<String> {
+    /// before compacting. If `reclaim_disk` is true, also shrinks the
+    /// database file via redb compaction (no-op for in-memory stores);
+    /// otherwise the file stays at its high-water mark.
+    /// Returns the checkpoint hash.
+    #[pyo3(signature = (safe = true, reclaim_disk = false))]
+    fn compact(&mut self, safe: bool, reclaim_disk: bool) -> PyResult<String> {
         if safe {
             let (is_safe, reasons) = self.verify_compaction_safe();
             if !is_safe {
@@ -1308,6 +1311,11 @@ impl PyGraphStore {
                 store
                     .replace_with_checkpoint(checkpoint)
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                if reclaim_disk {
+                    store
+                        .reclaim_disk()
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                }
             }
         }
 

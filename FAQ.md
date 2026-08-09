@@ -489,6 +489,22 @@ store.compact(safe=False)
 
 Register peers via `store.register_peer(id, address)` and record syncs via `store.record_sync(id)`. If no peers are registered, compaction is always safe (single-node system).
 
+### Does compaction shrink the database file?
+
+Not by default. `compact()` folds the oplog into one checkpoint, but the redb file stays at its high-water mark; freed pages are reused for new writes, the file itself never shrinks. Pass `reclaim_disk=True` to also shrink the file:
+
+```python
+store.compact(reclaim_disk=True)
+
+# Or via the built-in policies
+policy = ThresholdPolicy(max_entries=1000, reclaim_disk=True)
+```
+
+No-op for in-memory stores. Two things to know if you monitor store health by file size:
+
+1. redb keeps a minimum file size of a few hundred KB for its region structure, so a near-empty store won't shrink below that floor.
+2. Removing entities never shrinks anything on its own. Deletes are tombstones plus an appended oplog entry, so a cleanup pass makes the store slightly bigger until `compact()` runs. Entry count (`store.len()`) is the honest health metric; file size only drops after `compact(reclaim_disk=True)`.
+
 ---
 
 ### How much memory does Silk use?

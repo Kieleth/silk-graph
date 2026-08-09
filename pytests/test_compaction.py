@@ -221,6 +221,73 @@ def test_compact_persistent_store(tmp_path):
     assert store2.len() == 1
 
 
+# -- Disk reclamation (file size) --
+
+
+def _bloat(store, n=500):
+    """Write and remove n nodes to grow the store file."""
+    filler = "x" * 200
+    for i in range(n):
+        store.add_node(f"debris-{i}", "entity", f"Debris {i}", {"status": filler})
+    for i in range(n):
+        store.remove_node(f"debris-{i}")
+
+
+def test_compact_default_leaves_file_at_high_water_mark(tmp_path):
+    """Default compact() folds the oplog but does NOT shrink the file."""
+    import os
+
+    path = str(tmp_path / "hwm.redb")
+    store = GraphStore("test", ONTOLOGY, path=path)
+    store.add_node("keep", "entity", "Keep")
+    _bloat(store)
+
+    size_before = os.path.getsize(path)
+    store.compact()
+    assert store.len() == 1
+
+    assert os.path.getsize(path) >= size_before
+
+
+def test_compact_reclaim_disk_shrinks_file(tmp_path):
+    """compact(reclaim_disk=True) shrinks the file below high-water mark."""
+    import os
+
+    path = str(tmp_path / "reclaim.redb")
+    store = GraphStore("test", ONTOLOGY, path=path)
+    store.add_node("keep", "entity", "Keep")
+    _bloat(store)
+
+    size_before = os.path.getsize(path)
+    store.compact(reclaim_disk=True)
+    assert store.len() == 1
+
+    assert os.path.getsize(path) < size_before / 2
+
+
+def test_compact_reclaim_disk_preserves_data(tmp_path):
+    """Store reopens correctly after disk reclamation."""
+    path = str(tmp_path / "reopen.redb")
+    store = GraphStore("test", ONTOLOGY, path=path)
+    store.add_node("keep", "entity", "Keep", {"status": "active"})
+    _bloat(store, n=50)
+    store.compact(reclaim_disk=True)
+    del store
+
+    store2 = GraphStore.open(path)
+    assert store2.get_node("keep")["properties"]["status"] == "active"
+    assert store2.get_node("debris-0") is None
+    assert store2.len() == 1
+
+
+def test_compact_reclaim_disk_inmemory_noop():
+    """reclaim_disk on an in-memory store is a no-op, not an error."""
+    store = _store()
+    store.add_node("n1", "entity", "Node")
+    store.compact(reclaim_disk=True)
+    assert store.len() == 1
+
+
 # -- create_checkpoint (inspection) --
 
 

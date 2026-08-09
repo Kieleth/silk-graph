@@ -65,10 +65,13 @@ class IntervalPolicy:
 
     Args:
         seconds: Minimum interval between compactions.
+        reclaim_disk: Also shrink the database file on compaction
+            (no-op for in-memory stores).
     """
 
-    def __init__(self, seconds: float):
+    def __init__(self, seconds: float, reclaim_disk: bool = False):
         self.seconds = seconds
+        self.reclaim_disk = reclaim_disk
         self._last_compact: float = 0.0
 
     def should_compact(self, store: Any) -> bool:
@@ -76,7 +79,7 @@ class IntervalPolicy:
 
     def check(self, store: Any) -> str | None:
         if self.should_compact(store):
-            h = store.compact()
+            h = store.compact(reclaim_disk=self.reclaim_disk)
             self._last_compact = time.time()
             return h
         return None
@@ -90,15 +93,18 @@ class ThresholdPolicy:
 
     Args:
         max_entries: Compact when store.len() exceeds this.
+        reclaim_disk: Also shrink the database file on compaction
+            (no-op for in-memory stores).
     """
 
-    def __init__(self, max_entries: int = 1000):
+    def __init__(self, max_entries: int = 1000, reclaim_disk: bool = False):
         self.max_entries = max_entries
+        self.reclaim_disk = reclaim_disk
 
     def should_compact(self, store: Any) -> bool:
         return store.len() > self.max_entries
 
     def check(self, store: Any) -> str | None:
         if self.should_compact(store):
-            return store.compact()
+            return store.compact(reclaim_disk=self.reclaim_disk)
         return None

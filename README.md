@@ -513,6 +513,7 @@ Query(store, engine=MyEngine()).raw("FIND servers WHERE status=active")
 ```python
 # Compaction (R-08)
 store.compact()                                             # compress oplog → checkpoint, returns hex hash
+store.compact(reclaim_disk=True)                            # also shrink the redb file (else it stays at high-water mark)
 checkpoint_bytes = store.create_checkpoint()                # inspect checkpoint without compacting
 ```
 
@@ -680,6 +681,7 @@ For long-running systems, use `store.compact()` (R-08) to bound oplog size:
 - All live nodes, edges, and ontology extensions preserved
 - Tombstoned entities excluded (clean slate)
 - Oplog goes from N entries to 1
+- Disk: the redb file stays at its high-water mark by default. Pass `compact(reclaim_disk=True)` to also shrink the file (persistent stores only; no-op in memory).
 
 Safety: only call `compact()` when all known peers have synced to current state. A compacted store can bootstrap new peers via `snapshot()`.
 

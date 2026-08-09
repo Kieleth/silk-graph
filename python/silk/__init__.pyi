@@ -414,10 +414,15 @@ class GraphStore:
         The checkpoint contains synthetic ops that reconstruct the full graph.
         """
         ...
-    def compact(self) -> str:
+    def compact(self, safe: bool = True, reclaim_disk: bool = False) -> str:
         """R-08: Compact the oplog. Creates a checkpoint of current state,
         replaces entire oplog with the checkpoint entry.
         Returns the hex hash of the checkpoint entry.
+
+        If `safe` is True (default), raises RuntimeError unless all known
+        peers have synced. If `reclaim_disk` is True, also shrinks the
+        database file via redb compaction (no-op for in-memory stores);
+        otherwise the file stays at its high-water mark.
 
         SAFETY: Only call when ALL peers have synced to current state.
         After compaction, the oplog contains a single checkpoint entry

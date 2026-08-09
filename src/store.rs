@@ -232,6 +232,13 @@ impl Store {
         Ok(())
     }
 
+    /// Shrink the database file by reclaiming free pages (redb compaction).
+    /// The file otherwise stays at its high-water mark after `replace_with_checkpoint`.
+    /// Returns true if the file shrank.
+    pub fn reclaim_disk(&mut self) -> Result<bool, StoreError> {
+        self.db.compact().map_err(|e| StoreError::Io(e.to_string()))
+    }
+
     /// Persist a single entry + updated heads in one redb transaction.
     fn persist_entry_and_heads(&self, entry: &Entry) -> Result<(), StoreError> {
         let txn = self

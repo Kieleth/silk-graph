@@ -171,3 +171,40 @@ def test_builtin_policies_implement_protocol():
     """Built-in policies satisfy the protocol."""
     assert isinstance(IntervalPolicy(seconds=60), CompactionPolicy)
     assert isinstance(ThresholdPolicy(max_entries=100), CompactionPolicy)
+
+
+# -- reclaim_disk pass-through --
+
+
+def test_policies_pass_reclaim_disk(tmp_path):
+    """Policies with reclaim_disk=True shrink the file when they compact."""
+    import os
+
+    path = str(tmp_path / "policy.redb")
+    ontology = {
+        "node_types": {"entity": {"properties": {"status": {"value_type": "string"}}}},
+        "edge_types": {}
+    }
+    store = GraphStore("test", ontology, path=path)
+    filler = "x" * 200
+    for i in range(300):
+        store.add_node(f"n{i}", "entity", f"Node {i}", {"status": filler})
+    for i in range(300):
+        store.remove_node(f"n{i}")
+
+    size_before = os.path.getsize(path)
+    policy = ThresholdPolicy(max_entries=10, reclaim_disk=True)
+    result = policy.check(store)
+    assert result is not None
+    assert store.len() == 1
+    assert os.path.getsize(path) < size_before / 2
+
+
+def test_interval_policy_accepts_reclaim_disk():
+    """IntervalPolicy carries the flag; in-memory store is a no-op."""
+    store = _store()
+    store.add_node("n1", "entity", "A")
+    policy = IntervalPolicy(seconds=0, reclaim_disk=True)
+    result = policy.check(store)
+    assert result is not None
+    assert store.len() == 1
