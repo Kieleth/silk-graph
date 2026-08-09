@@ -281,6 +281,72 @@ def test_ctor_reopen_compacted_ontology_is_merged(tmp_path):
     assert store2.get_node("v1") is not None
 
 
+# Bug 14b: build_checkpoint_ops emits AddNode with EMPTY properties (EXP-02:
+# per-property LWW clocks ride in separate UpdateProperty ops). Replay must
+# not validate those synthetic ops — a required property fails against the
+# empty map and quarantines the node, losing it plus all its property ops.
+
+REQ_ONTOLOGY = {
+    "node_types": {
+        "entity": {
+            "properties": {"name": {"value_type": "string", "required": True}}
+        },
+        "host": {
+            "properties": {},
+            "subtypes": {
+                "server": {
+                    "properties": {"role": {"value_type": "string", "required": True}}
+                }
+            },
+        },
+    },
+    "edge_types": {},
+}
+
+
+def _compacted_required_store(path):
+    store = GraphStore("test", REQ_ONTOLOGY, path=path)
+    store.add_node("n1", "entity", "Required prop", {"name": "x"})
+    store.add_node("h1", "host", "Subtyped required", {"role": "db"}, subtype="server")
+    store.compact()
+    return store
+
+
+def _assert_required_nodes(store):
+    n = store.get_node("n1")
+    assert n is not None, "required-property node lost"
+    assert n["properties"]["name"] == "x"
+    h = store.get_node("h1")
+    assert h is not None, "subtyped required-property node lost"
+    assert h["subtype"] == "server"
+    assert h["properties"]["role"] == "db"
+
+
+def test_ctor_reopen_compacted_preserves_required_property_nodes(tmp_path):
+    """Bug 14b via the constructor path."""
+    path = str(tmp_path / "req-ctor.redb")
+    store = _compacted_required_store(path)
+    del store
+    _assert_required_nodes(GraphStore("test", REQ_ONTOLOGY, path=path))
+
+
+def test_open_reopen_compacted_preserves_required_property_nodes(tmp_path):
+    """Bug 14b via GraphStore.open — unlike Bug 14, both open paths are hit."""
+    path = str(tmp_path / "req-open.redb")
+    store = _compacted_required_store(path)
+    del store
+    _assert_required_nodes(GraphStore.open(path))
+
+
+def test_compact_in_place_preserves_required_property_nodes(tmp_path):
+    """Rebuild after a post-compaction sync replays the checkpoint in-process."""
+    path = str(tmp_path / "req-live.redb")
+    store = _compacted_required_store(path)
+    _assert_required_nodes(store)
+    store.extend_ontology({"node_types": {"note": {"properties": {}}}})
+    _assert_required_nodes(store)
+
+
 def test_sync_checkpoint_bootstrap_preserves_extension_nodes(tmp_path):
     """A checkpoint arriving via sync materializes extension-typed nodes
     on a peer whose declared ontology is only the base."""

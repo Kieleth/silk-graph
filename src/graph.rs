@@ -96,6 +96,17 @@ impl MaterializedGraph {
     /// skipped for materialization. They remain in the oplog for CRDT
     /// convergence — quarantine is a graph-layer concern, not an oplog concern.
     pub fn apply(&mut self, entry: &Entry) {
+        self.apply_entry(entry, false)
+    }
+
+    /// Core of `apply`. `trusted` is true only for a checkpoint's inner ops:
+    /// they were validated when first written and replay under the
+    /// checkpoint's own ontology, and build_checkpoint_ops emits AddNode with
+    /// empty properties by design (EXP-02) — re-validation would fail any
+    /// required property and quarantine the entity (Bug 14b). Quarantining
+    /// them is meaningless anyway: synthetic entry hashes don't exist in the
+    /// oplog. Compaction must reproduce the materialized graph exactly.
+    fn apply_entry(&mut self, entry: &Entry, trusted: bool) {
         match &entry.payload {
             GraphOp::Checkpoint { ops, op_clocks, .. } => {
                 // R-08: Replay synthetic ops to restore graph state.
@@ -117,7 +128,7 @@ impl MaterializedGraph {
                         entry.clock.clone() // fallback for old checkpoints without op_clocks
                     };
                     let synthetic = Entry::new(op.clone(), vec![], vec![], clock, &entry.author);
-                    self.apply(&synthetic);
+                    self.apply_entry(&synthetic, true);
                 }
             }
             GraphOp::DefineOntology { .. } => {
@@ -125,7 +136,9 @@ impl MaterializedGraph {
             }
             GraphOp::ExtendOntology { extension } => {
                 if let Err(_e) = self.ontology.merge_extension(extension) {
-                    self.quarantined.insert(entry.hash);
+                    if !trusted {
+                        self.quarantined.insert(entry.hash);
+                    }
                 }
             }
             GraphOp::AddNode {
@@ -136,12 +149,14 @@ impl MaterializedGraph {
                 properties,
             } => {
                 // R-02: validate against ontology, quarantine if invalid
-                if let Err(_e) =
-                    self.ontology
-                        .validate_node(node_type, subtype.as_deref(), properties)
-                {
-                    self.quarantined.insert(entry.hash);
-                    return;
+                if !trusted {
+                    if let Err(_e) =
+                        self.ontology
+                            .validate_node(node_type, subtype.as_deref(), properties)
+                    {
+                        self.quarantined.insert(entry.hash);
+                        return;
+                    }
                 }
                 self.apply_add_node(
                     node_id,
@@ -159,25 +174,27 @@ impl MaterializedGraph {
                 target_id,
                 properties,
             } => {
-                // R-02: validate edge type exists.
-                if !self.ontology.edge_types.contains_key(edge_type.as_str()) {
-                    self.quarantined.insert(entry.hash);
-                    return;
-                }
-                // Bug 13 fix: validate source/target type constraints when both nodes
-                // are materialized. If one is missing (out-of-order sync), skip —
-                // validation happens on rebuild.
-                if let (Some(src), Some(tgt)) = (
-                    self.nodes.get(source_id.as_str()),
-                    self.nodes.get(target_id.as_str()),
-                ) {
-                    if self
-                        .ontology
-                        .validate_edge(edge_type, &src.node_type, &tgt.node_type, properties)
-                        .is_err()
-                    {
+                if !trusted {
+                    // R-02: validate edge type exists.
+                    if !self.ontology.edge_types.contains_key(edge_type.as_str()) {
                         self.quarantined.insert(entry.hash);
                         return;
+                    }
+                    // Bug 13 fix: validate source/target type constraints when both nodes
+                    // are materialized. If one is missing (out-of-order sync), skip —
+                    // validation happens on rebuild.
+                    if let (Some(src), Some(tgt)) = (
+                        self.nodes.get(source_id.as_str()),
+                        self.nodes.get(target_id.as_str()),
+                    ) {
+                        if self
+                            .ontology
+                            .validate_edge(edge_type, &src.node_type, &tgt.node_type, properties)
+                            .is_err()
+                        {
+                            self.quarantined.insert(entry.hash);
+                            return;
+                        }
                     }
                 }
                 self.apply_add_edge(
@@ -1334,6 +1351,60 @@ mod tests {
         assert!(g.get_node("n1").is_some());
         assert!(g.get_node("s1").is_some(), "extension-typed node lost");
         assert!(g.ontology.node_types.contains_key("signal"));
+        assert!(g.quarantined.is_empty());
+    }
+
+    /// Bug 14b: build_checkpoint_ops emits AddNode with empty properties
+    /// (EXP-02: per-property clocks ride in separate UpdateProperty ops).
+    /// Replay must trust checkpoint inner ops — validating them fails any
+    /// required property against the empty map and quarantines the node.
+    #[test]
+    fn checkpoint_replay_trusts_inner_ops() {
+        use crate::ontology::{PropertyDef, ValueType};
+
+        let mut ont = test_ontology();
+        ont.node_types.get_mut("entity").unwrap().properties.insert(
+            "name".into(),
+            PropertyDef {
+                value_type: ValueType::String,
+                required: true,
+                description: None,
+                constraints: None,
+            },
+        );
+        let mut g = MaterializedGraph::new(ont.clone());
+
+        let checkpoint = make_entry(
+            GraphOp::Checkpoint {
+                ops: vec![
+                    GraphOp::DefineOntology { ontology: ont },
+                    GraphOp::AddNode {
+                        node_id: "n1".into(),
+                        node_type: "entity".into(),
+                        label: "req".into(),
+                        properties: BTreeMap::new(), // empty by design
+                        subtype: None,
+                    },
+                    GraphOp::UpdateProperty {
+                        entity_id: "n1".into(),
+                        key: "name".into(),
+                        value: Value::String("x".into()),
+                    },
+                ],
+                op_clocks: vec![(1, 0), (1, 1), (1, 2)],
+                compacted_at_physical_ms: 1,
+                compacted_at_logical: 2,
+            },
+            1,
+            "inst-a",
+        );
+        g.apply(&checkpoint);
+
+        let node = g.get_node("n1").expect("required-property node lost");
+        assert_eq!(
+            node.properties.get("name"),
+            Some(&Value::String("x".into()))
+        );
         assert!(g.quarantined.is_empty());
     }
 }
