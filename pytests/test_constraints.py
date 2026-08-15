@@ -136,26 +136,47 @@ def test_no_constraints_still_works():
     assert store.get_node("n1") is not None
 
 
-# -- Unknown constraints ignored (forward compat) --
+# -- Unknown constraints: explicit, not silent (S3) --
 
 
-def test_unknown_constraint_ignored():
-    """Unknown constraint names are silently ignored."""
-    store = GraphStore("test", {
+def _ont_with(constraints):
+    return {
         "node_types": {
             "entity": {
                 "properties": {
-                    "name": {
-                        "value_type": "string",
-                        "constraints": {"future_validator": "some_config"}
-                    }
+                    "name": {"value_type": "string", "constraints": constraints}
                 }
             }
         },
         "edge_types": {}
-    })
+    }
+
+
+def test_unknown_constraint_rejected():
+    """S3: an unenforced constraint name used to be accepted silently, which
+    made a typo indistinguishable from a rule — inert forever, and invisible
+    to the fingerprint. Forward compatibility now has to be declared."""
+    with pytest.raises(ValueError) as exc:
+        GraphStore("test", _ont_with({"future_validator": "some_config"}))
+    assert "future_validator" in str(exc.value)
+
+
+def test_unenforced_constraint_prefix_is_accepted():
+    """S3: the `x_` prefix keeps forward compatibility available, as a choice."""
+    store = GraphStore("test", _ont_with({"x_future_validator": "some_config"}))
     store.add_node("n1", "entity", "Node", {"name": "works fine"})
     assert store.get_node("n1") is not None
+
+
+def test_typo_of_a_real_constraint_is_caught():
+    """S3: the case that motivated this — 'maximum' for 'max'."""
+    with pytest.raises(ValueError) as exc:
+        GraphStore("test", {
+            "node_types": {"s": {"properties": {
+                "cpu": {"value_type": "int", "constraints": {"maximum": 8}}}}},
+            "edge_types": {}
+        })
+    assert "maximum" in str(exc.value)
 
 
 # -- Constraints via extend_ontology --

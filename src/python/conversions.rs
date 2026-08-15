@@ -69,12 +69,23 @@ fn py_any_to_json(obj: &Bound<'_, pyo3::PyAny>) -> PyResult<serde_json::Value> {
 
 /// Extract ontology from a genesis entry (DefineOntology or Checkpoint).
 pub fn extract_ontology_from_genesis(entry: &Entry) -> PyResult<Ontology> {
+    // S8: `open()` and `from_snapshot()` reached the ontology through here and
+    // never checked its internal consistency, so two of the four ontology
+    // entry points admitted a genesis whose edge endpoints or parent_type
+    // referenced types that do not exist. Gate it once, here, where every
+    // extraction path meets.
+    fn checked(ontology: &Ontology) -> PyResult<Ontology> {
+        ontology.validate_self().map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("invalid genesis ontology: {e}"))
+        })?;
+        Ok(ontology.clone())
+    }
     match &entry.payload {
-        GraphOp::DefineOntology { ontology } => Ok(ontology.clone()),
+        GraphOp::DefineOntology { ontology } => checked(ontology),
         GraphOp::Checkpoint { ops, .. } => {
             for op in ops {
                 if let GraphOp::DefineOntology { ontology } = op {
-                    return Ok(ontology.clone());
+                    return checked(ontology);
                 }
             }
             Err(pyo3::exceptions::PyRuntimeError::new_err(

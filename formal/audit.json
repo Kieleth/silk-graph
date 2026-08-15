@@ -110,9 +110,12 @@
     {
       "claim_id": "I-06",
       "kind": "invariant",
-      "rust_tests": [],
+      "rust_tests": [
+        "src/graph.rs"
+      ],
       "python_tests": [
-        "pytests/test_invariants.py"
+        "pytests/test_invariants.py",
+        "pytests/test_quarantine.py"
       ],
       "tla_specs": [
         "formal/README.md"

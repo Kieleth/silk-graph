@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::clock::LamportClock;
 use crate::entry::{Entry, GraphOp, Hash, Value};
-use crate::ontology::Ontology;
+use crate::ontology::{Ontology, ValidationMode};
 
 /// A materialized node in the graph.
 #[derive(Debug, Clone, PartialEq)]
@@ -66,6 +66,15 @@ pub struct MaterializedGraph {
     pub by_type: HashMap<String, HashSet<String>>,
     /// The ontology (for validation during materialization)
     pub ontology: Ontology,
+    /// The ontology this graph started from, before any `ExtendOntology` was
+    /// replayed. `rebuild` resets to it so that replaying the log is
+    /// idempotent: without this, an extension already folded into `ontology`
+    /// is re-merged on rebuild, fails as a duplicate, and quarantines the
+    /// store's own schema entry. It also makes the effective ontology a
+    /// function of (base, oplog) rather than of how many rebuilds have run,
+    /// which is what I-06's proof assumes when it says both peers replay
+    /// "against the same evolved ontology".
+    base_ontology: Ontology,
     /// R-02: entries that failed ontology validation during apply().
     /// These entries exist in the oplog (for CRDT convergence) but are
     /// invisible in the materialized graph. Grow-only within a single
@@ -73,6 +82,12 @@ pub struct MaterializedGraph {
     /// allows previously-quarantined entries to be re-evaluated when the
     /// ontology evolves (e.g., after ExtendOntology arrives via sync).
     pub quarantined: HashSet<Hash>,
+    /// S9: edges that arrived before their endpoints. Held (and reported
+    /// quarantined) until both endpoints materialize, then re-evaluated with
+    /// full endpoint-type validation. Previously such edges were admitted
+    /// unvalidated on the promise of a rebuild that only fires when the merge
+    /// batch happens to carry a schema change.
+    pending_edges: HashMap<Hash, Entry>,
 }
 
 impl MaterializedGraph {
@@ -84,8 +99,10 @@ impl MaterializedGraph {
             outgoing: HashMap::new(),
             incoming: HashMap::new(),
             by_type: HashMap::new(),
+            base_ontology: ontology.clone(),
             ontology,
             quarantined: HashSet::new(),
+            pending_edges: HashMap::new(),
         }
     }
 
@@ -96,17 +113,23 @@ impl MaterializedGraph {
     /// skipped for materialization. They remain in the oplog for CRDT
     /// convergence — quarantine is a graph-layer concern, not an oplog concern.
     pub fn apply(&mut self, entry: &Entry) {
-        self.apply_entry(entry, false)
+        self.apply_entry(entry, ValidationMode::Full)
     }
 
-    /// Core of `apply`. `trusted` is true only for a checkpoint's inner ops:
-    /// they were validated when first written and replay under the
-    /// checkpoint's own ontology, and build_checkpoint_ops emits AddNode with
-    /// empty properties by design (EXP-02) — re-validation would fail any
-    /// required property and quarantine the entity (Bug 14b). Quarantining
-    /// them is meaningless anyway: synthetic entry hashes don't exist in the
-    /// oplog. Compaction must reproduce the materialized graph exactly.
-    fn apply_entry(&mut self, entry: &Entry, trusted: bool) {
+    /// Core of `apply`. `mode` is `SkipRequired` only for a checkpoint's inner
+    /// ops, because `build_checkpoint_ops` emits `AddNode` with an empty
+    /// property map by design (EXP-02) with the values following as separate
+    /// `UpdateProperty` ops — enforcing required-presence there would
+    /// quarantine every such entity (Bug 14b). S2: the bypass is limited to
+    /// that one rule. Declared types, constraints and edge endpoints are
+    /// enforced on checkpoint inner ops like anything else.
+    ///
+    /// The checkpoint's own trustworthiness is established at the merge
+    /// boundary, not here: a foreign checkpoint may only enter a store whose
+    /// oplog is still genesis-only (H1). Replay has no valid baseline of its
+    /// own to judge against, since the ontology it carries is precisely what
+    /// the rest of the replay is relative to.
+    fn apply_entry(&mut self, entry: &Entry, mode: ValidationMode) {
         match &entry.payload {
             GraphOp::Checkpoint { ops, op_clocks, .. } => {
                 // R-08: Replay synthetic ops to restore graph state.
@@ -128,17 +151,19 @@ impl MaterializedGraph {
                         entry.clock.clone() // fallback for old checkpoints without op_clocks
                     };
                     let synthetic = Entry::new(op.clone(), vec![], vec![], clock, &entry.author);
-                    self.apply_entry(&synthetic, true);
+                    self.apply_entry(&synthetic, ValidationMode::SkipRequired);
                 }
+                // H6: the checkpoint itself is now materialized.
+                self.quarantined.remove(&entry.hash);
             }
             GraphOp::DefineOntology { .. } => {
                 // Genesis — nothing to materialize.
             }
             GraphOp::ExtendOntology { extension } => {
                 if let Err(_e) = self.ontology.merge_extension(extension) {
-                    if !trusted {
-                        self.quarantined.insert(entry.hash);
-                    }
+                    self.quarantined.insert(entry.hash);
+                } else {
+                    self.quarantined.remove(&entry.hash);
                 }
             }
             GraphOp::AddNode {
@@ -149,15 +174,19 @@ impl MaterializedGraph {
                 properties,
             } => {
                 // R-02: validate against ontology, quarantine if invalid
-                if !trusted {
-                    if let Err(_e) =
-                        self.ontology
-                            .validate_node(node_type, subtype.as_deref(), properties)
-                    {
-                        self.quarantined.insert(entry.hash);
-                        return;
-                    }
+                if let Err(_e) = self.ontology.validate_node_mode(
+                    node_type,
+                    subtype.as_deref(),
+                    properties,
+                    mode,
+                ) {
+                    self.quarantined.insert(entry.hash);
+                    return;
                 }
+                // H6: quarantine must be a function of the oplog, not of sync
+                // history. An entry that validates now is not quarantined,
+                // even if a previous pass rejected it.
+                self.quarantined.remove(&entry.hash);
                 self.apply_add_node(
                     node_id,
                     node_type,
@@ -166,6 +195,8 @@ impl MaterializedGraph {
                     properties,
                     &entry.clock,
                 );
+                // S9: an endpoint just arrived — edges held for it can proceed.
+                self.retry_pending_edges();
             }
             GraphOp::AddEdge {
                 edge_id,
@@ -174,29 +205,43 @@ impl MaterializedGraph {
                 target_id,
                 properties,
             } => {
-                if !trusted {
-                    // R-02: validate edge type exists.
-                    if !self.ontology.edge_types.contains_key(edge_type.as_str()) {
-                        self.quarantined.insert(entry.hash);
-                        return;
-                    }
-                    // Bug 13 fix: validate source/target type constraints when both nodes
-                    // are materialized. If one is missing (out-of-order sync), skip —
-                    // validation happens on rebuild.
-                    if let (Some(src), Some(tgt)) = (
-                        self.nodes.get(source_id.as_str()),
-                        self.nodes.get(target_id.as_str()),
-                    ) {
+                // R-02: validate edge type exists.
+                if !self.ontology.edge_types.contains_key(edge_type.as_str()) {
+                    self.quarantined.insert(entry.hash);
+                    return;
+                }
+                // Bug 13 fix: validate source/target type constraints when both nodes
+                // are materialized. S9: when an endpoint is missing the edge is
+                // held pending instead of admitted unvalidated, because the
+                // rebuild the old comment promised only fires when the batch
+                // happens to carry a schema change.
+                match (
+                    self.nodes.get(source_id.as_str()),
+                    self.nodes.get(target_id.as_str()),
+                ) {
+                    (Some(src), Some(tgt)) => {
                         if self
                             .ontology
-                            .validate_edge(edge_type, &src.node_type, &tgt.node_type, properties)
+                            .validate_edge_mode(
+                                edge_type,
+                                &src.node_type,
+                                &tgt.node_type,
+                                properties,
+                                mode,
+                            )
                             .is_err()
                         {
                             self.quarantined.insert(entry.hash);
                             return;
                         }
                     }
+                    _ => {
+                        self.pending_edges.insert(entry.hash, entry.clone());
+                        self.quarantined.insert(entry.hash);
+                        return;
+                    }
                 }
+                self.quarantined.remove(&entry.hash);
                 self.apply_add_edge(
                     edge_id,
                     edge_type,
@@ -211,12 +256,39 @@ impl MaterializedGraph {
                 key,
                 value,
             } => {
+                // H2: this arm applied the value with no validation at all, so
+                // a peer's UpdateProperty entered the graph regardless of the
+                // local ontology — the v0.1.6 bug reopened on the sync side.
+                // The entity's declared type is the one the graph already
+                // holds; if it is not materialized yet there is nothing to
+                // validate against and the value is accepted, exactly as the
+                // local path does.
+                let verdict = if let Some(node) = self.nodes.get(entity_id.as_str()) {
+                    self.ontology.validate_property_update(
+                        &node.node_type,
+                        node.subtype.as_deref(),
+                        key,
+                        value,
+                    )
+                } else if let Some(edge) = self.edges.get(entity_id.as_str()) {
+                    self.ontology
+                        .validate_edge_property_update(&edge.edge_type, key, value)
+                } else {
+                    Ok(())
+                };
+                if verdict.is_err() {
+                    self.quarantined.insert(entry.hash);
+                    return;
+                }
+                self.quarantined.remove(&entry.hash);
                 self.apply_update_property(entity_id, key, value, &entry.clock);
             }
             GraphOp::RemoveNode { node_id } => {
+                self.quarantined.remove(&entry.hash);
                 self.apply_remove_node(node_id, &entry.clock);
             }
             GraphOp::RemoveEdge { edge_id } => {
+                self.quarantined.remove(&entry.hash);
                 self.apply_remove_edge(edge_id, &entry.clock);
             }
             GraphOp::DefineLens { .. } => {
@@ -240,7 +312,40 @@ impl MaterializedGraph {
         self.incoming.clear();
         self.by_type.clear();
         self.quarantined.clear();
+        self.pending_edges.clear();
+        // Replay from the base so extensions re-merge exactly once.
+        self.ontology = self.base_ontology.clone();
         self.apply_all(entries);
+    }
+
+    /// S9: re-evaluate edges that were waiting on an endpoint. Called whenever
+    /// a node materializes. Edges whose endpoints are still missing stay
+    /// pending; the rest go through full validation and are admitted or
+    /// quarantined on their merits.
+    fn retry_pending_edges(&mut self) {
+        if self.pending_edges.is_empty() {
+            return;
+        }
+        let ready: Vec<Entry> = self
+            .pending_edges
+            .values()
+            .filter(|entry| match &entry.payload {
+                GraphOp::AddEdge {
+                    source_id,
+                    target_id,
+                    ..
+                } => {
+                    self.nodes.contains_key(source_id.as_str())
+                        && self.nodes.contains_key(target_id.as_str())
+                }
+                _ => false,
+            })
+            .cloned()
+            .collect();
+        for entry in ready {
+            self.pending_edges.remove(&entry.hash);
+            self.apply_entry(&entry, ValidationMode::Full);
+        }
     }
 
     // -- Queries --

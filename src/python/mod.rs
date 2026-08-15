@@ -376,6 +376,12 @@ impl PyGraphStore {
             .merge_extension(&extension)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
 
+        // S3: reject unknown constraint names before they reach the oplog,
+        // where they would be inert forever and invisible to the fingerprint.
+        test_ontology
+            .validate_self()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
         let op = GraphOp::ExtendOntology {
             extension: extension.clone(),
         };
@@ -384,7 +390,45 @@ impl PyGraphStore {
         self.ontology
             .merge_extension(&extension)
             .expect("already validated");
+        // H5: the documented un-quarantine mechanism (FAQ) fired on the sync
+        // path only, so an operator who diagnosed a schema mismatch correctly
+        // and extended the ontology locally was left with permanently
+        // invisible data and no API to recover it. Re-evaluate here too.
+        self.revalidate();
         Ok(hex)
+    }
+
+    /// Re-materialize the graph from the full oplog, re-evaluating every
+    /// quarantined entry against the current ontology (H5).
+    ///
+    /// Called automatically whenever the ontology changes, on both the local
+    /// and the sync path. Exposed publicly so recovery never depends on having
+    /// guessed which trigger happens to rebuild. Returns the number of entries
+    /// that left quarantine.
+    fn revalidate(&mut self) -> usize {
+        let all = self.backend.oplog().entries_since(None);
+        let quarantined_before = self.graph.quarantined.clone();
+
+        let refs: Vec<&Entry> = all.iter().copied().collect();
+        self.graph.rebuild(&refs);
+
+        self.node_types.clear();
+        for node in self.graph.all_nodes() {
+            self.node_types
+                .insert(node.node_id.clone(), node.node_type.clone());
+        }
+        self.ontology = self.graph.ontology.clone();
+
+        let mut freed = 0;
+        for hash in &quarantined_before {
+            if !self.graph.quarantined.contains(hash) {
+                freed += 1;
+                if let Some(entry) = all.iter().find(|e| e.hash == *hash) {
+                    self.notify_subscribers(entry, false);
+                }
+            }
+        }
+        freed
     }
 
     /// Get an entry by hex hash. Returns None if not found.
@@ -1287,6 +1331,28 @@ impl PyGraphStore {
                 )));
             }
         }
+        // H4: the checkpoint is built from the MATERIALIZED graph, and
+        // quarantined entries are by definition not materialized. Dropping the
+        // originals would turn a validation failure into a delete instruction
+        // and void the documented un-quarantine promise: the operator would be
+        // left with a get_quarantined() hash that get() cannot resolve, and
+        // data recoverable only if some other peer still held it.
+        //
+        // Carry them across. They cannot keep their hashes — their causal
+        // ancestors are exactly what compaction removes, and an entry whose
+        // parents are absent would break DAG integrity and sync. So they are
+        // re-appended as ordinary entries rooted at the checkpoint, preserving
+        // payload, author and clock. Identity across compaction is already
+        // documented as not preserved (see `entries_affecting`); the data and
+        // the promise are.
+        let carried: Vec<(GraphOp, LamportClock, String)> = self
+            .graph
+            .quarantined
+            .iter()
+            .filter_map(|h| self.backend.oplog().get(h))
+            .map(|e| (e.payload.clone(), e.clock.clone(), e.author.clone()))
+            .collect();
+
         let (ops, clocks) = self.build_checkpoint_ops();
         let op_clocks: Vec<(u64, u32)> = clocks.iter().map(|c| c.as_tuple()).collect();
         self.clock.tick();
@@ -1303,6 +1369,7 @@ impl PyGraphStore {
             self.clock.clone(),
             &self.instance_id,
         );
+        let checkpoint_hash = checkpoint.hash;
         let hash_hex = hex::encode(checkpoint.hash);
 
         match &mut self.backend {
@@ -1311,11 +1378,36 @@ impl PyGraphStore {
                 store
                     .replace_with_checkpoint(checkpoint)
                     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
-                if reclaim_disk {
-                    store
-                        .reclaim_disk()
+            }
+        }
+
+        // Re-append the carried entries, rooted at the checkpoint so the DAG
+        // stays whole, then re-materialize so the quarantine set names the
+        // entries that now actually exist.
+        for (payload, clock, author) in carried {
+            let entry = self.create_entry(payload, vec![checkpoint_hash], vec![], clock, &author);
+            match &mut self.backend {
+                Backend::Memory(oplog) => {
+                    oplog
+                        .append(entry)
                         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
                 }
+                Backend::Persistent(store) => {
+                    store
+                        .append(entry)
+                        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+                }
+            }
+        }
+        self.revalidate();
+
+        // Disk reclamation runs last so it also reclaims whatever the
+        // re-appends touched.
+        if reclaim_disk {
+            if let Backend::Persistent(store) = &mut self.backend {
+                store
+                    .reclaim_disk()
+                    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
             }
         }
 
@@ -1426,7 +1518,8 @@ impl PyGraphStore {
                 key,
                 value,
             } => {
-                // Validate property type against ontology (if node is known)
+                // H2: this looked up nodes only, so every edge property update
+                // skipped validation on every path.
                 if let Some(node) = self.graph.get_node(entity_id) {
                     self.ontology
                         .validate_property_update(
@@ -1436,8 +1529,12 @@ impl PyGraphStore {
                             value,
                         )
                         .map_err(|e| e.to_string())
+                } else if let Some(edge) = self.graph.get_edge(entity_id) {
+                    self.ontology
+                        .validate_edge_property_update(&edge.edge_type, key, value)
+                        .map_err(|e| e.to_string())
                 } else {
-                    Ok(()) // Node not yet materialized (e.g., during sync)
+                    Ok(()) // Entity not yet materialized (e.g., during sync)
                 }
             }
             // RemoveNode, RemoveEdge, DefineOntology: no validation needed.
@@ -1455,11 +1552,39 @@ impl PyGraphStore {
     fn merge_entries_vec(&mut self, entries: &[Entry]) -> PyResult<usize> {
         let local_physical = self.clock.physical_ms;
 
+        // H1: a Checkpoint entry replaces the entire local oplog (oplog.rs, the
+        // Bug 7 fix). That is correct for our own compaction and catastrophic
+        // for a peer's: an incoming checkpoint would delete local writes the
+        // sender has never seen, silently, with integrity checks still green.
+        // `verify_compaction_safe` cannot prevent this — it guards the
+        // compacting peer, and the compacting peer is structurally unable to
+        // observe writes the receiver has not sent yet.
+        //
+        // Compaction is a local storage decision, so a foreign checkpoint is
+        // only admissible where it cannot destroy anything: into a store whose
+        // oplog is still genesis-only, i.e. bootstrap.
+        let local_len = self.backend.oplog().len();
+        let is_bootstrap = local_len <= 1;
+
         // R-02: Ontology validation moved to graph.apply() (quarantine model).
         // Only security checks remain here: clock drift + signature verification.
         let valid_entries: Vec<Entry> = entries
             .iter()
             .filter(|e| {
+                if matches!(e.payload, GraphOp::Checkpoint { .. })
+                    && e.author != self.instance_id
+                    && !is_bootstrap
+                {
+                    eprintln!(
+                        "silk: refusing foreign checkpoint {} from '{}': it would replace \
+                         {} local entries. Compaction is a local decision; bootstrap a \
+                         fresh store with from_snapshot() instead.",
+                        hex::encode(e.hash),
+                        e.author,
+                        local_len,
+                    );
+                    return false;
+                }
                 // Clock drift check (skip for genesis/DefineOntology entries)
                 if !matches!(e.payload, GraphOp::DefineOntology { .. })
                     && e.clock.physical_ms > local_physical.saturating_add(Self::MAX_CLOCK_DRIFT)
@@ -1536,8 +1661,6 @@ impl PyGraphStore {
         };
 
         if inserted > 0 {
-            let all = self.backend.oplog().entries_since(None);
-
             // Bug 5 fix: check if any new entry is ExtendOntology or Checkpoint.
             // A new entry = one from our candidate set that's now in the oplog.
             let has_schema_change = valid_entries.iter().any(|e| {
@@ -1549,32 +1672,13 @@ impl PyGraphStore {
             });
 
             if has_schema_change {
-                // Review 4: capture quarantine set before rebuild
-                let quarantined_before = self.graph.quarantined.clone();
-
-                // Full rebuild: deterministic topo order → identical quarantine sets
-                let refs: Vec<&Entry> = all.iter().copied().collect();
-                self.graph.rebuild(&refs);
-                // Rebuild node_types and ontology from the rebuilt graph
-                self.node_types.clear();
-                for node in self.graph.all_nodes() {
-                    self.node_types
-                        .insert(node.node_id.clone(), node.node_type.clone());
-                }
-                self.ontology = self.graph.ontology.clone();
-
-                // Review 4: notify subscribers for entries that were un-quarantined
-                // (previously quarantined but now valid after ontology evolution)
-                for hash in &quarantined_before {
-                    if !self.graph.quarantined.contains(hash) {
-                        // Entry was un-quarantined — find it and notify
-                        if let Some(entry) = all.iter().find(|e| e.hash == *hash) {
-                            self.notify_subscribers(entry, false);
-                        }
-                    }
-                }
+                // Full rebuild: deterministic topo order → identical quarantine
+                // sets. Same routine the local extension path uses (H5), so the
+                // two triggers cannot drift apart again.
+                self.revalidate();
             } else {
                 // Incremental apply: safe when no schema changes
+                let all = self.backend.oplog().entries_since(None);
                 for entry in &all {
                     if candidate_hashes.contains(&entry.hash) {
                         self.graph.apply(entry);
@@ -1594,6 +1698,7 @@ impl PyGraphStore {
             }
 
             // Update clock and notify subscribers for all new entries
+            let all = self.backend.oplog().entries_since(None);
             for entry in &all {
                 if candidate_hashes.contains(&entry.hash) {
                     self.clock.merge(&entry.clock);
@@ -1913,11 +2018,23 @@ impl PyOperationBuffer {
     }
 }
 
+/// The constraint names this build's validator enforces (S3). Exposed so a
+/// consumer — and the test suite — can check the list mechanically instead of
+/// maintaining a parallel copy that silently drifts.
+#[pyfunction]
+fn enforced_constraint_names() -> Vec<String> {
+    crate::ontology::ENFORCED_CONSTRAINTS
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 pub fn register(m: &Bound<'_, pyo3::types::PyModule>) -> PyResult<()> {
     m.add_class::<PyGraphStore>()?;
     m.add_class::<snapshot::PyGraphSnapshot>()?;
     m.add_class::<obslog::PyObservationLog>()?;
     m.add_class::<PyOperationBuffer>()?;
     m.add_class::<tail::PyTailSubscription>()?;
+    m.add_function(pyo3::wrap_pyfunction!(enforced_constraint_names, m)?)?;
     Ok(())
 }

@@ -3,6 +3,44 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::entry::Value;
 
+/// Every constraint name the validator enforces. Single source of truth:
+/// `validate_constraints` dispatches on it, `fingerprint` emits a fact for
+/// each, and `validate_self` rejects any other name. Adding a constraint
+/// means adding it here, which makes the other two fail until they cover it.
+pub const ENFORCED_CONSTRAINTS: [&str; 8] = [
+    "enum",
+    "min",
+    "max",
+    "min_exclusive",
+    "max_exclusive",
+    "min_length",
+    "max_length",
+    "pattern",
+];
+
+/// Prefix reserved for constraints this validator does not enforce. Declaring
+/// one is an explicit statement that nothing will check it (S3); any other
+/// unknown name is a typo and is rejected.
+pub const UNENFORCED_CONSTRAINT_PREFIX: &str = "x_";
+
+/// Version of the fingerprint formula. Bumped whenever the emitter changes
+/// what facts it produces, so that an emitter upgrade is a nameable condition
+/// rather than a false fork (S10). v1 emitted a fact for `enum` only.
+pub const FINGERPRINT_VERSION: u32 = 2;
+
+/// What a materialization pass enforces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationMode {
+    /// Everything: required properties, declared types, constraints, endpoints.
+    Full,
+    /// Everything except required-property presence. Used only for a
+    /// checkpoint's synthetic inner ops, whose `AddNode` carries an empty
+    /// property map by design (EXP-02) with the values arriving as separate
+    /// `UpdateProperty` ops. Narrower than the old blanket bypass (S2):
+    /// declared types, constraints and edge endpoints are still enforced.
+    SkipRequired,
+}
+
 /// The type of a property value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -123,6 +161,10 @@ impl Ontology {
     pub fn fingerprint(&self) -> HashSet<String> {
         let mut facts = HashSet::new();
 
+        // S10: identify the emitter's formula, so an upgrade is distinguishable
+        // from a real fork.
+        facts.insert(format!("fingerprint_version:{FINGERPRINT_VERSION}"));
+
         for (type_name, type_def) in &self.node_types {
             facts.insert(format!("type:{type_name}"));
 
@@ -130,8 +172,10 @@ impl Ontology {
                 facts.insert(format!("type:{type_name}:parent:{parent}"));
             }
 
-            // Top-level properties
-            for (prop_name, prop_def) in &type_def.properties {
+            // H3: emit membership from the RESOLVED table, not the declaration
+            // syntax, so a slot attached by any route (own, parent chain) is a
+            // fact on the type that actually carries it.
+            for (prop_name, prop_def) in &self.effective_properties(type_name) {
                 let req = if prop_def.required {
                     "required"
                 } else {
@@ -175,6 +219,23 @@ impl Ontology {
             for tgt in &edge_def.target_types {
                 facts.insert(format!("edge:{edge_name}:tgt:{tgt}"));
             }
+            // H3: edge properties are validated (validate_edge ->
+            // validate_properties) and so must be fingerprinted.
+            for (prop_name, prop_def) in &edge_def.properties {
+                let req = if prop_def.required {
+                    "required"
+                } else {
+                    "optional"
+                };
+                let vt = format!("{:?}", prop_def.value_type).to_lowercase();
+                facts.insert(format!("edgeprop:{edge_name}:{prop_name}:{vt}:{req}"));
+                Self::fingerprint_constraints(
+                    &mut facts,
+                    &format!("edge:{edge_name}"),
+                    prop_name,
+                    prop_def,
+                );
+            }
         }
 
         facts
@@ -191,31 +252,56 @@ impl Ontology {
         }
 
         let my_fp = self.fingerprint();
-        let is_superset = foreign_fingerprint.is_subset(&my_fp);
-        let is_subset = my_fp.is_subset(foreign_fingerprint);
 
-        match (is_superset, is_subset) {
-            (true, false) => Compatibility::Superset,
-            (false, true) => Compatibility::Subset,
-            (true, true) => Compatibility::Identical, // same facts, different hash (shouldn't happen)
-            (false, false) => Compatibility::Divergent,
+        // H3: ordered superset-then-subset. Equal fact sets with different
+        // hashes used to fall into a `(true, true) => Identical` arm commented
+        // "shouldn't happen" — which is exactly what fired whenever the
+        // emitter was blind to a constraint the validator enforced. With the
+        // emitter complete, equal facts and a differing hash is a genuine
+        // divergence and must be reported as one.
+        if my_fp == *foreign_fingerprint {
+            return Compatibility::Divergent;
         }
+        if foreign_fingerprint.is_subset(&my_fp) {
+            return Compatibility::Superset;
+        }
+        if my_fp.is_subset(foreign_fingerprint) {
+            return Compatibility::Subset;
+        }
+        Compatibility::Divergent
     }
 
+    /// Emit one fact per declared constraint, walking the constraint map the
+    /// validator consults rather than a hand-written parallel list (H3).
+    /// Values are serialized canonically so differing bounds differ as facts.
     fn fingerprint_constraints(
         facts: &mut HashSet<String>,
         type_name: &str,
         prop_name: &str,
         prop_def: &PropertyDef,
     ) {
-        if let Some(constraints) = &prop_def.constraints {
-            if let Some(enum_vals) = constraints.get("enum") {
-                if let Some(arr) = enum_vals.as_array() {
-                    for val in arr {
-                        if let Some(s) = val.as_str() {
-                            facts.insert(format!("constraint:{type_name}:{prop_name}:enum:{s}"));
-                        }
+        let Some(constraints) = &prop_def.constraints else {
+            return;
+        };
+        for (cname, cvalue) in constraints {
+            match cvalue {
+                // Enum members are emitted individually so that adding a member
+                // is a superset rather than a divergence.
+                serde_json::Value::Array(items) if cname == "enum" => {
+                    for val in items {
+                        let rendered = match val.as_str() {
+                            Some(s) => s.to_string(),
+                            None => val.to_string(),
+                        };
+                        facts.insert(format!(
+                            "constraint:{type_name}:{prop_name}:enum:{rendered}"
+                        ));
                     }
+                }
+                other => {
+                    facts.insert(format!(
+                        "constraint:{type_name}:{prop_name}:{cname}:{other}"
+                    ));
                 }
             }
         }
@@ -270,6 +356,13 @@ pub enum ValidationError {
         property: String,
         constraint: String,
         message: String,
+    },
+    /// A constraint name no validator enforces (S3): silently inert otherwise.
+    UnknownConstraint {
+        type_name: String,
+        property: String,
+        constraint: String,
+        known: Vec<String>,
     },
 }
 
@@ -334,6 +427,19 @@ impl std::fmt::Display for ValidationError {
             } => write!(
                 f,
                 "'{type_name}'.'{property}' violates constraint '{constraint}': {message}"
+            ),
+            ValidationError::UnknownConstraint {
+                type_name,
+                property,
+                constraint,
+                known,
+            } => write!(
+                f,
+                "'{type_name}'.'{property}' declares unknown constraint '{constraint}' \
+                 (enforced: {}); nothing would check it. Prefix it '{}' to declare it \
+                 deliberately unenforced.",
+                known.join(", "),
+                UNENFORCED_CONSTRAINT_PREFIX
             ),
         }
     }
@@ -492,6 +598,17 @@ impl Ontology {
         subtype: Option<&str>,
         properties: &BTreeMap<String, Value>,
     ) -> Result<(), ValidationError> {
+        self.validate_node_mode(node_type, subtype, properties, ValidationMode::Full)
+    }
+
+    /// `validate_node` with an explicit enforcement mode (S2).
+    pub fn validate_node_mode(
+        &self,
+        node_type: &str,
+        subtype: Option<&str>,
+        properties: &BTreeMap<String, Value>,
+        mode: ValidationMode,
+    ) -> Result<(), ValidationError> {
         let def = self
             .node_types
             .get(node_type)
@@ -508,11 +625,11 @@ impl Ontology {
                         // Known subtype — merge inherited + type-level + subtype-level
                         let mut merged = base_props;
                         merged.extend(st_def.properties.clone());
-                        validate_properties(node_type, &merged, properties)
+                        validate_properties(node_type, &merged, properties, mode)
                     }
                     None => {
                         // D-026: unknown subtype — validate inherited + type-level only
-                        validate_properties(node_type, &base_props, properties)
+                        validate_properties(node_type, &base_props, properties, mode)
                     }
                 }
             }
@@ -522,9 +639,9 @@ impl Ontology {
                 allowed: subtypes.keys().cloned().collect(),
             }),
             // D-026: accept subtypes even if type doesn't declare any
-            (None, Some(_st)) => validate_properties(node_type, &base_props, properties),
+            (None, Some(_st)) => validate_properties(node_type, &base_props, properties, mode),
             // Type has no subtypes and caller didn't provide one — validate as before
-            (None, None) => validate_properties(node_type, &base_props, properties),
+            (None, None) => validate_properties(node_type, &base_props, properties, mode),
         }
     }
 
@@ -536,6 +653,24 @@ impl Ontology {
         source_node_type: &str,
         target_node_type: &str,
         properties: &BTreeMap<String, Value>,
+    ) -> Result<(), ValidationError> {
+        self.validate_edge_mode(
+            edge_type,
+            source_node_type,
+            target_node_type,
+            properties,
+            ValidationMode::Full,
+        )
+    }
+
+    /// `validate_edge` with an explicit enforcement mode (S2).
+    pub fn validate_edge_mode(
+        &self,
+        edge_type: &str,
+        source_node_type: &str,
+        target_node_type: &str,
+        properties: &BTreeMap<String, Value>,
+        mode: ValidationMode,
     ) -> Result<(), ValidationError> {
         let def = self
             .edge_types
@@ -568,7 +703,40 @@ impl Ontology {
             });
         }
 
-        validate_properties(edge_type, &def.properties, properties)
+        validate_properties(edge_type, &def.properties, properties, mode)
+    }
+
+    /// Validate a single property update on an EDGE (H2). The node-shaped
+    /// `validate_property_update` cannot serve here: callers that looked up
+    /// only nodes silently skipped validation for every edge property.
+    pub fn validate_edge_property_update(
+        &self,
+        edge_type: &str,
+        key: &str,
+        value: &Value,
+    ) -> Result<(), ValidationError> {
+        let def = match self.edge_types.get(edge_type) {
+            Some(d) => d,
+            None => return Ok(()), // Unknown edge type — can't validate
+        };
+        // D-026: unknown properties accepted without validation.
+        let prop_def = match def.properties.get(key) {
+            Some(d) => d,
+            None => return Ok(()),
+        };
+        if prop_def.value_type != ValueType::Any && !value_matches_type(value, &prop_def.value_type)
+        {
+            return Err(ValidationError::WrongPropertyType {
+                type_name: edge_type.to_string(),
+                property: key.to_string(),
+                expected: prop_def.value_type.clone(),
+                got: value_type_name(value).to_string(),
+            });
+        }
+        if let Some(constraints) = &prop_def.constraints {
+            validate_constraints(edge_type, key, value, constraints)?;
+        }
+        Ok(())
     }
 
     /// Validate a single property update against the ontology.
@@ -653,6 +821,56 @@ impl Ontology {
                     )));
                 }
             }
+        }
+        // S3: an unknown constraint name is inert forever and invisible to the
+        // fingerprint, so a typo silently disables the rule it was meant to
+        // impose. Reject it here, which covers both ontology entry points
+        // (construction and extension). `x_` stays available for constraints
+        // this validator deliberately does not enforce.
+        for (type_name, type_def) in &self.node_types {
+            for (prop_name, prop_def) in &type_def.properties {
+                Self::check_constraint_names(type_name, prop_name, prop_def)?;
+            }
+            if let Some(subtypes) = &type_def.subtypes {
+                for (sub_name, sub_def) in subtypes {
+                    for (prop_name, prop_def) in &sub_def.properties {
+                        Self::check_constraint_names(
+                            &format!("{type_name}:{sub_name}"),
+                            prop_name,
+                            prop_def,
+                        )?;
+                    }
+                }
+            }
+        }
+        for (edge_name, edge_def) in &self.edge_types {
+            for (prop_name, prop_def) in &edge_def.properties {
+                Self::check_constraint_names(edge_name, prop_name, prop_def)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn check_constraint_names(
+        type_name: &str,
+        prop_name: &str,
+        prop_def: &PropertyDef,
+    ) -> Result<(), ValidationError> {
+        let Some(constraints) = &prop_def.constraints else {
+            return Ok(());
+        };
+        for cname in constraints.keys() {
+            if ENFORCED_CONSTRAINTS.contains(&cname.as_str())
+                || cname.starts_with(UNENFORCED_CONSTRAINT_PREFIX)
+            {
+                continue;
+            }
+            return Err(ValidationError::UnknownConstraint {
+                type_name: type_name.to_string(),
+                property: prop_name.to_string(),
+                constraint: cname.clone(),
+                known: ENFORCED_CONSTRAINTS.iter().map(|s| s.to_string()).collect(),
+            });
         }
         Ok(())
     }
@@ -763,14 +981,18 @@ fn validate_properties(
     type_name: &str,
     defs: &BTreeMap<String, PropertyDef>,
     values: &BTreeMap<String, Value>,
+    mode: ValidationMode,
 ) -> Result<(), ValidationError> {
-    // Check required properties are present
-    for (prop_name, prop_def) in defs {
-        if prop_def.required && !values.contains_key(prop_name) {
-            return Err(ValidationError::MissingRequiredProperty {
-                type_name: type_name.to_string(),
-                property: prop_name.clone(),
-            });
+    // Check required properties are present. Skipped only for a checkpoint's
+    // synthetic inner ops, whose values arrive as separate UpdateProperty ops.
+    if mode == ValidationMode::Full {
+        for (prop_name, prop_def) in defs {
+            if prop_def.required && !values.contains_key(prop_name) {
+                return Err(ValidationError::MissingRequiredProperty {
+                    type_name: type_name.to_string(),
+                    property: prop_name.clone(),
+                });
+            }
         }
     }
 
