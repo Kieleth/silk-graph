@@ -22,6 +22,30 @@ Silk is young (first public release 2026-03-21). During its first month, several
 
 Silk's guarantee is not "zero bugs have ever existed" — it's "every convergence-relevant bug we've found has a regression test that prevents its class from recurring, and `make check` must stay green before any release." See [PROOF.md](PROOF.md) for the formal invariants the tests verify against and [INVARIANTS.md](INVARIANTS.md) for the automated enforcement mechanism.
 
+## [0.4.0] - 2026-08-15
+
+Found in semi-production: a downstream migration to add 48 edge-endpoint
+bindings reported success, changed nothing, and took a box down when the next
+boot's declared-vs-live ontology comparison failed again. Reported as
+"silk-graph cannot mutate a live redb's ontology". That framing is wrong —
+additive mutation of a live store works and persists — but it was pointing at
+two real defects, both fixed here.
+
+**Breaking.** `PROTOCOL_VERSION` 2 → 3. `OntologyExtension` gained a field and
+serializes as a positional array, so a 0.4.0 extension entry cannot be read by
+an older build. This build reads everything older builds wrote (verified by
+test against the legacy 3-field form). Extensions that were previously
+accepted as silent no-ops now raise.
+
+### Fixed
+- **Silent no-op extensions.** `extend_ontology` accepted any payload whose keys it did not recognize. Serde ignores unknown fields, so the payload deserialized into an empty extension: the call returned a hash, appended an `extend_ontology` entry to the oplog, replicated that entry to peers, and changed nothing. The caller was told the schema had evolved. Unknown keys — at the top level and inside `node_type_updates` / `edge_type_updates` — are now rejected at the API boundary, naming the offending key and listing what this build understands. An extension that expresses no change at all is rejected too, as is a binding that is already present. Nothing is written when the call raises. The check deliberately lives at the API boundary rather than on the type, so oplogs that already contain such no-op entries still load.
+
+### Added
+- **`edge_type_updates`: widen an existing edge type.** Binding a new source or target type to an edge type that already exists had no vocabulary — `OntologyExtension` could add new edge types and update existing *node* types, and nothing could touch an existing edge type. This was the operation the downstream migration needed, and the reason it silently did nothing. `{"edge_type_updates": {"RUNS_ON": {"add_source_types": [...], "add_target_types": [...], "add_properties": {...}}}}` adds bindings and properties; it cannot remove either. Widening is monotonic — the edge type only ever accepts more — so a widened peer reads as a `superset` of an un-widened one rather than a fork, which is asserted by test.
+
+### Tests
+- Rust 209, Python 497. New: the full silent-no-op matrix (garbage key, typo'd top-level key, typo'd nested key, empty extension, duplicate binding) each asserting the oplog is untouched; endpoint widening applied, persisted across reopen, and carried over sync to a peer; edge-property addition with constraint enforcement; rejection of unknown edge types and bindings to unknown node types; fingerprint monotonicity of a widening; and the legacy 3-field `OntologyExtension` still deserializing, plus an arity guard on the new 4-field form.
+
 ## [0.3.0] - 2026-08-14
 
 Ordo Malleus inquisition of v0.2.7: 7 heresies and 10 suspicions, every one

@@ -308,11 +308,17 @@ def test_extension_persists_through_snapshot():
 # -- Edge cases --
 
 
-def test_empty_extension_is_valid():
-    """An extension with no changes is a no-op."""
+def test_empty_extension_is_rejected():
+    """An extension with no changes used to be an accepted no-op. It is now an
+    error: it returned a hash, appended an entry to the replicated log, and
+    told the caller the schema had evolved when nothing had. That silence is
+    what made a downstream migration loop look like "the ontology cannot be
+    mutated" (2026-08-15)."""
     store = _store()
-    store.extend_ontology(json.dumps({}))
-    # No error, no change
+    before = store.len()
+    with pytest.raises(ValueError, match="no change"):
+        store.extend_ontology(json.dumps({}))
+    assert store.len() == before
 
 
 def test_multiple_extensions_accumulate():
@@ -336,3 +342,170 @@ def test_multiple_extensions_accumulate():
     assert store.get_node("a") is not None
     assert store.get_node("b") is not None
     assert store.get_node("c") is not None
+
+
+# -- Silent no-op extensions (found in semi-production, 2026-08-15) --
+#
+# extend_ontology accepted a payload it could not express, returned a hash,
+# appended an entry to the replicated oplog, and changed nothing. The caller
+# is told the schema evolved; it has not. Downstream that reads as "the
+# ontology cannot be mutated", because the next boot's declared-vs-live
+# comparison fails again and the migration loops.
+
+
+class TestExtensionMustDoSomething:
+    def _store(self):
+        return GraphStore("t", json.dumps({
+            "node_types": {"server": {"properties": {}}},
+            "edge_types": {},
+        }))
+
+    def test_unknown_top_level_key_rejected(self):
+        store = self._store()
+        with pytest.raises(ValueError) as exc:
+            store.extend_ontology({"typo_node_types": {"x": {"properties": {}}}})
+        assert "typo_node_types" in str(exc.value)
+
+    def test_unknown_node_type_update_key_rejected(self):
+        store = self._store()
+        with pytest.raises(ValueError) as exc:
+            store.extend_ontology({"node_type_updates": {"server": {
+                "add_propertys": {"cpu": {"value_type": "int"}}}}})
+        assert "add_propertys" in str(exc.value)
+
+    def test_empty_extension_rejected(self):
+        """An extension that changes nothing is a caller error, not a no-op
+        entry on the replicated log."""
+        store = self._store()
+        for empty in [{}, {"node_types": {}}, {"node_type_updates": {}}]:
+            with pytest.raises(ValueError):
+                store.extend_ontology(empty)
+
+    def test_rejected_extension_writes_nothing(self):
+        """The defect was not only the silence: a no-op entry reached the
+        oplog and replicated to peers."""
+        store = self._store()
+        before = store.len()
+        with pytest.raises(ValueError):
+            store.extend_ontology({"total_nonsense": {"anything": 123}})
+        assert store.len() == before
+
+
+# -- Extending an EXISTING edge type (the 48-binding case) --
+
+
+EDGE_ONT = json.dumps({
+    "node_types": {
+        "app": {"properties": {}},
+        "server": {"properties": {}},
+        "cluster": {"properties": {}},
+    },
+    "edge_types": {
+        "RUNS_ON": {"source_types": ["app"], "target_types": ["server"],
+                    "properties": {}},
+    },
+})
+
+
+class TestEdgeTypeUpdates:
+    def test_add_source_type_to_existing_edge(self):
+        """The operation that had no vocabulary: widen an existing edge type's
+        endpoint bindings."""
+        store = GraphStore("t", EDGE_ONT)
+        store.add_node("a1", "app", "api")
+        store.add_node("s1", "server", "web")
+        store.add_node("c1", "cluster", "k3s")
+
+        with pytest.raises(ValueError):
+            store.add_edge("bad", "RUNS_ON", "s1", "s1")  # server not allowed yet
+
+        store.extend_ontology({"edge_type_updates": {
+            "RUNS_ON": {"add_source_types": ["server"]}}})
+
+        store.add_edge("e1", "RUNS_ON", "s1", "s1")
+        assert store.get_edge("e1") is not None
+        # The original binding still works.
+        store.add_edge("e2", "RUNS_ON", "a1", "s1")
+        assert store.get_edge("e2") is not None
+
+    def test_add_target_type_to_existing_edge(self):
+        store = GraphStore("t", EDGE_ONT)
+        store.add_node("a1", "app", "api")
+        store.add_node("c1", "cluster", "k3s")
+        store.extend_ontology({"edge_type_updates": {
+            "RUNS_ON": {"add_target_types": ["cluster"]}}})
+        store.add_edge("e1", "RUNS_ON", "a1", "c1")
+        assert store.get_edge("e1") is not None
+
+    def test_add_property_to_existing_edge(self):
+        store = GraphStore("t", EDGE_ONT)
+        store.add_node("a1", "app", "api")
+        store.add_node("s1", "server", "web")
+        store.extend_ontology({"edge_type_updates": {
+            "RUNS_ON": {"add_properties": {
+                "weight": {"value_type": "int", "constraints": {"max": 10}}}}}})
+        store.add_edge("e1", "RUNS_ON", "a1", "s1", {"weight": 5})
+        assert store.get_edge("e1")["properties"]["weight"] == 5
+        with pytest.raises(ValueError):
+            store.add_edge("e2", "RUNS_ON", "a1", "s1", {"weight": 99})
+
+    def test_unknown_edge_type_rejected(self):
+        store = GraphStore("t", EDGE_ONT)
+        with pytest.raises(ValueError) as exc:
+            store.extend_ontology({"edge_type_updates": {
+                "NO_SUCH_EDGE": {"add_source_types": ["server"]}}})
+        assert "NO_SUCH_EDGE" in str(exc.value)
+
+    def test_binding_to_unknown_node_type_rejected(self):
+        """A binding must reference a type that exists, or the ontology is
+        internally inconsistent (same rule validate_self enforces)."""
+        store = GraphStore("t", EDGE_ONT)
+        with pytest.raises(ValueError) as exc:
+            store.extend_ontology({"edge_type_updates": {
+                "RUNS_ON": {"add_source_types": ["ghost"]}}})
+        assert "ghost" in str(exc.value)
+
+    def test_duplicate_binding_rejected(self):
+        """Re-adding an existing binding changes nothing, so it is a caller
+        error like any other no-op extension."""
+        store = GraphStore("t", EDGE_ONT)
+        with pytest.raises(ValueError):
+            store.extend_ontology({"edge_type_updates": {
+                "RUNS_ON": {"add_source_types": ["app"]}}})
+
+    def test_widening_is_monotonic_in_the_fingerprint(self):
+        """Widening only ever accepts more, so a widened peer is a superset —
+        not a fork. This is what makes it safe for convergence."""
+        before = GraphStore("before", EDGE_ONT)
+        after = GraphStore("after", EDGE_ONT)
+        after.extend_ontology({"edge_type_updates": {
+            "RUNS_ON": {"add_source_types": ["server"]}}})
+        assert after.check_ontology_compatibility(
+            before.ontology_hash(), before.ontology_fingerprint()) == "superset"
+
+    def test_persists_across_reopen(self, tmp_path):
+        """The whole point: mutate a live redb and have it stick."""
+        path = str(tmp_path / "edge.redb")
+        store = GraphStore("t", EDGE_ONT, path=path)
+        store.extend_ontology({"edge_type_updates": {
+            "RUNS_ON": {"add_source_types": ["server"]}}})
+        del store
+
+        reopened = GraphStore.open(path)
+        reopened.add_node("s1", "server", "web")
+        reopened.add_edge("e1", "RUNS_ON", "s1", "s1")
+        assert reopened.get_edge("e1") is not None
+
+    def test_widened_binding_syncs_to_a_peer(self):
+        """The extension must carry over the wire, not just locally."""
+        a = GraphStore("a", EDGE_ONT)
+        b = GraphStore("b", EDGE_ONT)
+        a.extend_ontology({"edge_type_updates": {
+            "RUNS_ON": {"add_source_types": ["server"]}}})
+        a.add_node("s1", "server", "web")
+        a.add_edge("e1", "RUNS_ON", "s1", "s1")
+
+        b.merge_sync_payload(a.receive_sync_offer(b.generate_sync_offer()))
+
+        assert b.get_edge("e1") is not None, "widened binding did not survive sync"
+        assert len(b.get_quarantined()) == 0

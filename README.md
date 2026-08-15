@@ -150,7 +150,7 @@ store.merge_sync_payload(&payload)?;
 - **Operation buffer** — `OperationBuffer` stores graph ops as JSONL when the store isn't available (boot time, pre-init). Drain into a live store when ready. Same operations, same format — no translation layer.
 - **Zero runtime dependencies** — no Postgres, no Redis, no network required. Silk is a library, not a service.
 - **Author authentication** — ed25519 signatures on every entry. Auto-sign on write, verify on merge. Trust registry for known peers. Strict mode rejects unsigned entries. (D-027)
-- **Evolvable schema** — extend the ontology at runtime with new types, properties, and subtypes via `extend_ontology()`. Only additive changes — no migrations, no store recreation. (R-03)
+- **Evolvable schema** — extend the ontology at runtime via `extend_ontology()`: new node and edge types, new properties and subtypes on existing node types, and wider endpoint bindings on existing edge types (`edge_type_updates`). Works on a live persistent store. Only additive changes — no migrations, no store recreation. An extension naming a key this build does not understand, or expressing no change, is rejected rather than accepted as a no-op. (R-03)
 - **Scalable sync** — gossip-based peer selection (R-05). Instead of syncing with all N peers, select ceil(ln(N)+1) random targets per round. Scales from 2 peers to 10,000+.
 - **Time-travel queries** — `store.as_of(physical_ms)` returns a read-only `GraphSnapshot` at any historical time. All query and algorithm methods available. Datomic-style "the database is a value." (R-06)
 - **Epoch compaction** — `store.compact()` compresses the entire oplog into a single checkpoint entry. Bounds memory and disk growth for long-running systems. (R-08)

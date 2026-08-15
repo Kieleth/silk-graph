@@ -531,6 +531,7 @@ mod tests {
                     )]),
                     edge_types: BTreeMap::new(),
                     node_type_updates: BTreeMap::new(),
+                    edge_type_updates: BTreeMap::new(),
                 },
             },
             GraphOp::Checkpoint {

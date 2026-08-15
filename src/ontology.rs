@@ -446,7 +446,7 @@ impl std::fmt::Display for ValidationError {
 }
 
 /// An additive ontology extension — monotonic evolution only (R-03).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct OntologyExtension {
     /// New node types to add.
     #[serde(default)]
@@ -457,6 +457,40 @@ pub struct OntologyExtension {
     /// Updates to existing node types (add properties, subtypes, relax required).
     #[serde(default)]
     pub node_type_updates: BTreeMap<String, NodeTypeUpdate>,
+    /// Updates to existing edge types (widen endpoint bindings, add properties).
+    ///
+    /// Added after a downstream outage: binding a new source or target type to
+    /// an edge type that already exists had no vocabulary at all, and the
+    /// attempt was silently accepted as a no-op. Widening is monotonic — the
+    /// edge type only ever accepts more — so it is safe for convergence.
+    ///
+    /// NOTE: this field is appended LAST. `OntologyExtension` serializes as a
+    /// positional array, so field order is the wire format; a new field must
+    /// go at the end, and older builds cannot read extensions that carry it.
+    #[serde(default)]
+    pub edge_type_updates: BTreeMap<String, EdgeTypeUpdate>,
+}
+
+/// Monotonic update to an existing edge type.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct EdgeTypeUpdate {
+    /// Node types to add to `source_types` (widening only).
+    #[serde(default)]
+    pub add_source_types: Vec<String>,
+    /// Node types to add to `target_types` (widening only).
+    #[serde(default)]
+    pub add_target_types: Vec<String>,
+    /// New optional properties on the edge type.
+    #[serde(default)]
+    pub add_properties: BTreeMap<String, PropertyDef>,
+}
+
+impl EdgeTypeUpdate {
+    fn is_empty(&self) -> bool {
+        self.add_source_types.is_empty()
+            && self.add_target_types.is_empty()
+            && self.add_properties.is_empty()
+    }
 }
 
 /// Additive update to an existing node type.
@@ -479,6 +513,22 @@ pub enum MonotonicityError {
     DuplicateNodeType(String),
     DuplicateEdgeType(String),
     UnknownNodeType(String),
+    /// An `edge_type_updates` entry names an edge type that does not exist.
+    UnknownEdgeType(String),
+    /// A new endpoint binding references a node type that does not exist.
+    UnknownBindingType {
+        edge_type: String,
+        node_type: String,
+    },
+    /// A binding that is already present — the extension would change nothing.
+    DuplicateBinding {
+        edge_type: String,
+        node_type: String,
+    },
+    /// The extension parses but expresses no change (S-noop). Accepting it
+    /// writes a no-op entry to the replicated log and tells the caller the
+    /// schema evolved when it has not.
+    EmptyExtension,
     DuplicateProperty {
         type_name: String,
         property: String,
@@ -503,6 +553,29 @@ impl std::fmt::Display for MonotonicityError {
             MonotonicityError::UnknownNodeType(t) => {
                 write!(f, "cannot update unknown node type '{t}'")
             }
+            MonotonicityError::UnknownEdgeType(t) => {
+                write!(f, "cannot update unknown edge type '{t}'")
+            }
+            MonotonicityError::UnknownBindingType {
+                edge_type,
+                node_type,
+            } => write!(
+                f,
+                "edge type '{edge_type}' cannot bind to unknown node type '{node_type}'"
+            ),
+            MonotonicityError::DuplicateBinding {
+                edge_type,
+                node_type,
+            } => write!(
+                f,
+                "edge type '{edge_type}' already binds '{node_type}'; this extension \
+                 would change nothing"
+            ),
+            MonotonicityError::EmptyExtension => write!(
+                f,
+                "extension expresses no change; nothing would be added. An extension \
+                 that changes nothing must not be written to the log"
+            ),
             MonotonicityError::DuplicateProperty {
                 type_name,
                 property,
@@ -881,6 +954,21 @@ impl Ontology {
     /// - New edge types (must not already exist)
     /// - Updates to existing node types: add properties, relax required→optional, add subtypes
     pub fn merge_extension(&mut self, ext: &OntologyExtension) -> Result<(), MonotonicityError> {
+        // An extension that expresses no change must not be accepted: it
+        // returns a hash, appends to the replicated log, and tells the caller
+        // the schema evolved when nothing did.
+        if ext.node_types.is_empty()
+            && ext.edge_types.is_empty()
+            && ext.node_type_updates.values().all(|u| {
+                u.add_properties.is_empty()
+                    && u.relax_properties.is_empty()
+                    && u.add_subtypes.is_empty()
+            })
+            && ext.edge_type_updates.values().all(|u| u.is_empty())
+        {
+            return Err(MonotonicityError::EmptyExtension);
+        }
+
         // Validate: new node types don't already exist
         for name in ext.node_types.keys() {
             if self.node_types.contains_key(name) {
@@ -944,8 +1032,58 @@ impl Ontology {
         // Apply: extend node_types
         self.node_types.extend(ext.node_types.clone());
 
+        // Validate edge_type_updates: the edge type must exist, every new
+        // binding must reference a node type that exists, and a binding that
+        // is already present would change nothing.
+        for (edge_name, update) in &ext.edge_type_updates {
+            let def = self
+                .edge_types
+                .get(edge_name)
+                .ok_or_else(|| MonotonicityError::UnknownEdgeType(edge_name.clone()))?;
+
+            for (bindings, existing) in [
+                (&update.add_source_types, &def.source_types),
+                (&update.add_target_types, &def.target_types),
+            ] {
+                for node_type in bindings {
+                    // The node type may be arriving in this same extension.
+                    if !self.node_types.contains_key(node_type)
+                        && !ext.node_types.contains_key(node_type)
+                    {
+                        return Err(MonotonicityError::UnknownBindingType {
+                            edge_type: edge_name.clone(),
+                            node_type: node_type.clone(),
+                        });
+                    }
+                    if existing.contains(node_type) {
+                        return Err(MonotonicityError::DuplicateBinding {
+                            edge_type: edge_name.clone(),
+                            node_type: node_type.clone(),
+                        });
+                    }
+                }
+            }
+
+            for prop_name in update.add_properties.keys() {
+                if def.properties.contains_key(prop_name) {
+                    return Err(MonotonicityError::DuplicateProperty {
+                        type_name: edge_name.clone(),
+                        property: prop_name.clone(),
+                    });
+                }
+            }
+        }
+
         // Apply: extend edge_types
         self.edge_types.extend(ext.edge_types.clone());
+
+        // Apply: widen existing edge types
+        for (edge_name, update) in &ext.edge_type_updates {
+            let def = self.edge_types.get_mut(edge_name).unwrap(); // validated above
+            def.source_types.extend(update.add_source_types.clone());
+            def.target_types.extend(update.add_target_types.clone());
+            def.properties.extend(update.add_properties.clone());
+        }
 
         // Apply: update existing node types
         for (type_name, update) in &ext.node_type_updates {
@@ -1234,6 +1372,38 @@ fn value_type_name(value: &Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `OntologyExtension` serializes as a POSITIONAL array, so its field
+    /// count is the wire format. `edge_type_updates` was appended last; a
+    /// legacy 3-element extension, as written by every build up to 0.3.0,
+    /// must still load. Older builds cannot read the 4-element form — that is
+    /// why PROTOCOL_VERSION moved.
+    #[test]
+    fn legacy_three_field_extension_still_deserializes() {
+        let legacy = (
+            BTreeMap::<String, NodeTypeDef>::new(),
+            BTreeMap::<String, EdgeTypeDef>::new(),
+            BTreeMap::<String, NodeTypeUpdate>::new(),
+        );
+        let bytes = rmp_serde::to_vec(&legacy).unwrap();
+        assert_eq!(bytes[0], 0x93, "legacy fixture is not 3 elements");
+
+        let restored: OntologyExtension =
+            rmp_serde::from_slice(&bytes).expect("legacy extension must load");
+        assert!(restored.edge_type_updates.is_empty());
+    }
+
+    #[test]
+    fn extension_wire_format_is_a_positional_array_of_four() {
+        let ext = OntologyExtension::default();
+        let bytes = rmp_serde::to_vec(&ext).unwrap();
+        assert_eq!(
+            bytes[0], 0x94,
+            "OntologyExtension is no longer a 4-element positional array. \
+             Field order and count are the wire format: append new fields at \
+             the end and move PROTOCOL_VERSION."
+        );
+    }
 
     fn devops_ontology() -> Ontology {
         Ontology {

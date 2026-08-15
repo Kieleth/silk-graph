@@ -365,6 +365,16 @@ impl PyGraphStore {
     /// Only additive changes allowed (monotonic).
     fn extend_ontology(&mut self, extension: &pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<String> {
         let json_str = ontology_arg_to_json(extension)?;
+        // Reject vocabulary this build cannot express, at the API boundary.
+        // Unknown keys otherwise deserialize into an empty extension: the call
+        // returns a hash, appends a no-op entry to the replicated log, and
+        // reports success while changing nothing. Downstream that reads as
+        // "the ontology cannot be mutated", because the next declared-vs-live
+        // comparison fails again.
+        //
+        // This check lives here, not on `OntologyExtension` itself, so that
+        // logs already containing such entries still load.
+        check_extension_keys(&json_str)?;
         let extension: crate::ontology::OntologyExtension = serde_json::from_str(&json_str)
             .map_err(|e| {
                 pyo3::exceptions::PyValueError::new_err(format!("invalid extension JSON: {e}"))
@@ -2060,6 +2070,66 @@ impl PyOperationBuffer {
         }
         Ok(())
     }
+}
+
+/// Keys `OntologyExtension` understands, and the keys of each nested update.
+/// Serde ignores unknown fields, so without this an extension shaped for a
+/// capability this build does not have is accepted and does nothing.
+const EXTENSION_KEYS: [&str; 4] = [
+    "node_types",
+    "edge_types",
+    "node_type_updates",
+    "edge_type_updates",
+];
+const NODE_UPDATE_KEYS: [&str; 3] = ["add_properties", "relax_properties", "add_subtypes"];
+const EDGE_UPDATE_KEYS: [&str; 3] = ["add_source_types", "add_target_types", "add_properties"];
+
+fn check_extension_keys(json_str: &str) -> PyResult<()> {
+    let value: serde_json::Value = serde_json::from_str(json_str).map_err(|e| {
+        pyo3::exceptions::PyValueError::new_err(format!("invalid extension JSON: {e}"))
+    })?;
+    let Some(top) = value.as_object() else {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "extension must be a JSON object",
+        ));
+    };
+
+    let reject = |key: &str, known: &[&str], context: &str| {
+        pyo3::exceptions::PyValueError::new_err(format!(
+            "unknown extension key '{key}'{context}. This build understands: {}. \
+             An unrecognized key would be ignored, writing an entry that changes \
+             nothing.",
+            known.join(", ")
+        ))
+    };
+
+    for (key, nested) in top {
+        if !EXTENSION_KEYS.contains(&key.as_str()) {
+            return Err(reject(key, &EXTENSION_KEYS, ""));
+        }
+        let (known, label) = match key.as_str() {
+            "node_type_updates" => (&NODE_UPDATE_KEYS[..], "node_type_updates"),
+            "edge_type_updates" => (&EDGE_UPDATE_KEYS[..], "edge_type_updates"),
+            _ => continue,
+        };
+        // Nested shape: {type_name: {update_key: ...}}
+        if let Some(per_type) = nested.as_object() {
+            for (type_name, update) in per_type {
+                if let Some(update_obj) = update.as_object() {
+                    for update_key in update_obj.keys() {
+                        if !known.contains(&update_key.as_str()) {
+                            return Err(reject(
+                                update_key,
+                                known,
+                                &format!(" in {label}['{type_name}']"),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The constraint names this build's validator enforces (S3). Exposed so a

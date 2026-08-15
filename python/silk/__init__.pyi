@@ -89,10 +89,34 @@ class GraphStore:
     def extend_ontology(self, extension: str | dict[str, Any]) -> str:
         """R-03: Extend the ontology with new types, properties, or subtypes.
 
-        Only additive (monotonic) changes allowed. Returns hex hash of the entry.
+        Only additive (monotonic) changes are allowed. Works on a live
+        persistent store; the change is appended to the oplog, takes effect
+        immediately, and survives reopen. Returns the hex hash of the entry.
+
+        Accepted keys — anything else is rejected, see Raises:
+
+            {
+              "node_types":        {name: NodeTypeDef},
+              "edge_types":        {name: EdgeTypeDef},
+              "node_type_updates": {name: {"add_properties":   {...},
+                                           "relax_properties": [...],
+                                           "add_subtypes":     {...}}},
+              "edge_type_updates": {name: {"add_source_types": [...],
+                                           "add_target_types": [...],
+                                           "add_properties":   {...}}},
+            }
+
+        `edge_type_updates` widens an EXISTING edge type: it can only add
+        endpoint bindings and properties, never remove them.
 
         Raises:
-            ValueError: If the extension violates monotonicity rules.
+            ValueError: if the extension violates monotonicity (redefining an
+                existing type, narrowing a property), names a key this build
+                does not understand, or expresses no change at all. The last
+                two used to be accepted silently — the call returned a hash
+                and appended an entry to the replicated log while changing
+                nothing, so callers were told the schema had evolved when it
+                had not. Nothing is written when the call raises.
         """
         ...
 

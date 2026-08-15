@@ -154,6 +154,28 @@ store.extend_ontology({
 
 This validates `score` going forward. Existing values with the wrong type remain in the graph — they won't be retroactively validated unless you rebuild (e.g., via compaction + re-sync).
 
+### What can `extend_ontology` actually change?
+
+Everything additive, on a live store, persisted immediately:
+
+| Key | Changes |
+|---|---|
+| `node_types` | Add a node type that does not exist yet |
+| `edge_types` | Add an edge type that does not exist yet |
+| `node_type_updates` | On an existing node type: `add_properties`, `relax_properties` (required to optional), `add_subtypes` |
+| `edge_type_updates` | On an existing edge type: `add_source_types`, `add_target_types`, `add_properties` |
+
+Nothing can be removed or narrowed: no dropping a type, no adding a required property to a type that already has instances, no removing an endpoint binding. Those are not expressible, by design — `OntologyExtension` has no field that could say them, so an illegal schema change is unrepresentable rather than merely rejected.
+
+Two things that are **errors**, not no-ops, since 0.4.0:
+
+```python
+store.extend_ontology({"edge_types_updates": {...}})   # typo -> ValueError, names the key
+store.extend_ontology({})                              # no change -> ValueError
+```
+
+Before 0.4.0 both returned a hash and appended an entry to the replicated log while changing nothing, which reads downstream as "the ontology cannot be mutated": the migration reports success, the effective schema is unchanged, and the next declared-vs-live comparison fails again. Nothing is written when the call raises.
+
 ---
 
 ### How do I enforce graph-level invariants? ("Every server must have a RUNS_ON edge")
