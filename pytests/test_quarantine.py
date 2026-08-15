@@ -143,8 +143,11 @@ def test_quarantine_preserves_oplog_convergence():
     assert store_b.get_node("n2") is None  # quarantined on B
 
 
-def test_quarantine_grows_only():
-    """Quarantine is a grow-only set — entries never leave."""
+def test_quarantine_grows_only_within_a_materialization_pass():
+    """Quarantine is grow-only *within a single materialization pass*.
+    Re-syncing the same payload with no ontology change cannot shrink it.
+    Entries DO leave when the ontology grows to accept them — see
+    test_quarantine_cleared_when_entry_becomes_valid_incrementally."""
     extended = json.dumps({
         "node_types": {"entity": {"properties": {}}, "phantom": {"properties": {}}},
         "edge_types": {}
@@ -353,3 +356,137 @@ def test_edge_property_update_is_validated_on_both_paths():
 
     with pytest.raises(ValueError):
         store.update_property("e1", "w", "not-an-int")
+
+
+# -- Inquisition S1: the diagnosis reaches the operator --
+
+
+def test_quarantine_details_carry_the_validator_reason():
+    """S1: every quarantine site discarded the ValidationError one line before
+    the operator needed it, leaving a bare hash."""
+    extended = json.dumps({
+        "node_types": {"entity": {"properties": {}}, "ufo": {"properties": {}}},
+        "edge_types": {}
+    })
+    a = GraphStore("a", extended)
+    b = _store("b")
+    a.add_node("x1", "ufo", "Unknown type")
+    _push(a, b)
+
+    details = b.get_quarantined_details()
+    assert len(details) == 1
+    record = details[0]
+    assert record["hash"] == b.get_quarantined()[0]
+    assert record["op"] == "add_node"
+    assert "ufo" in record["reason"]
+    assert len(record["ontology_hash"]) == 64
+
+
+def test_quarantine_reason_distinguishes_failure_kinds():
+    """S1: an unknown type and a constraint violation must not read alike."""
+    loose = json.dumps({
+        "node_types": {"s": {"properties": {"cpu": {"value_type": "int"}}}},
+        "edge_types": {}
+    })
+    strict = json.dumps({
+        "node_types": {"s": {"properties": {"cpu": {"value_type": "int",
+                                                    "constraints": {"max": 8}}}}},
+        "edge_types": {}
+    })
+    a = GraphStore("a", loose)
+    b = GraphStore("b", strict)
+    a.add_node("n1", "s", "n1")
+    a.update_property("n1", "cpu", 50)
+    _push(a, b)
+
+    reason = b.get_quarantined_details()[0]["reason"]
+    assert "max" in reason and "8" in reason
+    assert b.get_quarantined_details()[0]["op"] == "update_property"
+
+
+# -- Inquisition S7: the buffer and the direct API agree --
+
+
+def test_buffer_rejects_what_direct_api_rejects(tmp_path):
+    """S7: drain() reported an operation as applied that add_edge rejects
+    loudly. Two doors, one lock."""
+    from silk import OperationBuffer
+
+    ont = json.dumps({
+        "node_types": {"a": {"properties": {}}, "b": {"properties": {}}},
+        "edge_types": {"R": {"source_types": ["a"], "target_types": ["a"],
+                             "properties": {}}}
+    })
+    store = GraphStore("s", ont)
+    store.add_node("n1", "a", "n1")
+    store.add_node("n2", "b", "n2")
+
+    with pytest.raises(ValueError):
+        store.add_edge("e1", "R", "n1", "n2")
+
+    buf = OperationBuffer(str(tmp_path / "buf.log"))
+    buf.add_edge("e1", "R", "n1", "n2")
+    with pytest.raises(ValueError):
+        buf.drain(store)
+    assert store.get_edge("e1") is None
+
+
+# -- Inquisition H7: the un-quarantine notification, cited since 0.1.7 --
+
+
+def test_subscriber_notified_when_entry_leaves_quarantine():
+    """H7: CHANGELOG cited an "ontology-extension notification integration
+    test in src/python/mod.rs merge path" for the 0.1.7 bug. That file has
+    zero tests and the mechanism had none in any language. This is it.
+
+    An entry quarantined on arrival must reach subscribers when a later
+    ontology extension makes it valid — otherwise a consumer that only
+    watches the subscription never learns the data became visible.
+    """
+    extended = json.dumps({
+        "node_types": {"entity": {"properties": {}}, "ufo": {"properties": {}}},
+        "edge_types": {}
+    })
+    a = GraphStore("a", extended)
+    b = _store("b")
+
+    a.add_node("x1", "ufo", "Quarantined on arrival")
+    _push(a, b)
+    assert b.get_node("x1") is None
+
+    seen = []
+    b.subscribe(lambda event: seen.append(event))
+
+    # The correct remediation, on the local path (H5).
+    b.extend_ontology({"node_types": {"ufo": {"properties": {}}}})
+
+    assert b.get_node("x1") is not None
+    hashes = [e["hash"] for e in seen]
+    x1_hash = next(e["hash"] for e in a.entries_since()
+                   if json.loads(e["payload"]).get("node_id") == "x1")
+    assert x1_hash in hashes, f"un-quarantined entry never notified: {seen}"
+
+
+def test_subscriber_notified_when_extension_arrives_via_sync():
+    """H7: same mechanism on the sync trigger, so the two paths stay paired."""
+    extended = json.dumps({
+        "node_types": {"entity": {"properties": {}}, "ufo": {"properties": {}}},
+        "edge_types": {}
+    })
+    a = GraphStore("a", extended)
+    b = _store("b")
+    a.add_node("x1", "ufo", "Quarantined on arrival")
+    _push(a, b)
+    assert b.get_node("x1") is None
+
+    seen = []
+    b.subscribe(lambda event: seen.append(event))
+
+    # b learns the type from its own extension replayed through a rebuild.
+    b.extend_ontology({"node_types": {"ufo": {"properties": {}}}})
+    _push(a, b)
+
+    assert b.get_node("x1") is not None
+    x1_hash = next(e["hash"] for e in a.entries_since()
+                   if json.loads(e["payload"]).get("node_id") == "x1")
+    assert x1_hash in [e["hash"] for e in seen]

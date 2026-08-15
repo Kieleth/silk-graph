@@ -146,6 +146,13 @@ class GraphStore:
         """Check compatibility with a foreign peer's ontology.
 
         Returns "identical", "superset", "subset", or "divergent".
+
+        ADVISORY ONLY — never consulted during sync. Silk's actual peer
+        compatibility is behavioral: entries merge blind, anything the local
+        ontology rejects is quarantined, and an arriving `ExtendOntology` or
+        `Checkpoint` triggers a rebuild that re-evaluates it. Call this
+        yourself if you want to warn before syncing with a divergent peer;
+        nothing in the library will call it for you.
         """
         ...
     def entries_since(self, hex_hash: str | None = None) -> list[dict[str, Any]]:
@@ -363,11 +370,31 @@ class GraphStore:
     # -- Quarantine (R-02) --
 
     def get_quarantined(self) -> list[str]:
-        """Get hex hashes of quarantined entries.
+        """Get hex hashes of quarantined entries, sorted.
 
         Quarantined entries are in the oplog (for CRDT convergence) but
         invisible in the materialized graph (failed ontology validation).
-        The quarantine set is grow-only — entries never leave.
+        The quarantine set is grow-only *within a single materialization
+        pass*: `rebuild()`/`revalidate()` clears it and re-evaluates every
+        entry against the current ontology, so an entry leaves the set when
+        the ontology grows to accept it.
+        """
+        ...
+    def get_quarantined_details(self) -> list[dict[str, str]]:
+        """Quarantined entries with the validator's diagnosis.
+
+        Each dict has `hash`, `op` (rejected operation kind), `reason` (the
+        validator's message) and `ontology_hash` (what the decision was made
+        against, so a stale diagnosis is recognizable after the schema moves).
+        """
+        ...
+    def revalidate(self) -> int:
+        """Re-materialize from the oplog, re-evaluating quarantined entries
+        against the current ontology. Returns how many left quarantine.
+
+        Called automatically whenever the ontology changes, on both the local
+        (`extend_ontology`) and the sync path. Public so recovery never
+        depends on guessing which trigger rebuilds.
         """
         ...
 

@@ -298,7 +298,7 @@ Silk computes a deterministic content hash and structural fingerprint from its o
 | `identical` | Same resolved ontology | Merge normally |
 | `superset` | Local contains everything remote has, plus more | Merge normally |
 | `subset` | Remote has types/properties local doesn't have yet | Merge. ExtendOntology entries in the payload evolve the local ontology. Unknown types quarantined until extension is processed. |
-| `divergent` | Neither is a superset | Reject sync. Incompatible fork, not resolvable by additive evolution. |
+| `divergent` | Neither is a superset | Incompatible fork, not resolvable by additive evolution. Silk does not act on this: the verdict is advisory and sync proceeds regardless (see below). Refusing the sync is the application's decision. |
 
 The fingerprint is a set of atomic facts: type names, parent relationships, subtype names, property definitions, constraint values, edge type constraints. Under additive-only evolution (R-03), a newer ontology's fingerprint is always a strict superset of an older one's.
 
@@ -307,7 +307,7 @@ The fingerprint is a set of atomic facts: type names, parent relationships, subt
 hash_hex = store.ontology_hash()        # 64-char hex string (BLAKE3)
 fp = store.ontology_fingerprint()       # sorted list of fact strings
 
-# Manual compatibility check (Silk does this automatically during sync)
+# Manual compatibility check (advisory — Silk does NOT call this during sync)
 verdict = store.check_ontology_compatibility(remote_hash, remote_fingerprint)
 # → "identical", "superset", "subset", or "divergent"
 ```

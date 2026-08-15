@@ -420,8 +420,8 @@ impl PyGraphStore {
         self.ontology = self.graph.ontology.clone();
 
         let mut freed = 0;
-        for hash in &quarantined_before {
-            if !self.graph.quarantined.contains(hash) {
+        for hash in quarantined_before.keys() {
+            if !self.graph.quarantined.contains_key(hash) {
                 freed += 1;
                 if let Some(entry) = all.iter().find(|e| e.hash == *hash) {
                     self.notify_subscribers(entry, false);
@@ -1081,12 +1081,39 @@ impl PyGraphStore {
     /// Get the list of quarantined entry hashes (hex-encoded).
     /// Quarantined entries are in the oplog (for CRDT convergence) but
     /// invisible in the materialized graph (failed ontology validation).
+    /// Sorted, so two converged peers produce comparable lists (I-06).
     fn get_quarantined(&self) -> Vec<String> {
-        self.graph
+        let mut out: Vec<String> = self
+            .graph
             .quarantined
-            .iter()
+            .keys()
             .map(|h| hex::encode(h))
-            .collect()
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Quarantined entries with the validator's diagnosis (S1).
+    ///
+    /// Each dict carries `hash`, `op` (the rejected operation kind), `reason`
+    /// (the validator's own message — enough to tell an unknown type from a
+    /// constraint violation) and `ontology_hash` (what the decision was made
+    /// against, so a stale diagnosis is recognizable after the schema moves).
+    fn get_quarantined_details(&self, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let mut records: Vec<(&crate::entry::Hash, &crate::graph::QuarantineRecord)> =
+            self.graph.quarantined.iter().collect();
+        records.sort_by_key(|(h, _)| hex::encode(h));
+
+        let mut out = Vec::with_capacity(records.len());
+        for (hash, record) in records {
+            let d = pyo3::types::PyDict::new(py);
+            d.set_item("hash", hex::encode(hash))?;
+            d.set_item("op", &record.op_kind)?;
+            d.set_item("reason", &record.reason)?;
+            d.set_item("ontology_hash", &record.ontology_hash)?;
+            out.push(d.into());
+        }
+        Ok(out)
     }
 
     // -- Gossip Peer Selection (R-05) --
@@ -1348,7 +1375,7 @@ impl PyGraphStore {
         let carried: Vec<(GraphOp, LamportClock, String)> = self
             .graph
             .quarantined
-            .iter()
+            .keys()
             .filter_map(|h| self.backend.oplog().get(h))
             .map(|e| (e.payload.clone(), e.clock.clone(), e.author.clone()))
             .collect();
@@ -1504,13 +1531,30 @@ impl PyGraphStore {
                 .ontology
                 .validate_node(node_type, subtype.as_deref(), properties)
                 .map_err(|e| e.to_string()),
-            GraphOp::AddEdge { edge_type, .. } => {
-                // Full edge validation requires source/target node types which
-                // may not be available yet during sync. Just check edge_type exists.
-                if self.ontology.edge_types.contains_key(edge_type) {
-                    Ok(())
-                } else {
-                    Err(format!("unknown edge type '{edge_type}'"))
+            GraphOp::AddEdge {
+                edge_type,
+                source_id,
+                target_id,
+                properties,
+                ..
+            } => {
+                // S7: this checked only that the edge type existed, so the
+                // buffer path admitted edges the direct API rejects loudly and
+                // drain() reported them as applied. Both doors get the same
+                // lock. Endpoints that are not materialized yet cannot be
+                // type-checked here; graph.apply holds those pending (S9).
+                if !self.ontology.edge_types.contains_key(edge_type) {
+                    return Err(format!("unknown edge type '{edge_type}'"));
+                }
+                match (
+                    self.graph.get_node(source_id),
+                    self.graph.get_node(target_id),
+                ) {
+                    (Some(src), Some(tgt)) => self
+                        .ontology
+                        .validate_edge(edge_type, &src.node_type, &tgt.node_type, properties)
+                        .map_err(|e| e.to_string()),
+                    _ => Ok(()),
                 }
             }
             GraphOp::UpdateProperty {

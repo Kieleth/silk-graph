@@ -111,7 +111,8 @@
       "claim_id": "I-06",
       "kind": "invariant",
       "rust_tests": [
-        "src/graph.rs"
+        "src/graph.rs",
+        "src/python/mod.rs"
       ],
       "python_tests": [
         "pytests/test_invariants.py",

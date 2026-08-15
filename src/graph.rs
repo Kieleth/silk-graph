@@ -43,6 +43,23 @@ pub struct Edge {
     pub tombstoned: bool,
 }
 
+/// Why an entry was quarantined (S1).
+///
+/// The validators produce a precise diagnosis — type name, property,
+/// expected type, allowed set, constraint name — and every quarantine site
+/// used to drop it one line before the operator needed it, leaving a bare
+/// hash and no way to tell an unknown type from a constraint violation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuarantineRecord {
+    /// The operation kind that was rejected, e.g. "add_node".
+    pub op_kind: String,
+    /// The validator's own message.
+    pub reason: String,
+    /// Hex content hash of the ontology this decision was made against, so a
+    /// stale diagnosis is recognizable after the schema moves.
+    pub ontology_hash: String,
+}
+
 /// Materialized graph — derived from the op log.
 ///
 /// Provides fast queries without replaying the full log.
@@ -81,7 +98,7 @@ pub struct MaterializedGraph {
     /// materialization pass. Cleared and rebuilt on `rebuild()` — this
     /// allows previously-quarantined entries to be re-evaluated when the
     /// ontology evolves (e.g., after ExtendOntology arrives via sync).
-    pub quarantined: HashSet<Hash>,
+    pub quarantined: HashMap<Hash, QuarantineRecord>,
     /// S9: edges that arrived before their endpoints. Held (and reported
     /// quarantined) until both endpoints materialize, then re-evaluated with
     /// full endpoint-type validation. Previously such edges were admitted
@@ -101,7 +118,7 @@ impl MaterializedGraph {
             by_type: HashMap::new(),
             base_ontology: ontology.clone(),
             ontology,
-            quarantined: HashSet::new(),
+            quarantined: HashMap::new(),
             pending_edges: HashMap::new(),
         }
     }
@@ -114,6 +131,10 @@ impl MaterializedGraph {
     /// convergence — quarantine is a graph-layer concern, not an oplog concern.
     pub fn apply(&mut self, entry: &Entry) {
         self.apply_entry(entry, ValidationMode::Full)
+    }
+
+    fn apply_entry(&mut self, entry: &Entry, mode: ValidationMode) {
+        self.apply_inner(entry, mode, true)
     }
 
     /// Core of `apply`. `mode` is `SkipRequired` only for a checkpoint's inner
@@ -129,7 +150,26 @@ impl MaterializedGraph {
     /// oplog is still genesis-only (H1). Replay has no valid baseline of its
     /// own to judge against, since the ontology it carries is precisely what
     /// the rest of the replay is relative to.
-    fn apply_entry(&mut self, entry: &Entry, mode: ValidationMode) {
+    /// `adopt_checkpoint_ontology` is false only during `rebuild`'s second
+    /// pass, where the effective ontology has already been folded and a
+    /// checkpoint's inner `DefineOntology` must not clobber the extensions
+    /// that causally follow it.
+    fn apply_inner(
+        &mut self,
+        entry: &Entry,
+        mode: ValidationMode,
+        adopt_checkpoint_ontology: bool,
+    ) {
+        macro_rules! quarantine {
+            ($kind:expr, $reason:expr) => {{
+                let record = QuarantineRecord {
+                    op_kind: $kind.to_string(),
+                    reason: $reason.to_string(),
+                    ontology_hash: hex::encode(self.ontology.content_hash()),
+                };
+                self.quarantined.insert(entry.hash, record);
+            }};
+        }
         match &entry.payload {
             GraphOp::Checkpoint { ops, op_clocks, .. } => {
                 // R-08: Replay synthetic ops to restore graph state.
@@ -142,7 +182,9 @@ impl MaterializedGraph {
                     // The oplog is authoritative; a declared ontology only seeds
                     // new stores.
                     if let GraphOp::DefineOntology { ontology } = op {
-                        self.ontology = ontology.clone();
+                        if adopt_checkpoint_ontology {
+                            self.ontology = ontology.clone();
+                        }
                         continue;
                     }
                     let clock = if i < op_clocks.len() {
@@ -160,8 +202,8 @@ impl MaterializedGraph {
                 // Genesis — nothing to materialize.
             }
             GraphOp::ExtendOntology { extension } => {
-                if let Err(_e) = self.ontology.merge_extension(extension) {
-                    self.quarantined.insert(entry.hash);
+                if let Err(e) = self.ontology.merge_extension(extension) {
+                    quarantine!("extend_ontology", e);
                 } else {
                     self.quarantined.remove(&entry.hash);
                 }
@@ -174,13 +216,13 @@ impl MaterializedGraph {
                 properties,
             } => {
                 // R-02: validate against ontology, quarantine if invalid
-                if let Err(_e) = self.ontology.validate_node_mode(
+                if let Err(e) = self.ontology.validate_node_mode(
                     node_type,
                     subtype.as_deref(),
                     properties,
                     mode,
                 ) {
-                    self.quarantined.insert(entry.hash);
+                    quarantine!("add_node", e);
                     return;
                 }
                 // H6: quarantine must be a function of the oplog, not of sync
@@ -207,7 +249,10 @@ impl MaterializedGraph {
             } => {
                 // R-02: validate edge type exists.
                 if !self.ontology.edge_types.contains_key(edge_type.as_str()) {
-                    self.quarantined.insert(entry.hash);
+                    quarantine!(
+                        "add_edge",
+                        crate::ontology::ValidationError::UnknownEdgeType(edge_type.clone())
+                    );
                     return;
                 }
                 // Bug 13 fix: validate source/target type constraints when both nodes
@@ -220,24 +265,26 @@ impl MaterializedGraph {
                     self.nodes.get(target_id.as_str()),
                 ) {
                     (Some(src), Some(tgt)) => {
-                        if self
-                            .ontology
-                            .validate_edge_mode(
-                                edge_type,
-                                &src.node_type,
-                                &tgt.node_type,
-                                properties,
-                                mode,
-                            )
-                            .is_err()
-                        {
-                            self.quarantined.insert(entry.hash);
+                        if let Err(e) = self.ontology.validate_edge_mode(
+                            edge_type,
+                            &src.node_type,
+                            &tgt.node_type,
+                            properties,
+                            mode,
+                        ) {
+                            quarantine!("add_edge", e);
                             return;
                         }
                     }
                     _ => {
                         self.pending_edges.insert(entry.hash, entry.clone());
-                        self.quarantined.insert(entry.hash);
+                        quarantine!(
+                            "add_edge",
+                            format!(
+                                "endpoint not yet materialized (source '{source_id}', \
+                                 target '{target_id}'); held pending until both arrive"
+                            )
+                        );
                         return;
                     }
                 }
@@ -276,8 +323,8 @@ impl MaterializedGraph {
                 } else {
                     Ok(())
                 };
-                if verdict.is_err() {
-                    self.quarantined.insert(entry.hash);
+                if let Err(e) = verdict {
+                    quarantine!("update_property", e);
                     return;
                 }
                 self.quarantined.remove(&entry.hash);
@@ -313,9 +360,53 @@ impl MaterializedGraph {
         self.by_type.clear();
         self.quarantined.clear();
         self.pending_edges.clear();
-        // Replay from the base so extensions re-merge exactly once.
+
+        // Pass 1: fold the effective ontology from the log, starting at the
+        // base so each extension merges exactly once.
+        //
+        // Validity is then judged against the FINAL ontology, not against the
+        // ontology as of each entry's position. That is what makes the
+        // documented un-quarantine promise true in the ordinary case: an
+        // operator receives data whose type is unknown, extends the schema,
+        // and the data becomes visible — even though the extension is
+        // causally later than the data it rescues. Judging each entry against
+        // the schema as of its own position would re-quarantine it on every
+        // replay, forever.
         self.ontology = self.base_ontology.clone();
-        self.apply_all(entries);
+        for entry in entries {
+            match &entry.payload {
+                GraphOp::DefineOntology { .. } => {}
+                GraphOp::ExtendOntology { extension } => {
+                    if let Err(e) = self.ontology.merge_extension(extension) {
+                        self.quarantined.insert(
+                            entry.hash,
+                            QuarantineRecord {
+                                op_kind: "extend_ontology".to_string(),
+                                reason: e.to_string(),
+                                ontology_hash: hex::encode(self.ontology.content_hash()),
+                            },
+                        );
+                    }
+                }
+                GraphOp::Checkpoint { ops, .. } => {
+                    for op in ops {
+                        if let GraphOp::DefineOntology { ontology } = op {
+                            self.ontology = ontology.clone();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Pass 2: materialize everything else against that ontology.
+        // ExtendOntology entries are already folded and already judged.
+        for entry in entries {
+            if matches!(entry.payload, GraphOp::ExtendOntology { .. }) {
+                continue;
+            }
+            self.apply_inner(entry, ValidationMode::Full, false);
+        }
     }
 
     /// S9: re-evaluate edges that were waiting on an endpoint. Called whenever

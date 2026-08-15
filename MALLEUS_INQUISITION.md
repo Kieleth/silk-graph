@@ -5,6 +5,49 @@ Subject: silk-graph v0.2.7 at `cdfb83b` (working tree clean).
 Mechanical rites verdict: **NOT APPLICABLE** (no LinkML schema; see "Mechanical rites" below).
 Judgment rites verdict: **7 heresies, 10 suspicions, 3 notes, 6 commendations.**
 
+---
+
+## Cleansing status — 2026-08-14, v0.3.0
+
+Acolyte pass by the project's own session. **Every heresy and every suspicion
+is healed.** Each finding was reproduced independently before being touched,
+each fix landed with the test its acceptance criterion names, and the
+reproduction script was re-run afterwards against the same probes.
+
+| Finding | Status | Where |
+|---|---|---|
+| H1 foreign checkpoint deletes history | **healed** | `src/python/mod.rs` merge filter; refused unless the oplog is genesis-only |
+| H2 remote `UpdateProperty` unvalidated | **healed** | `src/graph.rs` UpdateProperty arm, nodes and edges; `validate_edge_property_update` is new |
+| H3 fingerprint blind to 7 of 8 constraints | **healed** | `src/ontology.rs` `fingerprint`/`fingerprint_constraints`; `(true,true)` arm deleted |
+| H4 compaction discards quarantined entries | **healed** | `compact()` carries them, re-rooted at the checkpoint |
+| H5 local extend never re-evaluates quarantine | **healed** | shared `revalidate()`, also public |
+| H6 quarantined *and* materialized | **healed** | removal on every success path |
+| H7 unresolvable CHANGELOG citations | **healed** | tests written; `scripts/audit_claims.py` now fails on unresolvable citations |
+| S1 rejection reason discarded | **healed** | `get_quarantined_details()` |
+| S2 `trusted` too coarse | **healed** | `ValidationMode::SkipRequired` |
+| S3 unknown constraint names inert | **healed** | rejected at both ontology entry points; `x_` opt-out |
+| S4 compatibility API dead scaffolding | **healed** | documented advisory; `Entry.ontology_hash` removed with a both-arities deserialization shim |
+| S5 doc/code contradictions | **healed** | stub, FAQ, PROOF line citation |
+| S6 I-06 test weaker than the theorem | **healed** | set equality asserted; premise added to the claim |
+| S7 buffer/direct API disagree | **healed** | one validator for both doors |
+| S8 `open`/`from_snapshot` skip `validate_self` | **healed** | gated in `extract_ontology_from_genesis`, where all paths meet |
+| S9 unvalidated edges on a rebuild that may not come | **healed** | pending-edge set, re-evaluated on endpoint arrival |
+| S10 no fingerprint version | **healed** | `fingerprint_version:2` |
+
+### Three corrections to the report
+
+1. **H5's disk claim.** The report records `[D2-disk] after reopen -> sees x1: False`. On reproduction, reopening from disk *did* recover the node, because `open()` replays the persisted `ExtendOntology`. The finding stands — there was no in-process recovery and no public API — but a process restart was a (undocumented, unusable-in-a-loop) way out.
+
+2. **S6 needed more than H6.** The report expected `sorted(a) == sorted(b)` to pass once H6 was fixed. It did not: `rebuild()` did not reset the ontology, so the effective schema depended on how the process was constructed and how many rebuilds had run, not on the oplog. I-06's proof already assumed "the same evolved ontology" while the invariant omitted the premise. Fixed on both sides — rebuild now folds from the base, and the claim states its premise.
+
+3. **S4's deletion was not a cleanup.** `Entry` serializes as a positional msgpack array with no field names, so removing the never-populated field changes the arity of every entry ever written. Verified against real 0.2.7 redb stores. Shipped with a deserialization shim accepting both arities, plus a test pinning the arity so the next such "cleanup" has to be deliberate. `PROTOCOL_VERSION` is 2; this build reads what older builds wrote, but not the reverse.
+
+### Deliberately not done
+
+- **N2 (strict mode for D-026 open properties)** remains a documented divergence, not a defect. No flag was added; that is a product decision, not an acolyte one.
+- **N3 (`DefineLens`, `QueryEngine` with no implementations)** left reserved. Both are honest about being reserved, and `DefineLens` ships in the wire format precisely so adding it later is not a break.
+- **S4's other half (wiring compatibility into `SyncOffer`)** stays deferred by decision: it is a second protocol change on top of this one, and the behavioral model (merge, quarantine, rebuild) is the design, not a stopgap.
+
 Eight of these findings (H1-H6, S3, S7) were **verified by execution**
 against the built `silk` 0.2.7 extension module, not inferred from reading.
 They are marked

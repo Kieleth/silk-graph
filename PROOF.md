@@ -137,9 +137,9 @@ Two implementations with the same entry set produce the same topological order.
 
 ### I-06: Quarantine Determinism
 
-`G.quarantined` is grow-only within a single materialization pass. On `rebuild()` (triggered by `ExtendOntology` or `Checkpoint` during sync), the set is cleared and all entries are re-evaluated against the evolved ontology. Two peers with identical oplogs produce identical quarantine sets after rebuild — the decision is deterministic (see Section 4).
+`G.quarantined` is grow-only within a single materialization pass. On `rebuild()` (triggered by `ExtendOntology` or `Checkpoint` during sync), the set is cleared and all entries are re-evaluated against the evolved ontology. Two peers with identical oplogs **and the same base ontology** produce identical quarantine sets after rebuild — the decision is deterministic (see Section 4). The premise matters and was previously stated only inside the proof: the quarantine decision is a function of (base ontology, oplog), so peers whose genesis ontologies differ are outside this claim. `rebuild()` resets to the base ontology before replaying, which is what makes the function well defined.
 
-*Reference*: `src/graph.rs:69-74` (comment), `src/graph.rs:209` (`rebuild()` clears quarantine)
+*Reference*: `src/graph.rs:78-84` (comment), `src/graph.rs:279` (`rebuild()` clears quarantine)
 
 ---
 

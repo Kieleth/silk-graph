@@ -90,7 +90,7 @@ pub type Hash = [u8; 32];
 ///
 /// Each entry is content-addressed: `hash = BLAKE3(msgpack(signable_content))`.
 /// The hash covers the payload, causal links, and clock — NOT the hash itself.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Entry {
     /// BLAKE3 hash of the signable content (payload + next + refs + clock + author)
     pub hash: Hash,
@@ -109,10 +109,75 @@ pub struct Entry {
     /// D-027: ed25519 signature over the hash bytes (64 bytes). None for unsigned (pre-v0.3) entries.
     #[serde(default)]
     pub signature: Option<Vec<u8>>,
-    /// BLAKE3 hash of the resolved ontology at time of entry creation.
-    /// None for pre-migration entries. Not included in content hash (metadata only).
-    #[serde(default)]
-    pub ontology_hash: Option<Hash>,
+}
+
+/// Entries serialize as a POSITIONAL msgpack array — no field names on the
+/// wire or on disk — so the field count is part of the format.
+///
+/// S4 removed a ninth-hour `ontology_hash` field that was never populated in
+/// production. Deserialization therefore accepts both shapes: the current
+/// 7-element form and the legacy 8-element form, whose trailing element is
+/// consumed and discarded. Consuming it matters: entries are read as a
+/// `Vec<Entry>`, so leaving a stray element in the stream would corrupt every
+/// entry after it.
+///
+/// This is one-directional. A build with this shim reads stores and peers
+/// written by older builds; an older build cannot read the 7-element entries
+/// this one writes.
+impl<'de> Deserialize<'de> for Entry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct EntryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for EntryVisitor {
+            type Value = Entry;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an Entry as a 7-element sequence (or legacy 8-element)")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Entry, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                use serde::de::Error as _;
+                let hash = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &"8 fields"))?;
+                let payload = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(1, &"8 fields"))?;
+                let next = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(2, &"8 fields"))?;
+                let refs = seq.next_element()?.unwrap_or_default();
+                let clock = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(4, &"8 fields"))?;
+                let author = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(5, &"8 fields"))?;
+                let signature = seq.next_element()?.unwrap_or(None);
+                // Legacy trailing `ontology_hash`. Always None in production;
+                // consumed so the surrounding stream stays aligned.
+                let _legacy: Option<Option<Hash>> = seq.next_element()?;
+
+                Ok(Entry {
+                    hash,
+                    payload,
+                    next,
+                    refs,
+                    clock,
+                    author,
+                    signature,
+                })
+            }
+        }
+
+        deserializer.deserialize_seq(EntryVisitor)
+    }
 }
 
 /// The portion of an Entry that gets hashed. Signature is NOT included
@@ -145,7 +210,6 @@ impl Entry {
             clock,
             author,
             signature: None,
-            ontology_hash: None,
         }
     }
 
@@ -171,7 +235,6 @@ impl Entry {
             clock,
             author,
             signature: Some(sig.to_bytes().to_vec()),
-            ontology_hash: None,
         }
     }
 
@@ -331,6 +394,10 @@ mod tests {
 
     fn sample_clock() -> LamportClock {
         LamportClock::with_values("inst-a", 1, 0)
+    }
+
+    fn sample_entry() -> Entry {
+        Entry::new(sample_op(), vec![], vec![], sample_clock(), "inst-a")
     }
 
     #[test]
@@ -693,93 +760,85 @@ mod tests {
         );
     }
 
-    // -- ontology_hash field --
+    // -- Wire format compatibility (S4) --
 
+    /// A legacy 8-element entry, as written by every build up to 0.2.7, must
+    /// still deserialize after `ontology_hash` was removed. This is the eta
+    /// case: an existing redb store opened by a newer binary.
     #[test]
-    fn entry_ontology_hash_defaults_to_none() {
-        let entry = Entry::new(
-            GraphOp::AddNode {
-                node_id: "n1".into(),
-                node_type: "entity".into(),
-                subtype: None,
-                label: "n1".into(),
-                properties: BTreeMap::new(),
-            },
-            vec![],
-            vec![],
-            sample_clock(),
-            "author",
+    fn legacy_eight_element_entry_still_deserializes() {
+        let entry = sample_entry();
+        // Rebuild the legacy shape by hand: the same seven fields plus the
+        // trailing ontology_hash that used to follow. Tuples serialize as
+        // positional arrays, which is exactly the old struct encoding.
+        let legacy = (
+            entry.hash,
+            entry.payload.clone(),
+            entry.next.clone(),
+            entry.refs.clone(),
+            entry.clock.clone(),
+            entry.author.clone(),
+            entry.signature.clone(),
+            None::<Hash>,
         );
-        assert!(entry.ontology_hash.is_none());
-    }
+        let bytes = rmp_serde::to_vec(&legacy).unwrap();
+        assert_eq!(bytes[0], 0x98, "legacy fixture is not 8 elements");
 
-    #[test]
-    fn entry_ontology_hash_survives_roundtrip() {
-        let mut entry = Entry::new(
-            GraphOp::AddNode {
-                node_id: "n1".into(),
-                node_type: "entity".into(),
-                subtype: None,
-                label: "n1".into(),
-                properties: BTreeMap::new(),
-            },
-            vec![],
-            vec![],
-            sample_clock(),
-            "author",
-        );
-        entry.ontology_hash = Some([42u8; 32]);
-
-        let bytes = entry.to_bytes();
-        let restored = Entry::from_bytes(&bytes).unwrap();
-        assert_eq!(restored.ontology_hash, Some([42u8; 32]));
-    }
-
-    #[test]
-    fn entry_ontology_hash_not_in_content_hash() {
-        // Two entries identical except for ontology_hash must have the same hash
-        let mut a = Entry::new(
-            GraphOp::AddNode {
-                node_id: "n1".into(),
-                node_type: "entity".into(),
-                subtype: None,
-                label: "n1".into(),
-                properties: BTreeMap::new(),
-            },
-            vec![],
-            vec![],
-            sample_clock(),
-            "author",
-        );
-        let b = a.clone();
-        a.ontology_hash = Some([99u8; 32]);
-
-        // Hashes are computed at creation time, before ontology_hash is set.
-        // Both must be identical (ontology_hash is metadata, not identity).
-        assert_eq!(a.hash, b.hash);
-    }
-
-    #[test]
-    fn old_entry_without_ontology_hash_deserializes() {
-        // Simulate a pre-migration entry (no ontology_hash field)
-        let entry = Entry::new(
-            GraphOp::AddNode {
-                node_id: "n1".into(),
-                node_type: "entity".into(),
-                subtype: None,
-                label: "n1".into(),
-                properties: BTreeMap::new(),
-            },
-            vec![],
-            vec![],
-            sample_clock(),
-            "author",
-        );
-        // Serialize without ontology_hash (it's None, serde skips it)
-        let bytes = entry.to_bytes();
-        let restored = Entry::from_bytes(&bytes).unwrap();
-        assert!(restored.ontology_hash.is_none());
+        let restored = Entry::from_bytes(&bytes).expect("legacy entry must load");
+        assert_eq!(restored, entry);
         assert!(restored.verify_hash());
+    }
+
+    /// The stream must stay aligned: a stray trailing element would corrupt
+    /// every entry after it, since entries are read as a `Vec<Entry>`.
+    #[test]
+    fn legacy_entries_in_a_sequence_stay_aligned() {
+        let entry = sample_entry();
+        let legacy = |e: &Entry| {
+            (
+                e.hash,
+                e.payload.clone(),
+                e.next.clone(),
+                e.refs.clone(),
+                e.clock.clone(),
+                e.author.clone(),
+                e.signature.clone(),
+                None::<Hash>,
+            )
+        };
+        let bytes = rmp_serde::to_vec(&vec![legacy(&entry), legacy(&entry)]).unwrap();
+        let restored: Vec<Entry> = rmp_serde::from_slice(&bytes).expect("legacy vec must load");
+        assert_eq!(restored.len(), 2);
+        assert!(restored.iter().all(|e| e.verify_hash()));
+    }
+
+    /// Entries serialize as a POSITIONAL msgpack array — no field names on the
+    /// wire or on disk. Adding or removing a field therefore changes the arity
+    /// of every entry ever written, breaking stored redb data and any peer on
+    /// an older build. That is a protocol decision, never a cleanup.
+    ///
+    /// This test exists because S4's "delete the dead field" read as tidying
+    /// and was in fact format-load-bearing.
+    #[test]
+    fn entry_wire_format_is_a_positional_array_of_seven() {
+        let bytes = sample_entry().to_bytes();
+
+        // msgpack fixarray marker: 0x90 | len. Seven fields => 0x97.
+        assert_eq!(
+            bytes[0], 0x97,
+            "Entry is no longer a 7-element positional array. Changing the \
+             field count breaks every persisted store and every peer running \
+             an older build; add a deserialization shim for the old arity \
+             (as S4 did for the 8-element form) before changing this."
+        );
+        // No field names present, confirming positional encoding: there is
+        // nowhere for an added or removed field to hide.
+        for name in [b"payload".as_slice(), b"signature".as_slice()] {
+            assert!(
+                !bytes.windows(name.len()).any(|w| w == name),
+                "expected positional encoding, found a field name on the wire"
+            );
+        }
     }
 
     // -- DefineLens variant --

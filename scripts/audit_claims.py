@@ -205,6 +205,63 @@ def print_summary(report: dict) -> None:
         print()
 
 
+# H7: a CHANGELOG citation that does not resolve buys false confidence at
+# exactly the moment someone goes looking for reassurance. The 0.1.7 row cited
+# an "integration test in src/python/mod.rs" — a file with zero tests — and the
+# Bug 5 row cited a test that contains no call to the mechanism it covers.
+# Both survived because nothing checked. This does.
+TEST_IDENT = re.compile(r"`([^`]+)`")
+PY_TEST = re.compile(r"^(?P<path>(?:pytests|experiments)/[\w/]+\.py)::(?P<name>[\w:]+)$")
+RS_TEST = re.compile(r"^(?P<path>src/[\w/]+\.rs)::(?P<name>\w+)$")
+
+
+def audit_changelog_citations() -> list[str]:
+    """Every regression-test citation in the CHANGELOG bug table must name an
+    identifier that resolves to a real test. Free text does not resolve and is
+    reported, not waved through."""
+    changelog = (ROOT / "CHANGELOG.md").read_text().splitlines()
+    problems: list[str] = []
+
+    for lineno, line in enumerate(changelog, 1):
+        if not line.startswith("|") or line.count("|") < 6:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 5 or cells[0] in ("Version", "---------"):
+            continue
+        if set(cells[0]) <= set("- "):
+            continue
+        citation = cells[4]
+        row_problems: list[str] = []
+        resolved = False
+        for ident in TEST_IDENT.findall(citation):
+            for pattern in (PY_TEST, RS_TEST):
+                m = pattern.match(ident)
+                if not m:
+                    continue
+                path = ROOT / m.group("path")
+                if not path.is_file():
+                    row_problems.append(
+                        f"CHANGELOG.md:{lineno}: cited file does not exist: {ident}")
+                    continue
+                name = m.group("name").split("::")[-1]
+                body = path.read_text()
+                if f"def {name}" in body or f"fn {name}" in body:
+                    resolved = True
+                else:
+                    row_problems.append(
+                        f"CHANGELOG.md:{lineno}: cited test not found: {ident}")
+        if not resolved:
+            row_problems.append(
+                f"CHANGELOG.md:{lineno}: version {cells[0]} cites no resolvable "
+                f"test identifier (got: {citation[:70]!r})")
+            problems.extend(row_problems)
+        # A row with at least one resolving citation is covered; a stale
+        # sibling citation in the same row is still reported.
+        else:
+            problems.extend(p for p in row_problems if "not found" in p or "does not exist" in p)
+    return problems
+
+
 def main() -> int:
     report = build_report()
     out_path = ROOT / "formal" / "audit.json"
@@ -212,11 +269,17 @@ def main() -> int:
     print_summary(report)
     print(f"Wrote {out_path.relative_to(ROOT)}")
 
+    citation_problems = audit_changelog_citations()
+    if citation_problems:
+        print("\nCHANGELOG citation failures:")
+        for p in citation_problems:
+            print(f"  {p}")
+
     uncovered = [
         c for c in report["claims"]
         if not (c["rust_tests"] or c["python_tests"] or c["tla_specs"])
     ]
-    return 1 if uncovered else 0
+    return 1 if (uncovered or citation_problems) else 0
 
 
 if __name__ == "__main__":

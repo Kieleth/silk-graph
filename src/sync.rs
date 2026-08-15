@@ -16,7 +16,7 @@ const MAX_ENTRIES_PER_MESSAGE: usize = 100_000;
 /// entry hashes it holds. The recipient uses this to compute which
 /// entries the peer is missing and needs to receive.
 /// Current protocol version. Incremented on breaking wire format changes.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncOffer {
