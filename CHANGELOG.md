@@ -22,6 +22,17 @@ Silk is young (first public release 2026-03-21). During its first month, several
 
 Silk's guarantee is not "zero bugs have ever existed" — it's "every convergence-relevant bug we've found has a regression test that prevents its class from recurring, and `make check` must stay green before any release." See [PROOF.md](PROOF.md) for the formal invariants the tests verify against and [INVARIANTS.md](INVARIANTS.md) for the automated enforcement mechanism.
 
+## [0.4.1] - 2026-08-15
+
+### Added
+- **Bundled agent skills.** Two Claude Code skills now ship inside the wheel, so any environment that `pip install silk-graph`s can install them without cloning: `silk-skills install --user` (every project on the machine) or `silk-skills install --project DIR`. `silk-skills list` shows what is bundled.
+  - **`silk-graph`** — for sessions *using* the library. The oplog-is-authoritative model, the traps that have actually caused outages (empty graph after reopen, a migration that reports success and changes nothing, disk that grows when you delete), plus on-demand references for ontology evolution, quarantine diagnosis, persistence and compaction, and sync.
+  - **`silk-internals`** — for sessions *changing* the library. The positional-serialization law, the two-pass rebuild and why its ordering is load-bearing, the invariants any change must preserve, the release checklist, and a bug-class history so the recurring shapes get caught before they ship.
+  - Skills describe the version they ship with; re-run the installer after upgrading.
+
+### Tests
+- Rust 209, Python 507. New: skills are bundled and reachable from the wheel, frontmatter is well formed and its `name` matches the directory the harness resolves by, every `references/*.md` pointer resolves and every reference is reachable from its SKILL.md, and the installer copies nested references idempotently.
+
 ## [0.4.0] - 2026-08-15
 
 Found in semi-production: a downstream migration to add 48 edge-endpoint

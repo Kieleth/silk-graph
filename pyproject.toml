@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "silk-graph"
-version = "0.4.0"
+version = "0.4.1"
 description = "Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs"
 requires-python = ">=3.11"
 license = {file = "LICENSE.md"}
@@ -21,6 +21,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 readme = "README.md"
+
+[project.scripts]
+silk-skills = "silk.skills_cli:main"
 
 [project.urls]
 Homepage = "https://kieleth.com"
