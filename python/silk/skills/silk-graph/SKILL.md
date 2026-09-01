@@ -45,6 +45,17 @@ a hash, appended an entry, and changed nothing. On >= 0.4.0 it raises. If you
 are on an older version and a migration keeps "succeeding" while the schema
 never moves, this is why. Upgrade.
 
+**A schema change that reviewers call additive can still delete your data.**
+Adding the first subtype to a type that had none, or a required property to a
+type that already exists, is additive on the declarations and a delete in
+effect: every entry written without it stops validating, inside the
+`extend_ontology` call, with no exception raised. silk >= 0.5.0 refuses the
+four shapes it can detect. One it cannot: declaring a property that existing
+nodes already carry as an undeclared extra, with a type that does not match.
+**Run `store.preview_extension(ext)` before every extension on a store that
+has data in it** and read `would_quarantine`. On 0.4.x and older, all of them
+are accepted silently.
+
 **You cannot narrow anything, ever.** No removing a type, no removing a
 property, no removing an endpoint binding, no adding a constraint to an
 existing property. This is structural, not a policy: `OntologyExtension` has
@@ -103,6 +114,10 @@ local.merge_sync_payload(payload)
 ## Rules of thumb
 
 - Design the ontology additively; treat every type name as permanent.
+- Decide two things when a type is created, because neither can be added
+  later: whether it has subtypes (declare a real one, `{}` does not reserve
+  the slot) and which properties are required.
+- `preview_extension` before `extend_ontology`, always, on a store with data.
 - After any schema change, check `len(store.get_quarantined())`. Zero is the
   only good number in a healthy system.
 - Never infer health from a green `verify_integrity()` — it checks DAG

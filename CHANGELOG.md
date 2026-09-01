@@ -18,9 +18,84 @@ Silk is young (first public release 2026-03-21). During its first month, several
 | 0.1.6 | `update_property` bypassed ontology validation — type mismatches and constraint violations (`enum`, `min`, `max`) were silently accepted | Schema | User-reported audit | `pytests/test_constraints.py::test_update_property_enum_invalid_rejected` and siblings (9 tests covering enum/range/type/pattern violations on `update_property`) |
 | 0.1.7 | Subscribers were not notified when previously-quarantined entries became valid after ontology evolution | Notification | Review pass on quarantine rebuild | `pytests/test_quarantine.py::test_subscriber_notified_when_entry_leaves_quarantine` and `::test_subscriber_notified_when_extension_arrives_via_sync`. Written in 0.3.0: this row previously cited a free-text "integration test in src/python/mod.rs", a file with zero tests (inquisition H7) |
 | 0.2.6 | Checkpoint replay skipped the inner `DefineOntology`, so reopening a compacted store via the constructor (or bootstrapping one via sync) quarantined every extension-typed entity and materialized a near-empty graph | Convergence | Production reopen refusal (downstream operator's ontology guard) + repro during triage | `pytests/test_compaction.py::test_ctor_reopen_compacted_preserves_extension_nodes` + 4 siblings + `src/graph.rs::checkpoint_replay_applies_inner_define_ontology`; fix applies the checkpoint's inner ontology on replay (Bug 14) |
+| 0.5.0 | Extensions that are additive on the declarations but retroactively invalidate stored data (first subtype on a subtype-less type; a required property on an existing node type, edge type, or a newly declared subtype) were accepted silently, quarantining every affected entry inside the `extend_ontology` call, and `check_compatibility` reported them as a plain `superset` | Schema | Downstream outage RCA handed across the boundary; the remaining two shapes and the value-dependent fifth found by enumerating the update surface during triage | `pytests/test_retroactive_invalidation.py::test_destructive_extension_is_refused` + 21 siblings, `src/ontology.rs::refuses_the_first_subtype_on_a_subtypeless_type` + 5 siblings; fix refuses the four detectable shapes in `merge_extension`, adds `preview_extension` for the one that depends on stored values, and splits `destructive_superset` out of the compatibility verdict |
 | 0.2.7 | Checkpoint replay validated synthetic inner ops, whose `AddNode` carries an empty property map by design — every entity with a required property (both open paths, sync bootstrap, and rebuild) quarantined on replay | Convergence | Downstream repro handed across the boundary after the 0.2.6 fix; class isolated by matrix testing during triage | `pytests/test_compaction.py::test_ctor_reopen_compacted_preserves_required_property_nodes` + 2 siblings + `src/graph.rs::checkpoint_replay_trusts_inner_ops`; fix replays checkpoint inner ops as trusted (Bug 14b) |
 
 Silk's guarantee is not "zero bugs have ever existed" — it's "every convergence-relevant bug we've found has a regression test that prevents its class from recurring, and `make check` must stay green before any release." See [PROOF.md](PROOF.md) for the formal invariants the tests verify against and [INVARIANTS.md](INVARIANTS.md) for the automated enforcement mechanism.
+
+## [0.5.0] - 2026-08-31
+
+A downstream consumer lost a live box to an ontology migration that every
+reviewer, and silk itself, called additive. Adding the first subtype to a type
+that had none is syntactically additive and semantically a delete: once a type
+declares subtypes, a node without one fails validation, so every node written
+so far quarantines. No exception, no exit code, the data just stops being
+visible.
+
+Triage found the reported shape, three more like it, and a fifth that cannot be
+refused from the extension alone.
+
+**Breaking.** Extensions that were accepted before now raise, and
+`check_ontology_compatibility` has a fifth return value. No wire or disk format
+change: `PROTOCOL_VERSION` stays at 3 and stores written by 0.4.x open
+unchanged.
+
+### Fixed
+- **`merge_extension` refuses the four extension shapes that would invalidate
+  existing entries.** They were accepted, applied, and took the data with them:
+  - `add_subtypes` on a node type whose `subtypes` is unset. Refused with
+    `SubtypesOnSubtypelessType`; subtypes must be declared when the type is
+    created. Adding one to a type that already declares some stays additive.
+  - `add_properties` with `"required": true` on an existing node type, on an
+    existing edge type, or inside a newly declared subtype. Refused with
+    `RequiredPropertyOnExistingType`. A node may already be naming an
+    undeclared subtype, which D-026 accepts, so the subtype case is the same
+    class. Add the property as optional instead. Required properties on a
+    brand new type are still fine: no data can exist under it.
+
+  Each message names the consequence rather than only the rule. The doc
+  comment on `NodeTypeUpdate.add_properties` already said "new optional
+  properties"; nothing checked it.
+
+### Added
+- **`preview_extension(extension)`** — what `extend_ontology` would cost, with
+  nothing written. Returns `would_quarantine`, `would_rescue`, and up to ten
+  `samples` of `{hash, op, reason}`. It replays the whole oplog against the
+  would-be ontology, which makes it the only check that catches a loss caused
+  by stored values rather than by the shape of the extension. The known case:
+  a node written with an undeclared extra property is accepted, and later
+  declaring that property, even as optional, type-checks it retroactively.
+  That one stays legal because nothing about the extension says it is
+  dangerous.
+- **`Compatibility::DestructiveSuperset`**, surfaced as `"destructive_superset"`
+  from `check_ontology_compatibility`. A peer can hold any of the refused
+  shapes as its genesis ontology, so refusing them locally does not stop them
+  arriving. The verdict now separates "declares more than you, safe to adopt"
+  from "declares more than you, and adopting it would quarantine your data".
+  A consumer gating an automatic migration on `"superset"` falls through to its
+  refuse branch without a code change, which is the intended failure mode.
+- **`ontology_destructive_changes(foreign_fingerprint)`** — the same analysis
+  as a list of readable lines, so a guard can say which change is the problem.
+  It works from fingerprints alone and needs no access to the peer's oplog;
+  that is also its limit, and it cannot see the value-dependent case.
+  `preview_extension` is the tool for that one.
+
+### Changed
+- `pytests/test_extend_ontology.py::test_add_subtype` used to add the first
+  subtype to a subtype-less type and assert that it worked. It did, and it
+  silently erased every existing node of that type. Rewritten against a type
+  that already declares subtypes, with the reason in the docstring.
+
+### Tests
+- Rust 224, Python 529. New: 22 Python tests covering the four refusals, the
+  controls that must stay legal (optional properties, a subtype on an
+  already-subtyped type, a required property on a brand new type, edge endpoint
+  widening), the value-dependent shape that stays legal, `preview_extension`
+  for losses, rescues, samples, non-mutation and refusal parity with
+  `extend_ontology`, and the compatibility verdict. Plus 15 Rust unit tests on
+  the refusals and on the fingerprint parsing behind
+  `destructive_changes`, including the subtype-property path and the
+  peer-holds-it-as-optional case.
 
 ## [0.4.1] - 2026-08-15
 

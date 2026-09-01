@@ -122,3 +122,35 @@ tests. `scripts/audit_claims.py` now fails on citations that do not resolve.
 
 **The class:** a test whose assertion is weaker than the claim is a finding on
 its own, whether or not it passes. Same for a citation nobody can follow.
+
+## 9. "Additive" tested on the declarations, not on the data
+
+**0.5.0.** `merge_extension` asked whether the new ontology's declarations
+contained the old one's. It never asked whether entries already in the oplog
+survive. Five shapes pass the declaration test and invalidate stored data:
+the first subtype on a subtype-less type, a required property on an existing
+node type, on an existing edge type, or inside a newly declared subtype, and
+declaring a property that existing nodes already carry as an undeclared extra
+with a mismatched type.
+
+All five quarantined the affected entries **inside the `extend_ontology`
+call**, not on reopen, and raised nothing. `check_compatibility` reported
+every one of them as a plain `superset`, so a downstream boot guard cleared
+the migration that took a production box down.
+
+Two details worth keeping:
+
+- The doc comment on `NodeTypeUpdate.add_properties` already said "new
+  optional properties". The spec was right and unenforced for two years. A
+  comment is not a check.
+- The fix could not simply be "validate each entry against the ontology as of
+  its own position". The two-pass rebuild validates against the *final*
+  ontology on purpose, so that an extension can rescue an entry that arrived
+  before it. Positional validation would re-quarantine such entries forever.
+  Refusing the destructive extensions keeps both properties.
+
+**The class:** when a guarantee is about data, testing it against the schema
+is testing a different guarantee. Ask what an entry written yesterday looks
+like under the proposed change, and if the answer depends on values rather
+than declarations, the check has to replay the log — that is what
+`preview_extension` is for.

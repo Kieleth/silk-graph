@@ -531,7 +531,15 @@ impl PyGraphStore {
 
     /// Check compatibility with a foreign peer's ontology.
     ///
-    /// Returns "identical", "superset", "subset", or "divergent".
+    /// Returns "identical", "superset", "destructive_superset", "subset", or
+    /// "divergent".
+    ///
+    /// "destructive_superset" means this ontology declares everything the peer
+    /// does and more, but the extra declarations include a requirement the
+    /// peer's data was never held to: adopting it would quarantine entries the
+    /// peer considers valid. It is reported separately from "superset" so a
+    /// boot guard that auto-migrates on "superset" refuses instead of
+    /// migrating into data loss.
     fn check_ontology_compatibility(
         &self,
         foreign_hash_hex: &str,
@@ -548,10 +556,89 @@ impl PyGraphStore {
         Ok(match verdict {
             crate::ontology::Compatibility::Identical => "identical",
             crate::ontology::Compatibility::Superset => "superset",
+            crate::ontology::Compatibility::DestructiveSuperset => "destructive_superset",
             crate::ontology::Compatibility::Subset => "subset",
             crate::ontology::Compatibility::Divergent => "divergent",
         }
         .to_string())
+    }
+
+    /// List the changes in this ontology that would invalidate data a peer
+    /// holding `foreign_fingerprint` considers valid.
+    ///
+    /// Empty whenever `check_ontology_compatibility` returns anything other
+    /// than "destructive_superset". Works from fingerprints alone, so it needs
+    /// no access to the peer's oplog — and so it cannot see a change whose
+    /// destructiveness depends on stored values rather than declarations. Use
+    /// `preview_extension` against a real store for that.
+    fn ontology_destructive_changes(&self, foreign_fingerprint: Vec<String>) -> Vec<String> {
+        let fp: std::collections::HashSet<String> = foreign_fingerprint.into_iter().collect();
+        self.ontology.destructive_changes(&fp)
+    }
+
+    /// Report what `extend_ontology` with this extension would cost, without
+    /// writing anything.
+    ///
+    /// Returns a dict:
+    ///   would_quarantine — entries visible now that would stop materializing
+    ///   would_rescue     — entries quarantined now that would materialize
+    ///   samples          — up to 10 of the losses, each {hash, op, reason}
+    ///
+    /// Raises the same errors `extend_ontology` does, so an extension that
+    /// would be refused is refused here too rather than reported as costing
+    /// nothing.
+    ///
+    /// This replays the whole oplog against the would-be ontology. It is the
+    /// only check that sees a loss caused by stored values rather than by the
+    /// shape of the extension: declaring a property that existing nodes
+    /// already carry as an undeclared extra, with a type that does not match,
+    /// is refused by nothing and found here.
+    fn preview_extension(&self, extension: &pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<PyObject> {
+        let json_str = ontology_arg_to_json(extension)?;
+        check_extension_keys(&json_str)?;
+        let extension: crate::ontology::OntologyExtension = serde_json::from_str(&json_str)
+            .map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err(format!("invalid extension JSON: {e}"))
+            })?;
+
+        let mut test_ontology = self.ontology.clone();
+        test_ontology
+            .merge_extension(&extension)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+        test_ontology
+            .validate_self()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+
+        let all = self.backend.oplog().entries_since(None);
+        let refs: Vec<&Entry> = all.iter().copied().collect();
+        let mut scratch = self.graph.clone();
+        scratch.rebuild_with_pending_extension(&refs, &extension);
+
+        let before = &self.graph.quarantined;
+        let after = &scratch.quarantined;
+
+        let mut losses: Vec<(&crate::entry::Hash, &crate::graph::QuarantineRecord)> = after
+            .iter()
+            .filter(|(hash, _)| !before.contains_key(*hash))
+            .collect();
+        losses.sort_by_key(|(hash, _)| **hash);
+        let rescued = before.keys().filter(|h| !after.contains_key(*h)).count();
+
+        Python::with_gil(|py| {
+            let out = pyo3::types::PyDict::new(py);
+            out.set_item("would_quarantine", losses.len())?;
+            out.set_item("would_rescue", rescued)?;
+            let samples = pyo3::types::PyList::empty(py);
+            for (hash, record) in losses.iter().take(10) {
+                let item = pyo3::types::PyDict::new(py);
+                item.set_item("hash", hex::encode(hash))?;
+                item.set_item("op", &record.op_kind)?;
+                item.set_item("reason", &record.reason)?;
+                samples.append(item)?;
+            }
+            out.set_item("samples", samples)?;
+            Ok(out.into())
+        })
     }
 
     /// Return all entries since a given hash (delta for sync).

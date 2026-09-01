@@ -27,6 +27,23 @@ ONTOLOGY = json.dumps({
 })
 
 
+# Same, but "entity" already declares a subtype. Extending a type that has
+# subtypes is additive; giving its first subtype to a type that has none is
+# not, and is refused. See test_retroactive_invalidation.py.
+SUBTYPED_ONTOLOGY = json.dumps({
+    "node_types": {
+        "entity": {
+            "properties": {
+                "name": {"value_type": "string", "required": True},
+                "status": {"value_type": "string", "required": True}
+            },
+            "subtypes": {"switch": {"properties": {}}}
+        }
+    },
+    "edge_types": {}
+})
+
+
 def _store(instance_id="test"):
     return GraphStore(instance_id, ONTOLOGY)
 
@@ -136,8 +153,17 @@ def test_relax_required_to_optional():
 
 
 def test_add_subtype():
-    """Add a new subtype to an existing node type."""
-    store = _store()
+    """Add a subtype to a node type that already declares some.
+
+    Rewritten 2026-08-31. This used to add the FIRST subtype to a subtype-less
+    type and assert that it worked. It did, and it silently quarantined every
+    existing node of that type: once a type declares subtypes, a node without
+    one fails validation. merge_extension now refuses that flip. Extending a
+    type that already declares subtypes stays additive, as long as the new
+    subtype carries no required property — a node may already be using the
+    name under D-026.
+    """
+    store = GraphStore("test", SUBTYPED_ONTOLOGY)
 
     store.extend_ontology(json.dumps({
         "node_type_updates": {
@@ -145,7 +171,7 @@ def test_add_subtype():
                 "add_subtypes": {
                     "router": {
                         "properties": {
-                            "ip": {"value_type": "string", "required": True}
+                            "ip": {"value_type": "string", "required": False}
                         }
                     }
                 }

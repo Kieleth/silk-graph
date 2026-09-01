@@ -130,8 +130,17 @@ pub struct Ontology {
 pub enum Compatibility {
     /// Same resolved ontology (identical hash).
     Identical,
-    /// Local contains everything remote has, plus more. Safe to merge.
+    /// Local contains everything remote has, plus more, and nothing the
+    /// remote already holds stops validating. Safe to merge.
     Superset,
+    /// Local is a superset on the declarations, but the extra facts include a
+    /// requirement the remote's data was never held to. Adopting this ontology
+    /// would quarantine entries the remote considers valid.
+    ///
+    /// This is reported instead of `Superset` so a consumer that gates an
+    /// automatic migration on `"superset"` falls through to its refuse branch
+    /// rather than migrating into data loss.
+    DestructiveSuperset,
     /// Remote has types/properties local doesn't have yet. ExtendOntology
     /// entries in the sync payload will resolve the gap.
     Subset,
@@ -241,6 +250,108 @@ impl Ontology {
         facts
     }
 
+    /// Facts held here that would invalidate data the foreign peer considers
+    /// valid, as human-readable lines.
+    ///
+    /// Works on fingerprints alone, so it needs no access to the peer's oplog.
+    /// That is also its limit: a change whose destructiveness depends on
+    /// values rather than declarations is invisible here. Declaring a property
+    /// that existing nodes already carry as an undeclared extra, under a type
+    /// that does not match, is the known case. `preview_extension` sees that
+    /// one because it replays.
+    pub fn destructive_changes(&self, foreign_fingerprint: &HashSet<String>) -> Vec<String> {
+        Self::destructive_facts(&self.fingerprint(), foreign_fingerprint)
+    }
+
+    /// Shared by `check_compatibility` and `destructive_changes`.
+    ///
+    /// Three fact shapes matter, mirroring what `merge_extension` refuses:
+    /// a required property the peer does not hold as required, on a type the
+    /// peer knows; and the first subtype on a type the peer holds without any.
+    fn destructive_facts(mine: &HashSet<String>, foreign: &HashSet<String>) -> Vec<String> {
+        let mut out = Vec::new();
+
+        // `prop:T:P:vt:required`, `edgeprop:E:P:vt:required`,
+        // `subprop:T:S:P:vt:required`. Strip the "required" suffix and the
+        // value type to get the slot, then ask whether the peer holds that
+        // same slot as required. Absent or optional both mean the peer's data
+        // was never held to the requirement.
+        for fact in mine.difference(foreign) {
+            let Some(slot) = fact.strip_suffix(":required") else {
+                continue;
+            };
+            let (kind, prefix, rest) = match slot.split_once(':') {
+                Some(("prop", rest)) => ("node type", "prop", rest),
+                Some(("edgeprop", rest)) => ("edge type", "edgeprop", rest),
+                Some(("subprop", rest)) => ("subtype", "subprop", rest),
+                _ => continue,
+            };
+            // `rest` is "T:P:vt", or "T:S:P:vt" for subprop. Drop the value
+            // type, then split the owner from the property name.
+            let Some((owner_and_prop, _value_type)) = rest.rsplit_once(':') else {
+                continue;
+            };
+            let Some((owner, property)) = owner_and_prop.rsplit_once(':') else {
+                continue;
+            };
+
+            // Only a type the peer already knows can hold peer data.
+            let peer_knows_owner = foreign.contains(&format!("type:{owner}"))
+                || foreign.contains(&format!("edge:{owner}"))
+                || owner
+                    .split_once(':')
+                    .is_some_and(|(t, _)| foreign.contains(&format!("type:{t}")));
+            if !peer_knows_owner {
+                continue;
+            }
+
+            // Same slot, any value type, required on the peer too.
+            let head = format!("{prefix}:{owner_and_prop}");
+            let peer_requires_it = foreign.iter().any(|f| {
+                f.strip_suffix(":required")
+                    .and_then(|s| s.rsplit_once(':'))
+                    .is_some_and(|(h, _)| h == head)
+            });
+            if peer_requires_it {
+                continue;
+            }
+
+            out.push(format!(
+                "required property '{property}' on {kind} '{owner}', which the peer \
+                 does not require: its entries written without it would quarantine"
+            ));
+        }
+
+        // The first subtype on a type the peer holds with none.
+        let mut flipped: Vec<&str> = Vec::new();
+        for fact in mine.difference(foreign) {
+            let Some((type_name, _sub)) = fact
+                .strip_prefix("subtype:")
+                .and_then(|rest| rest.split_once(':'))
+            else {
+                continue;
+            };
+            if !foreign.contains(&format!("type:{type_name}")) || flipped.contains(&type_name) {
+                continue;
+            }
+            let peer_has_subtypes = foreign
+                .iter()
+                .any(|f| f.starts_with(&format!("subtype:{type_name}:")));
+            if !peer_has_subtypes {
+                flipped.push(type_name);
+            }
+        }
+        for type_name in flipped {
+            out.push(format!(
+                "node type '{type_name}' declares subtypes and the peer's does not: \
+                 every node the peer wrote without one would quarantine"
+            ));
+        }
+
+        out.sort();
+        out
+    }
+
     /// Compare this ontology against a foreign peer's hash and fingerprint.
     pub fn check_compatibility(
         &self,
@@ -263,7 +374,10 @@ impl Ontology {
             return Compatibility::Divergent;
         }
         if foreign_fingerprint.is_subset(&my_fp) {
-            return Compatibility::Superset;
+            if Self::destructive_facts(&my_fp, foreign_fingerprint).is_empty() {
+                return Compatibility::Superset;
+            }
+            return Compatibility::DestructiveSuperset;
         }
         if my_fp.is_subset(foreign_fingerprint) {
             return Compatibility::Subset;
@@ -494,7 +608,7 @@ impl EdgeTypeUpdate {
 }
 
 /// Additive update to an existing node type.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct NodeTypeUpdate {
     /// New optional properties to add.
     #[serde(default)]
@@ -537,6 +651,21 @@ pub enum MonotonicityError {
         type_name: String,
         property: String,
     },
+    /// A required property introduced onto a type that already exists. Every
+    /// entry of that type written without it was valid when written and would
+    /// quarantine on the next materialization.
+    RequiredPropertyOnExistingType {
+        kind: &'static str,
+        type_name: String,
+        property: String,
+    },
+    /// Subtypes introduced onto a node type that had none. Once a type
+    /// declares subtypes, a node without one fails validation, so every node
+    /// of that type written so far would quarantine.
+    SubtypesOnSubtypelessType {
+        type_name: String,
+        subtypes: Vec<String>,
+    },
     /// Wraps a ValidationError from validate_self() after merge.
     ValidationFailed(ValidationError),
 }
@@ -570,6 +699,29 @@ impl std::fmt::Display for MonotonicityError {
                 f,
                 "edge type '{edge_type}' already binds '{node_type}'; this extension \
                  would change nothing"
+            ),
+            MonotonicityError::RequiredPropertyOnExistingType {
+                kind,
+                type_name,
+                property,
+            } => write!(
+                f,
+                "cannot add required property '{property}' to {kind} '{type_name}': \
+                 entries written before this extension did not have to carry it, \
+                 and every one of them would be quarantined on the next \
+                 materialization, silently. Add it as optional (required: false) \
+                 instead, or declare a new type."
+            ),
+            MonotonicityError::SubtypesOnSubtypelessType {
+                type_name,
+                subtypes,
+            } => write!(
+                f,
+                "cannot add subtypes {subtypes:?} to node type '{type_name}', which \
+                 declares none: once a type has subtypes every node of it must name \
+                 one, so every '{type_name}' node written so far would be quarantined \
+                 on the next materialization, silently. Subtypes have to be declared \
+                 when the type is created."
             ),
             MonotonicityError::EmptyExtension => write!(
                 f,
@@ -952,7 +1104,13 @@ impl Ontology {
     /// Only monotonic (additive) changes are allowed:
     /// - New node types (must not already exist)
     /// - New edge types (must not already exist)
-    /// - Updates to existing node types: add properties, relax required→optional, add subtypes
+    /// - Updates to existing node types: add OPTIONAL properties, relax
+    ///   required→optional, add subtypes to a type that already declares some
+    ///
+    /// "Additive" means no entry already in the oplog stops validating. A
+    /// change that is additive on the declarations but retroactively
+    /// invalidates data is refused: see `RequiredPropertyOnExistingType` and
+    /// `SubtypesOnSubtypelessType`.
     pub fn merge_extension(&mut self, ext: &OntologyExtension) -> Result<(), MonotonicityError> {
         // An extension that expresses no change must not be accepted: it
         // returns a hash, appends to the replicated log, and tells the caller
@@ -1014,14 +1172,53 @@ impl Ontology {
                 }
             }
 
+            // A required property on a type that already exists retroactively
+            // invalidates every entry written without it. Syntactically
+            // additive, semantically a delete.
+            for (prop_name, prop_def) in &update.add_properties {
+                if prop_def.required {
+                    return Err(MonotonicityError::RequiredPropertyOnExistingType {
+                        kind: "node type",
+                        type_name: type_name.clone(),
+                        property: prop_name.clone(),
+                    });
+                }
+            }
+
             // Validate: add_subtypes don't already exist (if subtypes are defined)
             if !update.add_subtypes.is_empty() {
-                if let Some(ref existing) = def.subtypes {
-                    for st_name in update.add_subtypes.keys() {
-                        if existing.contains_key(st_name) {
-                            return Err(MonotonicityError::DuplicateProperty {
-                                type_name: type_name.clone(),
-                                property: format!("subtype:{st_name}"),
+                match def.subtypes {
+                    // Going from no subtypes to some makes `subtype` mandatory
+                    // where it was forbidden, so every existing node of the
+                    // type stops validating.
+                    None => {
+                        return Err(MonotonicityError::SubtypesOnSubtypelessType {
+                            type_name: type_name.clone(),
+                            subtypes: update.add_subtypes.keys().cloned().collect(),
+                        });
+                    }
+                    Some(ref existing) => {
+                        for st_name in update.add_subtypes.keys() {
+                            if existing.contains_key(st_name) {
+                                return Err(MonotonicityError::DuplicateProperty {
+                                    type_name: type_name.clone(),
+                                    property: format!("subtype:{st_name}"),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // D-026 accepts a node naming a subtype the ontology has not
+                // declared, validating type-level properties only. Declaring
+                // that subtype with a required property quarantines it.
+                for (st_name, st_def) in &update.add_subtypes {
+                    for (prop_name, prop_def) in &st_def.properties {
+                        if prop_def.required {
+                            return Err(MonotonicityError::RequiredPropertyOnExistingType {
+                                kind: "subtype",
+                                type_name: format!("{type_name}:{st_name}"),
+                                property: prop_name.clone(),
                             });
                         }
                     }
@@ -1064,9 +1261,16 @@ impl Ontology {
                 }
             }
 
-            for prop_name in update.add_properties.keys() {
+            for (prop_name, prop_def) in &update.add_properties {
                 if def.properties.contains_key(prop_name) {
                     return Err(MonotonicityError::DuplicateProperty {
+                        type_name: edge_name.clone(),
+                        property: prop_name.clone(),
+                    });
+                }
+                if prop_def.required {
+                    return Err(MonotonicityError::RequiredPropertyOnExistingType {
+                        kind: "edge type",
                         type_name: edge_name.clone(),
                         property: prop_name.clone(),
                     });
@@ -2088,6 +2292,340 @@ mod tests {
                 },
             )]),
         }
+    }
+
+    fn prop(required: bool) -> PropertyDef {
+        PropertyDef {
+            value_type: ValueType::String,
+            required,
+            description: None,
+            constraints: None,
+        }
+    }
+
+    fn subtype(props: BTreeMap<String, PropertyDef>) -> SubtypeDef {
+        SubtypeDef {
+            description: None,
+            properties: props,
+        }
+    }
+
+    // -- A: extensions that would invalidate existing entries are refused --
+
+    #[test]
+    fn refuses_required_property_on_an_existing_node_type() {
+        let mut ont = pet_ontology();
+        let ext = OntologyExtension {
+            node_type_updates: BTreeMap::from([(
+                "animal".into(),
+                NodeTypeUpdate {
+                    add_properties: BTreeMap::from([("owner".into(), prop(true))]),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        assert_eq!(
+            ont.merge_extension(&ext),
+            Err(MonotonicityError::RequiredPropertyOnExistingType {
+                kind: "node type",
+                type_name: "animal".into(),
+                property: "owner".into(),
+            })
+        );
+        // Refused means unchanged, not half-applied.
+        assert_eq!(ont, pet_ontology());
+    }
+
+    #[test]
+    fn refuses_required_property_on_an_existing_edge_type() {
+        let mut ont = pet_ontology();
+        let ext = OntologyExtension {
+            edge_type_updates: BTreeMap::from([(
+                "LIVES_AT".into(),
+                EdgeTypeUpdate {
+                    add_properties: BTreeMap::from([("since".into(), prop(true))]),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        assert!(matches!(
+            ont.merge_extension(&ext),
+            Err(MonotonicityError::RequiredPropertyOnExistingType {
+                kind: "edge type",
+                ..
+            })
+        ));
+        assert_eq!(ont, pet_ontology());
+    }
+
+    #[test]
+    fn refuses_the_first_subtype_on_a_subtypeless_type() {
+        let mut ont = pet_ontology();
+        let ext = OntologyExtension {
+            node_type_updates: BTreeMap::from([(
+                "animal".into(),
+                NodeTypeUpdate {
+                    add_subtypes: BTreeMap::from([("dog".into(), subtype(BTreeMap::new()))]),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        assert_eq!(
+            ont.merge_extension(&ext),
+            Err(MonotonicityError::SubtypesOnSubtypelessType {
+                type_name: "animal".into(),
+                subtypes: vec!["dog".into()],
+            })
+        );
+        assert_eq!(ont, pet_ontology());
+    }
+
+    #[test]
+    fn refuses_required_property_on_a_new_subtype() {
+        // D-026 lets a node name a subtype the ontology has not declared, so
+        // declaring it with a required property can quarantine that node.
+        let mut ont = pet_ontology();
+        ont.node_types.get_mut("animal").unwrap().subtypes =
+            Some(BTreeMap::from([("cat".into(), subtype(BTreeMap::new()))]));
+        let before = ont.clone();
+
+        let ext = OntologyExtension {
+            node_type_updates: BTreeMap::from([(
+                "animal".into(),
+                NodeTypeUpdate {
+                    add_subtypes: BTreeMap::from([(
+                        "dog".into(),
+                        subtype(BTreeMap::from([("breed".into(), prop(true))])),
+                    )]),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        assert!(matches!(
+            ont.merge_extension(&ext),
+            Err(MonotonicityError::RequiredPropertyOnExistingType {
+                kind: "subtype",
+                ..
+            })
+        ));
+        assert_eq!(ont, before);
+    }
+
+    #[test]
+    fn allows_an_optional_property_and_a_subtype_on_a_subtyped_type() {
+        let mut ont = pet_ontology();
+        ont.node_types.get_mut("animal").unwrap().subtypes =
+            Some(BTreeMap::from([("cat".into(), subtype(BTreeMap::new()))]));
+
+        let ext = OntologyExtension {
+            node_type_updates: BTreeMap::from([(
+                "animal".into(),
+                NodeTypeUpdate {
+                    add_properties: BTreeMap::from([("owner".into(), prop(false))]),
+                    add_subtypes: BTreeMap::from([(
+                        "dog".into(),
+                        subtype(BTreeMap::from([("breed".into(), prop(false))])),
+                    )]),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        assert_eq!(ont.merge_extension(&ext), Ok(()));
+    }
+
+    #[test]
+    fn allows_a_required_property_on_a_brand_new_type() {
+        let mut ont = pet_ontology();
+        let ext = OntologyExtension {
+            node_types: BTreeMap::from([(
+                "vet".into(),
+                NodeTypeDef {
+                    description: None,
+                    properties: BTreeMap::from([("license".into(), prop(true))]),
+                    subtypes: None,
+                    parent_type: None,
+                },
+            )]),
+            ..Default::default()
+        };
+        assert_eq!(ont.merge_extension(&ext), Ok(()));
+    }
+
+    // -- D: naming a destructive superset from fingerprints alone --
+
+    #[test]
+    fn destructive_changes_flags_a_newly_required_property() {
+        let old = pet_ontology();
+        let mut new = pet_ontology();
+        new.node_types
+            .get_mut("shelter")
+            .unwrap()
+            .properties
+            .insert("capacity".into(), prop(true));
+
+        let changes = new.destructive_changes(&old.fingerprint());
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(changes[0].contains("capacity") && changes[0].contains("shelter"));
+    }
+
+    #[test]
+    fn destructive_changes_flags_a_property_the_peer_holds_as_optional() {
+        // Absent and optional are the same thing here: neither peer entry had
+        // to carry it.
+        let mut old = pet_ontology();
+        old.node_types
+            .get_mut("shelter")
+            .unwrap()
+            .properties
+            .insert("capacity".into(), prop(false));
+        let mut new = pet_ontology();
+        new.node_types
+            .get_mut("shelter")
+            .unwrap()
+            .properties
+            .insert("capacity".into(), prop(true));
+
+        assert_eq!(new.destructive_changes(&old.fingerprint()).len(), 1);
+    }
+
+    #[test]
+    fn destructive_changes_flags_a_newly_required_edge_property() {
+        let old = pet_ontology();
+        let mut new = pet_ontology();
+        new.edge_types
+            .get_mut("LIVES_AT")
+            .unwrap()
+            .properties
+            .insert("since".into(), prop(true));
+
+        let changes = new.destructive_changes(&old.fingerprint());
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(changes[0].contains("since") && changes[0].contains("LIVES_AT"));
+    }
+
+    #[test]
+    fn destructive_changes_flags_a_newly_required_subtype_property() {
+        let mut old = pet_ontology();
+        old.node_types.get_mut("animal").unwrap().subtypes =
+            Some(BTreeMap::from([("cat".into(), subtype(BTreeMap::new()))]));
+        let mut new = old.clone();
+        new.node_types
+            .get_mut("animal")
+            .unwrap()
+            .subtypes
+            .as_mut()
+            .unwrap()
+            .insert(
+                "dog".into(),
+                subtype(BTreeMap::from([("breed".into(), prop(true))])),
+            );
+
+        let changes = new.destructive_changes(&old.fingerprint());
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(changes[0].contains("breed"), "{changes:?}");
+    }
+
+    #[test]
+    fn destructive_changes_flags_the_subtype_flip_once_per_type() {
+        let old = pet_ontology();
+        let mut new = pet_ontology();
+        new.node_types.get_mut("animal").unwrap().subtypes = Some(BTreeMap::from([
+            ("cat".into(), subtype(BTreeMap::new())),
+            ("dog".into(), subtype(BTreeMap::new())),
+        ]));
+
+        let changes = new.destructive_changes(&old.fingerprint());
+        assert_eq!(changes.len(), 1, "two subtypes, one flip: {changes:?}");
+        assert!(changes[0].contains("animal"));
+    }
+
+    #[test]
+    fn destructive_changes_ignores_a_type_the_peer_never_had() {
+        // A brand new type with required properties holds no peer data.
+        let old = pet_ontology();
+        let mut new = pet_ontology();
+        new.node_types.insert(
+            "vet".into(),
+            NodeTypeDef {
+                description: None,
+                properties: BTreeMap::from([("license".into(), prop(true))]),
+                subtypes: Some(BTreeMap::from([(
+                    "surgeon".into(),
+                    subtype(BTreeMap::new()),
+                )])),
+                parent_type: None,
+            },
+        );
+        assert_eq!(
+            new.destructive_changes(&old.fingerprint()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn destructive_changes_ignores_an_optional_property() {
+        let old = pet_ontology();
+        let mut new = pet_ontology();
+        new.node_types
+            .get_mut("shelter")
+            .unwrap()
+            .properties
+            .insert("capacity".into(), prop(false));
+        assert_eq!(
+            new.destructive_changes(&old.fingerprint()),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn check_compatibility_separates_destructive_from_safe_supersets() {
+        let old = pet_ontology();
+        let (old_hash, old_fp) = (old.content_hash(), old.fingerprint());
+
+        let mut safe = pet_ontology();
+        safe.node_types
+            .get_mut("shelter")
+            .unwrap()
+            .properties
+            .insert("capacity".into(), prop(false));
+        assert_eq!(
+            safe.check_compatibility(&old_hash, &old_fp),
+            Compatibility::Superset
+        );
+
+        let mut destructive = pet_ontology();
+        destructive
+            .node_types
+            .get_mut("shelter")
+            .unwrap()
+            .properties
+            .insert("capacity".into(), prop(true));
+        assert_eq!(
+            destructive.check_compatibility(&old_hash, &old_fp),
+            Compatibility::DestructiveSuperset
+        );
+    }
+
+    #[test]
+    fn check_compatibility_subset_and_divergent_are_unaffected() {
+        let old = pet_ontology();
+        let mut newer = pet_ontology();
+        newer
+            .node_types
+            .get_mut("shelter")
+            .unwrap()
+            .properties
+            .insert("capacity".into(), prop(true));
+
+        assert_eq!(
+            old.check_compatibility(&newer.content_hash(), &newer.fingerprint()),
+            Compatibility::Subset
+        );
     }
 
     #[test]

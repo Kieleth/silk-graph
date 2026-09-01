@@ -152,20 +152,41 @@ store.extend_ontology({
 })
 ```
 
-This validates `score` going forward. Existing values with the wrong type remain in the graph — they won't be retroactively validated unless you rebuild (e.g., via compaction + re-sync).
+This validates `score` going forward **and backward**. Corrected 2026-08-31: this paragraph used to say existing wrong-type values stay in the graph until you rebuild. They do not. `extend_ontology` re-materializes, so a node already carrying `score` as a string is quarantined before the call returns, with no exception raised.
+
+Declaring a property that existing nodes already carry as an undeclared extra is the one destructive extension silk cannot refuse: nothing about the extension says it is dangerous, only the stored values do. Check first:
+
+```python
+result = store.preview_extension(extension)
+result["would_quarantine"]     # 0 before you commit, or fix the values first
+result["samples"]              # [{"hash": ..., "op": ..., "reason": ...}]
+```
 
 ### What can `extend_ontology` actually change?
 
-Everything additive, on a live store, persisted immediately:
+Everything additive, on a live store, persisted immediately. Additive means **no entry already in the oplog stops validating**, which is stricter than "the new declarations contain the old ones":
 
 | Key | Changes |
 |---|---|
-| `node_types` | Add a node type that does not exist yet |
+| `node_types` | Add a node type that does not exist yet. Required properties are allowed here: no data can exist under a type that does not exist |
 | `edge_types` | Add an edge type that does not exist yet |
-| `node_type_updates` | On an existing node type: `add_properties`, `relax_properties` (required to optional), `add_subtypes` |
-| `edge_type_updates` | On an existing edge type: `add_source_types`, `add_target_types`, `add_properties` |
+| `node_type_updates` | On an existing node type: `add_properties` (optional only), `relax_properties` (required to optional), `add_subtypes` (on a type that already declares at least one, carrying no required properties) |
+| `edge_type_updates` | On an existing edge type: `add_source_types`, `add_target_types`, `add_properties` (optional only) |
 
-Nothing can be removed or narrowed: no dropping a type, no adding a required property to a type that already has instances, no removing an endpoint binding. Those are not expressible, by design — `OntologyExtension` has no field that could say them, so an illegal schema change is unrepresentable rather than merely rejected.
+Nothing can be removed or narrowed: no dropping a type, no removing a property, no removing an endpoint binding. Those are not expressible, by design — `OntologyExtension` has no field that could say them, so an illegal schema change is unrepresentable rather than merely rejected.
+
+Four shapes **are** expressible and are refused by a rule, since 0.5.0, because they are additive on the declarations and destructive in effect. Each would quarantine every affected entry inside the `extend_ontology` call, silently:
+
+| Shape | Why it deletes |
+|---|---|
+| `add_subtypes` on a type whose `subtypes` is unset | A type that declares subtypes requires one on every node. Every node written so far has none |
+| `add_properties` with `required: true` on an existing node type | Every node written so far lacks it |
+| `add_properties` with `required: true` on an existing edge type | Same, edge side |
+| A required property inside a newly declared subtype | A node may already name that subtype: silk accepts an undeclared subtype name, validating type-level properties only |
+
+Two consequences, both decided when a type is created and not afterwards: whether it has subtypes (`"subtypes": {}` does not reserve the slot, it refuses every node with `allowed: []`), and which of its properties are required.
+
+Before 0.5.0 all four were accepted. A downstream consumer lost a production box to the first one.
 
 Two things that are **errors**, not no-ops, since 0.4.0:
 
@@ -318,7 +339,8 @@ Silk computes a deterministic content hash and structural fingerprint from its o
 | Verdict | Meaning | Action |
 |---------|---------|--------|
 | `identical` | Same resolved ontology | Merge normally |
-| `superset` | Local contains everything remote has, plus more | Merge normally |
+| `superset` | Local contains everything remote has, plus more, and nothing remote holds stops validating | Merge normally |
+| `destructive_superset` | Local declares more than remote, but the extra declarations include a requirement remote's data was never held to (0.5.0) | Refuse. Adopting the local ontology would quarantine entries remote considers valid. `ontology_destructive_changes(remote_fingerprint)` names which changes |
 | `subset` | Remote has types/properties local doesn't have yet | Merge. ExtendOntology entries in the payload evolve the local ontology. Unknown types quarantined until extension is processed. |
 | `divergent` | Neither is a superset | Incompatible fork, not resolvable by additive evolution. Silk does not act on this: the verdict is advisory and sync proceeds regardless (see below). Refusing the sync is the application's decision. |
 
@@ -331,8 +353,12 @@ fp = store.ontology_fingerprint()       # sorted list of fact strings
 
 # Manual compatibility check (advisory — Silk does NOT call this during sync)
 verdict = store.check_ontology_compatibility(remote_hash, remote_fingerprint)
-# → "identical", "superset", "subset", or "divergent"
+# → "identical", "superset", "destructive_superset", "subset", or "divergent"
 ```
+
+`destructive_superset` is a **new string** rather than a flag on `superset`, so a guard that gates an automatic migration on `verdict == "superset"` falls through to its refuse branch with no code change. Before 0.5.0 the destructive cases returned plain `superset`, which is how a boot-time migration guard cleared a change that erased a live store.
+
+The verdict works from fingerprints alone and needs no access to the peer's oplog. That is also its limit: it cannot see a change whose destructiveness depends on stored values rather than declarations. Use `preview_extension` against the real store for that one.
 
 The hash and fingerprint are computed from Silk's own ontology structure. Applications using external schema frameworks (LinkML, OWL, SHACL) compute their own hashes at their own layer. Silk's hash covers only the Silk-level representation.
 

@@ -111,7 +111,7 @@ Serialized with `#[serde(tag = "op")]` — an `"op"` field discriminates the var
 }}
 ```
 
-Only additive changes allowed: add types, add properties, add subtypes, relax required->optional. Cannot remove types, remove properties, or tighten constraints.
+Only additive changes allowed: add types, add optional properties, add subtypes to a type that already declares some, relax required->optional. Cannot remove types, remove properties, or tighten constraints. Additive means no entry already in the log stops validating, so a change that is additive on the declarations but would retroactively invalidate stored data (the first subtype on a subtype-less type, a required property on an existing type) is refused since 0.5.0.
 
 **checkpoint** (R-08 — epoch compaction):
 ```json

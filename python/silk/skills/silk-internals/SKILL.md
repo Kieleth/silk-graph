@@ -85,10 +85,24 @@ of sync history.
   `BTreeMap` everywhere in ontology types so serialization is byte-stable.
 - **Monotonic schema** — `OntologyExtension` must never gain a field that
   could narrow anything. The illegal state stays unrepresentable.
+- **Additive means no entry stops validating.** Not "the new declarations are
+  a superset of the old ones". Those came apart for two years: the first
+  subtype on a subtype-less type and a required property on an existing type
+  both pass the syntactic test and quarantine every affected entry, inside the
+  `extend_ontology` call, silently. `merge_extension` refuses the four
+  detectable shapes (0.5.0). Any new update field has to be checked against
+  this, not against the declaration test: ask what an entry written yesterday
+  looks like under the new ontology. The doc comment on
+  `NodeTypeUpdate.add_properties` said "optional" long before anything
+  enforced it, which is how the hole survived review.
 - **Never drop a peer's entry** — invalid entries are quarantined, not
   discarded. Dropping breaks convergence.
 - **Compaction reproduces the graph exactly** — a compacted store must
   materialize identically to the uncompacted one.
+- **A compatibility verdict is a safety signal, so a new hazard needs a new
+  value, never a widened old one.** `DestructiveSuperset` is split out of
+  `Superset` rather than folded into it precisely so a consumer matching
+  `== "superset"` fails closed without a code change.
 
 `PROOF.md` states them formally, `INVARIANTS.md` names the mechanical checks,
 `formal/*.tla` model-checks the eligible ones. `scripts/audit_claims.py`

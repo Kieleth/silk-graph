@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::clock::LamportClock;
 use crate::entry::{Entry, GraphOp, Hash, Value};
-use crate::ontology::{Ontology, ValidationMode};
+use crate::ontology::{Ontology, OntologyExtension, ValidationMode};
 
 /// A materialized node in the graph.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +70,7 @@ pub struct QuarantineRecord {
 /// - **Add-wins** for topology (concurrent add + remove → node/edge exists)
 /// - **LWW** (Last-Writer-Wins) per property key (highest Lamport clock wins)
 /// - **Tombstones** for deletes (mark as deleted, don't physically remove)
+#[derive(Clone)]
 pub struct MaterializedGraph {
     /// node_id → Node
     pub nodes: HashMap<String, Node>,
@@ -353,6 +354,25 @@ impl MaterializedGraph {
 
     /// Rebuild from scratch: clear everything and replay all entries.
     pub fn rebuild(&mut self, entries: &[&Entry]) {
+        self.rebuild_inner(entries, None)
+    }
+
+    /// Rebuild as if `extension` had already been appended to the log.
+    ///
+    /// Backs `preview_extension`: the only honest way to answer "what would
+    /// this extension cost me" is to run the materialization that would
+    /// follow it. An extension merges into the folded ontology and nothing
+    /// else, so appending it to pass 1 is exactly equivalent to writing the
+    /// entry and replaying, without writing anything.
+    pub fn rebuild_with_pending_extension(
+        &mut self,
+        entries: &[&Entry],
+        extension: &OntologyExtension,
+    ) {
+        self.rebuild_inner(entries, Some(extension))
+    }
+
+    fn rebuild_inner(&mut self, entries: &[&Entry], pending: Option<&OntologyExtension>) {
         self.nodes.clear();
         self.edges.clear();
         self.outgoing.clear();
@@ -397,6 +417,14 @@ impl MaterializedGraph {
                 }
                 _ => {}
             }
+        }
+
+        // The previewed extension folds last, where a freshly appended entry
+        // would land.
+        if let Some(extension) = pending {
+            self.ontology
+                .merge_extension(extension)
+                .expect("caller validates the extension before previewing it");
         }
 
         // Pass 2: materialize everything else against that ontology.
