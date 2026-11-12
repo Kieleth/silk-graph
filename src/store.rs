@@ -125,7 +125,7 @@ impl Store {
             return Ok(0);
         }
         let count = self.pending.len();
-        let entries: Vec<Entry> = self.pending.drain(..).collect();
+        let entries = std::mem::take(&mut self.pending);
         self.persist_entries_and_heads(&entries)?;
         Ok(count)
     }
