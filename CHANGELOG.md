@@ -23,6 +23,43 @@ Silk is young (first public release 2026-03-21). During its first month, several
 
 Silk's guarantee is not "zero bugs have ever existed" — it's "every convergence-relevant bug we've found has a regression test that prevents its class from recurring, and `make check` must stay green before any release." See [PROOF.md](PROOF.md) for the formal invariants the tests verify against and [INVARIANTS.md](INVARIANTS.md) for the automated enforcement mechanism.
 
+## [0.5.1] - 2026-11-12
+
+A downstream project pinned to Python 3.10 could not install silk: the
+metadata floor was 3.11. Looking at why showed a wider gap. Every 0.5.0 wheel
+on PyPI is tagged `cp312`, so 3.11 and 3.13 users have been building from the
+source tarball, Rust toolchain required.
+
+No API, wire or disk change. `PROTOCOL_VERSION` stays at 3.
+
+### Changed
+- **Stable-ABI wheels.** The extension is built against the limited API
+  (`pyo3/abi3-py310` inside the `python` feature). One wheel per platform,
+  tagged `cp310-abi3`, installs on every CPython from 3.10 up, including
+  versions released after the wheel was built. Verified before release: the
+  one wheel passed the full suite and all examples on 3.10, 3.11, 3.12, 3.13
+  and 3.14. Stable-ABI wheels do not cover free-threaded builds (3.13t and
+  later); those would need per-version wheels.
+- **Python floor is 3.10.** `requires-python >=3.10`; classifiers 3.10
+  through 3.15.
+- **Support policy.** Every CPython release still under python.org security
+  support, plus 3.10, past end of life since 2026-10-01, kept for a downstream
+  project that is on it. Dropping a version will be announced in this file
+  one release before it happens.
+- CI builds the wheel once and installs that artifact on 3.10 through 3.15.
+  Examples run on every leg; before they ran only on 3.12.
+
+### Fixed
+- `examples/concurrent_writes.py` used a 3.12-only f-string form (a backslash
+  inside the expression). It failed on 3.10 and 3.11, and CI never ran it
+  there.
+
+### Tests
+- Rust 224, Python 531. New: `test_python_floor_agrees_everywhere`
+  (`requires-python`, the lowest classifier and the abi3 feature are one
+  number) and `test_every_advertised_python_has_a_ci_leg` (the classifier set
+  equals the CI matrix).
+
 ## [0.5.0] - 2026-08-31
 
 A downstream consumer lost a live box to an ontology migration that every

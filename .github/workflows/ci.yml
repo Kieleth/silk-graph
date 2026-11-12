@@ -29,33 +29,56 @@ jobs:
       - name: Run Rust tests
         run: cargo test --no-default-features
 
-  python:
-    name: Python tests (${{ matrix.python-version }})
+  build-wheel:
+    name: Build wheel (stable ABI, once)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          pip install maturin
+          maturin build --release --features python --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-wheel
+          path: dist
 
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+  python:
+    # One wheel, built above, installed on every supported interpreter. This
+    # is the only way the stable-ABI claim gets tested: building per leg would
+    # pass even if the published wheel could not load on anything but its host.
+    # The matrix must equal the classifiers in pyproject.toml
+    # (pytests/test_invariants.py::test_every_advertised_python_has_a_ci_leg).
+    name: Python tests (${{ matrix.python-version }})
+    needs: build-wheel
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-
-      - name: Build and install
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-wheel
+          path: dist
+      - name: Install the wheel
         run: |
-          pip install maturin pytest
-          maturin build --release --features python --out dist
+          pip install pytest
           pip install dist/*.whl
 
       - name: Run Python tests
         run: pytest pytests/ -v
 
       - name: Run examples
-        if: matrix.python-version == '3.12'
         run: |
           python examples/offline_first.py
           python examples/partition_heal.py

@@ -336,6 +336,62 @@ def test_version_consistency():
 
 
 # ---------------------------------------------------------------------------
+# INV-5b: Python support surface consistency
+# ---------------------------------------------------------------------------
+
+def _python_support_surface():
+    """The four places that claim which Pythons silk supports.
+
+    Returns (floor, classifiers, abi3_floor, ci_matrix) as sets/strings of
+    "3.X" versions. Wheels are stable-ABI: the pyo3 `abi3-pyXY` feature is
+    what actually sets the wheel's minimum, so it must agree with the
+    metadata floor, and every version the metadata advertises must have a
+    CI leg that installs the built wheel and runs the suite on it.
+    """
+    with open(os.path.join(ROOT, "pyproject.toml")) as f:
+        pyproject = f.read()
+    floor = re.search(r'^requires-python\s*=\s*">=(3\.\d+)"', pyproject, re.MULTILINE)
+    assert floor, "pyproject.toml must declare requires-python as >=3.X"
+    classifiers = set(re.findall(r'"Programming Language :: Python :: (3\.\d+)"', pyproject))
+    assert classifiers, "pyproject.toml must list Python version classifiers"
+
+    with open(os.path.join(ROOT, "Cargo.toml")) as f:
+        cargo = f.read()
+    abi3 = re.search(r'"pyo3/abi3-py3(\d+)"', cargo)
+    assert abi3, "Cargo.toml python feature must pin the wheel ABI floor via pyo3/abi3-py3XY"
+
+    with open(os.path.join(ROOT, ".github", "workflows", "ci.yml")) as f:
+        ci = f.read()
+    matrix = re.search(r"python-version:\s*\[([^\]]+)\]", ci)
+    assert matrix, "ci.yml must define a python-version matrix"
+    ci_versions = set(re.findall(r"3\.\d+", matrix.group(1)))
+
+    return floor.group(1), classifiers, "3." + abi3.group(1), ci_versions
+
+
+def _minor(v):
+    return int(v.split(".")[1])
+
+
+def test_python_floor_agrees_everywhere():
+    """requires-python, the lowest classifier, and the abi3 feature are one number."""
+    floor, classifiers, abi3_floor, _ = _python_support_surface()
+    lowest = min(classifiers, key=_minor)
+    assert floor == lowest, f"requires-python >={floor} but lowest classifier is {lowest}"
+    assert abi3_floor == floor, (
+        f"wheel ABI floor is {abi3_floor} (Cargo.toml) but requires-python is >={floor}"
+    )
+
+
+def test_every_advertised_python_has_a_ci_leg():
+    """A classifier is a claim; the CI matrix is the evidence. They must match exactly."""
+    _, classifiers, _, ci_versions = _python_support_surface()
+    assert classifiers == ci_versions, (
+        f"classifiers {sorted(classifiers, key=_minor)} vs ci.yml matrix {sorted(ci_versions, key=_minor)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # INV-6: Oplog integrity verification
 # ---------------------------------------------------------------------------
 

@@ -87,8 +87,10 @@ def main():
     location_match = props_a.get("location") == props_b.get("location") == "eu-west"
 
     print(f"Sync time: {sync_ms:.2f} ms")
-    print(f"  status converged (LWW winner): {props_a['status']} {'[\u2713]' if status_match else '[\u2717]'}")
-    print(f"  location preserved (no conflict): {props_a.get('location')} {'[\u2713]' if location_match else '[\u2717]'}")
+    status_mark = "[\u2713]" if status_match else "[\u2717]"
+    location_mark = "[\u2713]" if location_match else "[\u2717]"
+    print(f"  status converged (LWW winner): {props_a['status']} {status_mark}")
+    print(f"  location preserved (no conflict): {props_a.get('location')} {location_mark}")
     print()
 
     ok = status_match and location_present and location_match

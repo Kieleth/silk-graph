@@ -140,6 +140,30 @@ The tag triggers wheels for four targets plus sdist, PyPI, crates.io, and a
 GitHub release. Verify all three registries afterwards; the last three
 releases each had a publish-stage surprise.
 
+### Python versions
+
+Wheels are stable-ABI: `pyo3/abi3-py310` sits inside the `python` feature in
+`Cargo.toml`, so one wheel per platform, tagged `cp310-abi3`, installs on
+every CPython from the floor up, including versions released after the wheel.
+The floor lives in three places that `test_python_floor_agrees_everywhere`
+ties together: `requires-python`, the lowest classifier, and the abi3 feature.
+Every classifier must have a `ci.yml` matrix leg
+(`test_every_advertised_python_has_a_ci_leg`). CI builds the wheel once and
+installs that artifact on each leg; building per leg would pass even if the
+published wheel loaded nowhere but its host.
+
+- **New CPython release:** add the matrix leg and the classifier. Nothing
+  else. Already-published wheels install on it unchanged.
+- **Dropping a version:** move all three floor locations together, remove the
+  leg, announce it in the CHANGELOG one release ahead.
+- **Policy:** every release under python.org security support, plus named
+  downstream exceptions recorded in the CHANGELOG (3.10 as of 0.5.1).
+- Code under `python/`, `pytests/` and `examples/` must run on the floor;
+  the floor's CI leg is the check. A 3.12-only f-string hid in an example for
+  five releases because examples ran on one leg.
+- Stable ABI does not cover free-threaded builds (3.13t and later). Those
+  would need per-version wheels, a separate decision.
+
 ## Deeper
 
 | File | When |

@@ -27,6 +27,10 @@ All convergence claims are backed by a [semi-formal proof](PROOF.md) with [autom
 pip install silk-graph
 ```
 
+Wheels ship for Linux x86_64 and aarch64, macOS arm64 and Windows x64, built
+against the stable ABI (`cp310-abi3`): one wheel installs on CPython 3.10 and
+every later release.
+
 ```python
 from silk import GraphStore
 import json

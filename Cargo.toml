@@ -1,6 +1,6 @@
 [package]
 name = "silk-graph"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Merkle-CRDT graph engine for distributed, conflict-free knowledge graphs"
 authors = ["Kieleth <kieleth@gmail.com>"]
@@ -36,7 +36,7 @@ rand = "0.8"
 
 [features]
 default = []
-python = ["dep:pyo3", "signing"]
+python = ["dep:pyo3", "pyo3/abi3-py310", "signing"]
 signing = ["dep:ed25519-dalek", "dep:rand"]
 
 [[bench]]

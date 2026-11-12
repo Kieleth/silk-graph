@@ -19,7 +19,10 @@ jobs:
           # Linux x86_64 (most servers, CI runners). Built in a manylinux
           # container so PyPI accepts the wheel — host builds get tagged
           # `linux_x86_64` which PyPI rejects. --interpreter points maturin
-          # at the container's Python (host's Python is not on PATH inside).
+          # at the container's Python (host's Python is not on PATH inside);
+          # it only picks the build host. The wheel is stable-ABI
+          # (`pyo3/abi3-py310` in Cargo.toml), tagged `cp310-abi3`, and
+          # installs on every CPython >= 3.10 including future releases.
           - os: ubuntu-latest
             target: x86_64
             manylinux: 'auto'
