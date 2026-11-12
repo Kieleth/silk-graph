@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+  # Manual redrive of a publish on an existing ref, without re-tagging:
+  #   gh workflow run release.yml --ref vX.Y.Z
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -33,8 +36,12 @@ jobs:
             target: aarch64
             manylinux: 'auto'
             extra-args: '--interpreter 3.12'
-          # macOS arm64 (Apple Silicon).
-          - os: macos-14
+          # macOS arm64 (Apple Silicon). `macos-latest` always resolves to a
+          # supported arm64 image; the pinned `macos-14` label was retired
+          # between 0.5.0 and 0.5.1 and the job was cancelled before it ran.
+          # The wheel's platform tag (macosx_11_0_arm64) comes from maturin's
+          # deployment target, not from the runner's macOS version.
+          - os: macos-latest
             target: aarch64
             manylinux: 'off'
             extra-args: ''
